@@ -1,0 +1,36 @@
+{
+  "seed": 42,
+  "data": {
+    "dataset": "humanml3d",
+    "data_root": "/mnt/BiomechAI/datasets/HumanML3D",
+    "window_size": 64,
+    "fps": 20,
+    "normalize": true
+  },
+  "model": {
+    "model_dim": 512,
+    "num_layers": 8,
+    "num_heads": 8,
+    "dropout": 0.1,
+    "clip_dim": 512,
+    "clip_model_name": "ViT-B/32",
+    "timesteps": 1000
+  },
+  "train": {
+    "device": "auto",
+    "batch_size": 32,
+    "num_workers": 4,
+    "lr": 0.0002,
+    "weight_decay": 0.01,
+    "max_steps": 100000,
+    "log_every": 100,
+    "save_every": 5000,
+    "grad_clip": 1.0,
+    "cond_drop_prob": 0.1,
+    "guidance": "sindy",
+    "lambda_sindy": 0.1,
+    "lambda_osim": 0.1,
+    "sindy_checkpoint_dir": "/path/to/sindy_checkpoint_dir"
+  }
+}
+
