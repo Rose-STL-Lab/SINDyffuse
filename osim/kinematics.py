@@ -1,28 +1,35 @@
-"""Finite-difference kinematics helpers and spectral summaries."""
+"""Finite-difference kinematics and spectral summaries (Torch)."""
 
 from __future__ import annotations
 
-import numpy as np
+import torch
 
 
-def finite_diff(x: np.ndarray, dt: float) -> np.ndarray:
+def finite_diff(x: torch.Tensor, dt: float) -> torch.Tensor:
+    """Centered finite difference along time (axis=0)."""
     if x.shape[0] < 2:
-        return np.zeros_like(x, dtype=np.float32)
-    return np.gradient(x.astype(np.float32), dt, axis=0).astype(np.float32)
+        return torch.zeros_like(x)
+    y = torch.zeros_like(x)
+    y[0] = (x[1] - x[0]) / float(dt)
+    y[-1] = (x[-1] - x[-2]) / float(dt)
+    if x.shape[0] > 2:
+        y[1:-1] = (x[2:] - x[:-2]) / (2.0 * float(dt))
+    return y
 
 
-def safe_norm(x: np.ndarray, axis: int = 1) -> np.ndarray:
-    return np.linalg.norm(x.astype(np.float32), axis=axis, keepdims=True).astype(np.float32)
+def safe_norm(x: torch.Tensor, dim: int = 1) -> torch.Tensor:
+    return torch.linalg.norm(x, dim=dim, keepdim=True)
 
 
-def fft_energy_ratio(x: np.ndarray) -> np.ndarray:
+def fft_energy_ratio(x: torch.Tensor) -> torch.Tensor:
+    """High-frequency energy ratio as ``[1, C]``."""
     if x.shape[0] < 4:
-        return np.zeros((1, x.shape[1]), dtype=np.float32)
-    fx = np.fft.rfft(x.astype(np.float32), axis=0)
-    power = (np.abs(fx) ** 2).astype(np.float32)
-    n_freq = power.shape[0]
+        return torch.zeros((1, x.shape[1]), dtype=x.dtype, device=x.device)
+    fx = torch.fft.rfft(x, dim=0)
+    power = fx.real.pow(2) + fx.imag.pow(2)
+    n_freq = int(power.shape[0])
     split = max(1, n_freq // 4)
-    low = np.sum(power[:split, :], axis=0)
-    high = np.sum(power[split:, :], axis=0)
-    ratio = high / np.clip(low + high, 1e-8, None)
-    return ratio.reshape(1, -1).astype(np.float32)
+    low = power[:split].sum(dim=0)
+    high = power[split:].sum(dim=0)
+    ratio = high / torch.clamp(low + high, min=1e-8)
+    return ratio.reshape(1, -1)

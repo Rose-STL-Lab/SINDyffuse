@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 from typing import List, Tuple
 
@@ -10,11 +11,11 @@ from torch.utils.data import DataLoader
 
 import clip  # type: ignore
 
-from diffusion.common import load_json, resolve_torch_device, save_json, set_seed
-from diffusion.config import GuidanceMode, default_humanml3d_root
+from diffusion.common import load_json, resolve_data_root, resolve_torch_device, save_json, set_seed
+from diffusion.config import GuidanceMode
 from diffusion.data_registry import get_text_motion_dataset
 from diffusion.model import DiffusionTransformer, GaussianDiffusionSchedule
-from osim.guidance import DeterministicOsimGuidance
+from osim.guidance import DeterministicOsimGuidance, OsimGuidanceWeights, OsimOracleConfig
 from sindy.guidance import LearnedSINDyGuidance
 
 
@@ -46,7 +47,7 @@ def train(config_path: str, out_dir: str) -> None:
     train_cfg = cfg.get("train", {})
 
     dataset_name = str(data_cfg.get("dataset", "humanml3d"))
-    data_root = str(data_cfg.get("data_root", default_humanml3d_root()))
+    data_root = resolve_data_root(data_cfg.get("data_root"))
     train_ds = get_text_motion_dataset(dataset_name, data_root=data_root, split="train", window_size=int(data_cfg.get("window_size", 64)), fps=int(data_cfg.get("fps", 20)), normalize=bool(data_cfg.get("normalize", True)))
     train_loader = DataLoader(
         train_ds,
@@ -79,6 +80,7 @@ def train(config_path: str, out_dir: str) -> None:
     guidance_mode = GuidanceMode(str(train_cfg.get("guidance", "sindy")))
     lambda_sindy = float(train_cfg.get("lambda_sindy", 0.1))
     lambda_osim = float(train_cfg.get("lambda_osim", 0.1))
+    osim_cfg = train_cfg.get("osim_oracle", {}) if isinstance(train_cfg.get("osim_oracle", {}), dict) else {}
     sindy_dir = str(train_cfg.get("sindy_checkpoint_dir", "")).strip()
     sindy_guidance = None
     osim_guidance = None
@@ -92,7 +94,62 @@ def train(config_path: str, out_dir: str) -> None:
             clip_model_name=clip_model_name,
         )
     elif guidance_mode == GuidanceMode.OSIM:
-        osim_guidance = DeterministicOsimGuidance(data_root=data_root, fps=float(data_cfg.get("fps", 20.0)))
+        wcfg = osim_cfg.get("weights", {}) if isinstance(osim_cfg.get("weights", {}), dict) else {}
+        ocfg = osim_cfg.get("oracle", {}) if isinstance(osim_cfg.get("oracle", {}), dict) else {}
+        osim_guidance = DeterministicOsimGuidance(
+            data_root=data_root,
+            fps=float(data_cfg.get("fps", 20.0)),
+            weights=OsimGuidanceWeights(
+                lambda_vel=float(wcfg.get("lambda_vel", 0.1)),
+                lambda_acc=float(wcfg.get("lambda_acc", 0.1)),
+                lambda_torque=float(wcfg.get("lambda_torque", 0.1)),
+                lambda_jerk=float(wcfg.get("lambda_jerk", 0.1)),
+                lambda_effort=float(wcfg.get("lambda_effort", 0.1)),
+                lambda_contact=float(wcfg.get("lambda_contact", 0.1)),
+            ),
+            oracle=OsimOracleConfig(
+                time_reduce=str(ocfg.get("time_reduce", "mean")),
+                robust=str(ocfg.get("robust", "huber")),
+                huber_delta=float(ocfg.get("huber_delta", 10.0)),
+                charbonnier_eps=float(ocfg.get("charbonnier_eps", 1e-3)),
+                cvar_alpha=float(ocfg.get("cvar_alpha", 0.1)),
+                lse_temperature=float(ocfg.get("lse_temperature", 10.0)),
+                t_weight_schedule=str(ocfg.get("t_weight_schedule", "none")),
+                use_oracle_numpy=bool(ocfg.get("use_oracle_numpy", True)),
+                smooth_poses=bool(ocfg.get("smooth_poses", True)),
+                smooth_cutoff_hz=float(ocfg.get("smooth_cutoff_hz", 6.0)),
+                smooth_butterworth_order=int(ocfg.get("smooth_butterworth_order", 2)),
+                opensim_model_path=(str(ocfg["opensim_model_path"]) if ocfg.get("opensim_model_path") else None),
+                opensim_max_frames=int(ocfg.get("opensim_max_frames", 64)),
+                moco_weld_toes=bool(ocfg.get("moco_weld_toes", True)),
+                moco_markers_global_weight=float(ocfg.get("moco_markers_global_weight", 10.0)),
+                moco_control_effort_weight=float(ocfg.get("moco_control_effort_weight", 0.1)),
+                moco_mesh_interval=(
+                    None if ocfg.get("moco_mesh_interval") is None else float(ocfg.get("moco_mesh_interval"))
+                ),
+                moco_markers_lowpass_hz=float(ocfg.get("moco_markers_lowpass_hz", 0.0)),
+                moco_max_solver_iterations=int(ocfg.get("moco_max_solver_iterations", 200)),
+                moco_convergence_tolerance=float(ocfg.get("moco_convergence_tolerance", 5e-2)),
+                moco_constraint_tolerance=float(ocfg.get("moco_constraint_tolerance", 5e-2)),
+            ),
+        )
+
+    print(
+        f"[train] guidance={guidance_mode.value} device={device} data_root={data_root} cwd={os.getcwd()}",
+        flush=True,
+    )
+    if guidance_mode == GuidanceMode.SINDY:
+        print(f"[train] lambda_sindy={lambda_sindy} sindy_dir={sindy_dir!r}", flush=True)
+    if guidance_mode == GuidanceMode.OSIM:
+        print(
+            f"[train] lambda_osim={lambda_osim} "
+            f"osim.time_reduce={osim_guidance.oracle.time_reduce if osim_guidance else 'n/a'} "
+            f"osim.robust={osim_guidance.oracle.robust if osim_guidance else 'n/a'} "
+            f"osim.t_weight={osim_guidance.oracle.t_weight_schedule if osim_guidance else 'n/a'} "
+            f"osim.numpy_oracle={osim_guidance.oracle.use_oracle_numpy if osim_guidance else 'n/a'} "
+            f"osim.oracle_physics=moco_track",
+            flush=True,
+        )
 
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -106,10 +163,10 @@ def train(config_path: str, out_dir: str) -> None:
     train_iter = iter(train_loader)
     for step in range(1, max_steps + 1):
         try:
-            motion, captions, _ = next(train_iter)
+            motion, captions, _sample_ids = next(train_iter)
         except StopIteration:
             train_iter = iter(train_loader)
-            motion, captions, _ = next(train_iter)
+            motion, captions, _sample_ids = next(train_iter)
         x0 = motion.to(device)
         text_in = list(captions)
         if cond_drop_prob > 0:
@@ -128,12 +185,15 @@ def train(config_path: str, out_dir: str) -> None:
         loss_diff = F.mse_loss(eps_pred, noise)
 
         loss_guidance = torch.tensor(0.0, device=device)
+        guide_stats = {}
         denom = torch.clamp(sqrt_ab, min=1e-8)
         x0_pred = (x_t - sqrt_1mab * eps_pred) / denom
         if guidance_mode == GuidanceMode.SINDY and sindy_guidance is not None:
             loss_guidance = float(lambda_sindy) * sindy_guidance.loss(x0_pred, captions=text_in, device=device)
         elif guidance_mode == GuidanceMode.OSIM and osim_guidance is not None:
-            loss_guidance = float(lambda_osim) * osim_guidance.loss(x0_pred)
+            raw_guide, guide_stats = osim_guidance.loss_and_stats(x0_pred)
+            t_weight = osim_guidance.guidance_weight(t=t, total_timesteps=int(sched.timesteps))
+            loss_guidance = float(lambda_osim) * t_weight * raw_guide
 
         loss = loss_diff + loss_guidance
         opt.zero_grad(set_to_none=True)
@@ -142,7 +202,25 @@ def train(config_path: str, out_dir: str) -> None:
         opt.step()
 
         if step % log_every == 0:
-            print(f"step={step} loss={float(loss.item()):.6f} diff={float(loss_diff.item()):.6f} guide={float(loss_guidance.item()):.6f}")
+            msg = (
+                f"step={step} loss={float(loss.item()):.6f} "
+                f"diff={float(loss_diff.item()):.6f} guide={float(loss_guidance.item()):.6f}"
+            )
+            if guidance_mode == GuidanceMode.OSIM and guide_stats:
+                msg += (
+                    f" osim_vel={guide_stats.get('osim_vel', 0.0):.4f}"
+                    f" osim_acc={guide_stats.get('osim_acc', 0.0):.4f}"
+                    f" osim_tau={guide_stats.get('osim_torque', 0.0):.4f}"
+                    f" osim_jerk={guide_stats.get('osim_jerk', 0.0):.4f}"
+                    f" osim_eff={guide_stats.get('osim_effort', 0.0):.4f}"
+                    f" osim_contact_gap={guide_stats.get('osim_contact_gap', 0.0):.4f}"
+                )
+                if "osim_oracle_scalar" in guide_stats:
+                    msg += (
+                        f" oracle={guide_stats.get('osim_oracle_scalar', 0.0):.4f}"
+                        f" oracle_tau={guide_stats.get('osim_oracle_torque', 0.0):.4f}"
+                    )
+            print(msg)
         if step % save_every == 0:
             torch.save({"model_state": model.state_dict(), "step": step, "feature_dim": int(train_ds.feature_dim)}, out / f"ckpt_step_{step:07d}.pt")
 

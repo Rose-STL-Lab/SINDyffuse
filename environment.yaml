@@ -1,0 +1,31 @@
+# SINDyffuse — conda environment
+#
+# Create:  conda env create -f environment.yaml
+# Update:  conda env update -f environment.yaml --prune
+#
+# GPU PyTorch: remove the "cpuonly" line and add a CUDA build from pytorch.org, e.g.
+#   - pytorch::pytorch
+#   - pytorch::pytorch-cuda=12.1
+#   (and add channel "nvidia" before "pytorch")
+#
+# OpenSim + Moco (required for osim.pipeline / moco_runtime / CLI on supported platforms):
+#   conda install -c opensim-org opensim-moco
+#   or follow https://simtk-confluence.stanford.edu/display/OpenSim/Conda+Package
+#
+name: sindyffuse
+channels:
+  - pytorch
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy>=1.24
+  - scipy>=1.11
+  - pytorch::pytorch>=2.2
+  - pytorch::cpuonly
+  - pip
+  - pip:
+      # OpenAI CLIP (``import clip``) — used by train_diffusion.py / generate_motion.py
+      - ftfy
+      - regex
+      - tqdm
+      - git+https://github.com/openai/CLIP.git

@@ -1,3 +1,5 @@
+"""HumanML3D dataset loader (joint vecs + text captions)."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -59,9 +61,11 @@ class HumanML3DTextMotionDataset(Dataset):
                 if not cap:
                     continue
                 try:
-                    f_tag = float(parts[2]); t_tag = float(parts[3])
+                    f_tag = float(parts[2])
+                    t_tag = float(parts[3])
                 except Exception:
-                    f_tag = 0.0; t_tag = 0.0
+                    f_tag = 0.0
+                    t_tag = 0.0
                 if f_tag == 0.0 and t_tag == 0.0:
                     self.samples.append(CaptionSample(sid, cap, None, None))
                 else:
@@ -97,4 +101,3 @@ class HumanML3DTextMotionDataset(Dataset):
         if self.normalize:
             clip = (clip - self.mean) / np.clip(self.std, 1e-8, None)
         return {"motion": torch.tensor(clip, dtype=torch.float32), "caption": s.caption, "sample_id": s.sample_id}
-

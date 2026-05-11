@@ -30,6 +30,39 @@
     "guidance": "sindy",
     "lambda_sindy": 0.1,
     "lambda_osim": 0.1,
+    "osim_oracle": {
+      "weights": {
+        "lambda_vel": 0.1,
+        "lambda_acc": 0.1,
+        "lambda_torque": 0.1,
+        "lambda_jerk": 0.1,
+        "lambda_effort": 0.1,
+        "lambda_contact": 0.1
+      },
+      "oracle": {
+        "time_reduce": "mean",
+        "robust": "huber",
+        "huber_delta": 10.0,
+        "charbonnier_eps": 0.001,
+        "cvar_alpha": 0.1,
+        "lse_temperature": 10.0,
+        "t_weight_schedule": "none",
+        "use_oracle_numpy": true,
+        "smooth_poses": true,
+        "smooth_cutoff_hz": 6.0,
+        "smooth_butterworth_order": 2,
+        "opensim_model_path": null,
+        "opensim_max_frames": 64,
+        "moco_weld_toes": true,
+        "moco_markers_global_weight": 10.0,
+        "moco_control_effort_weight": 0.1,
+        "moco_mesh_interval": null,
+        "moco_markers_lowpass_hz": 0.0,
+        "moco_max_solver_iterations": 200,
+        "moco_convergence_tolerance": 0.05,
+        "moco_constraint_tolerance": 0.05
+      }
+    },
     "sindy_checkpoint_dir": "/path/to/sindy_checkpoint_dir"
   }
 }

@@ -1,3 +1,9 @@
-
 __pycache__/
 *.pyc
+results/
+
+# HumanML3D install under repo default path (keep .gitkeep only)
+datasets/HumanML3D/**
+!datasets/HumanML3D/.gitkeep
+
+datasets/HML3D_biomechanics_npz/

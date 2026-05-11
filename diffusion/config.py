@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import os
 from enum import Enum
-from pathlib import Path
+
+from common.paths import default_humanml3d_root
 
 
 class GuidanceMode(str, Enum):
@@ -15,7 +15,5 @@ class DatasetName(str, Enum):
     HUMANML3D = "humanml3d"
 
 
-def default_humanml3d_root() -> str:
-    base = Path(os.environ.get("BIOMECHAI_ROOT", "/mnt/BiomechAI"))
-    return str(base / "datasets" / "HumanML3D")
+__all__ = ["DatasetName", "GuidanceMode", "default_humanml3d_root"]
 

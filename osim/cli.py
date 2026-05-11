@@ -11,12 +11,12 @@ import opensim  # type: ignore[import-untyped]
 
 from osim.manifest import inspect_contact_model_config, sha256, trial_features_signature, write_run_manifest
 from osim.npz_io import save_npz
-from osim.paths import DEFAULT_MODEL_PATH
+from common.paths import DEFAULT_MODEL_PATH
 from osim.pipeline import from_hml3d, from_hml3d_dir
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Compute biomechanics from HumanML3D using OpenSim-first pipeline")
+    parser = argparse.ArgumentParser(description="Compute biomechanics from HumanML3D (features + mandatory MocoTrack)")
     parser.add_argument("--input_path", required=True, help="Single .npy file or directory")
     parser.add_argument("--output_dir", required=True, help="Output root directory")
     parser.add_argument("--input_type", choices=["auto", "hml3d_npy"], default="auto")
@@ -75,7 +75,7 @@ def main() -> None:
         )
         payload = {
             "mode": "hml3d_dir",
-            "engine": "opensim_first",
+            "engine": "opensim_moco",
             "input_path": str(in_path),
             "result": {"input_dir": str(in_path), "num_files": len(saved_rows), "rows": saved_rows},
         }
@@ -93,7 +93,7 @@ def main() -> None:
         pose_smooth_meta_snapshot = mem["memory_result"].get("pose_smoothing", {})
         result_obj: Dict[str, Any] = {"in_memory_signature": trial_features_signature(mem["memory_result"])}
         result_obj["saved_npz"] = save_npz(mem["memory_result"], str(out_dir), file_stem=Path(in_path).stem)
-        payload = {"mode": "hml3d_file", "engine": "opensim_first", "input_path": str(in_path), "result": result_obj}
+        payload = {"mode": "hml3d_file", "engine": "opensim_moco", "input_path": str(in_path), "result": result_obj}
 
     payload["config"] = {
         "input_type": "hml3d_npy",
@@ -110,6 +110,7 @@ def main() -> None:
         "opensim_version": str(opensim.GetVersionAndDate()),
         "python": os.sys.version,
         "pose_smoothing": pose_smooth_meta_snapshot,
+        "moco_tracking": True,
     }
     write_run_manifest(out_dir, payload)
     print(f"Done. Manifest: {out_dir / 'compute_biomechanics_manifest.json'}")

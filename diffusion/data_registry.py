@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from datasets.humanml3d import HumanML3DTextMotionDataset
+
 from diffusion.config import DatasetName
-from diffusion.text_dataset import HumanML3DTextMotionDataset
 
 
 def get_text_motion_dataset(dataset: str, **kwargs):

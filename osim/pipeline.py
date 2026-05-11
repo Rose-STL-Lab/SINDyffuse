@@ -8,7 +8,8 @@ from typing import Any, Dict, List
 import numpy as np
 
 from osim.features import compute_features_from_hml3d
-from osim.paths import DEFAULT_MODEL_PATH
+from osim.moco_runtime import moco_marker_track_feature_summary
+from common.paths import DEFAULT_MODEL_PATH
 
 
 def build_memory_result(
@@ -37,6 +38,21 @@ def build_memory_result(
     )
     num_dofs = int(feats["velocities"].shape[1])
     num_frames = int(feats["velocities"].shape[0])
+
+    mp = model_path if model_path else DEFAULT_MODEL_PATH
+    summ_m = moco_marker_track_feature_summary(
+        arr.astype(np.float64),
+        model_path=str(mp),
+        dt=float(dt),
+        fps=float(sampling_frequency if sampling_frequency is not None else fps),
+        max_frames=num_frames,
+        smooth_before_track=bool(smooth_poses),
+        smooth_cutoff_hz=float(smooth_cutoff_hz),
+        smooth_butterworth_order=int(smooth_butterworth_order),
+    )
+    for key, val in summ_m.items():
+        feats[key] = val
+
     return {
         "source": trial_name,
         "pose_smoothing": smooth_meta,
@@ -109,7 +125,7 @@ def from_hml3d(
         smooth_cutoff_hz=smooth_cutoff_hz,
         smooth_butterworth_order=smooth_butterworth_order,
     )
-    return {"input_npy": str(input_path), "memory_result": memory_result, "convert_stats": {"engine": "opensim"}}
+    return {"input_npy": str(input_path), "memory_result": memory_result, "convert_stats": {"engine": "opensim_moco"}}
 
 
 def from_hml3d_dir(

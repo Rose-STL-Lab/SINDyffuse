@@ -1,8 +1,8 @@
 """
-HumanML3D → NumPy biomechanics export (OpenSim-first).
+HumanML3D → NumPy biomechanics export (MocoTrack oracle via ``osim.pipeline``).
 
 Writes compressed NumPy archives (`.npz`) under `features_v1/`, via `osim.pipeline`.
-Includes Rajagopal/HumanML3D naming maps for downstream OpenSim IK setup.
+Includes Rajagopal/HumanML3D naming maps for downstream marker / OpenSim setups.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from osim.npz_io import save_npz
-from osim.paths import DEFAULT_HML3D_JOINTS_DIR, DEFAULT_MODEL_PATH, DEFAULT_NPZ_EXPORT_DIR
+from common.paths import DEFAULT_HML3D_JOINTS_DIR, DEFAULT_MODEL_PATH, DEFAULT_NPZ_EXPORT_DIR
 from osim.pipeline import from_hml3d
 
 
@@ -151,7 +151,7 @@ def convert_directory(
     summary = {
         "input_dir": str(in_dir),
         "output_dir": str(out_dir),
-        "engine": "opensim_numpy_npz",
+        "engine": "opensim_moco_npz",
         "converted_trials": float(converted),
         "skipped_trials": float(skipped),
         "model_path": model_path,
