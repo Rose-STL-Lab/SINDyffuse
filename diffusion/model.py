@@ -60,7 +60,7 @@ class MotionDiffusionBlock(nn.Module):
 class DiffusionTransformer(nn.Module):
     def __init__(
         self,
-        input_dim: int = 263,
+        input_dim: int = 37,
         model_dim: int = 512,
         num_layers: int = 8,
         num_heads: int = 8,

@@ -1,0 +1,30 @@
+{
+  "seed": 42,
+  "distributed": {
+    "enabled": "auto",
+    "backend": "nccl",
+    "find_unused_parameters": false
+  },
+  "data_root": "datasets/HumanML3D",
+  "split": "train",
+  "fps": 20.0,
+  "window_size": 64,
+  "window_stride": 16,
+  "theta_tier": "tier2_moderate",
+  "include_u": 1,
+  "include_c": 1,
+  "max_samples": 0,
+  "lr": 0.001,
+  "epochs": 200,
+  "batch_size": 64,
+  "lambda_l1": 0.0001,
+  "lambda_xi_smooth": 0.0,
+  "hidden_dim": 512,
+  "num_experts": 1,
+  "fallback_caption_weight": 0.2,
+  "clip_model_name": "ViT-B/32",
+  "clip_text_batch_size": 128,
+  "device": "auto",
+  "bio_log_every": 50,
+  "preload": true
+}

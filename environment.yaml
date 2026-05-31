@@ -1,31 +1,29 @@
-# SINDyffuse — conda environment
-#
-# Create:  conda env create -f environment.yaml
-# Update:  conda env update -f environment.yaml --prune
-#
-# GPU PyTorch: remove the "cpuonly" line and add a CUDA build from pytorch.org, e.g.
-#   - pytorch::pytorch
-#   - pytorch::pytorch-cuda=12.1
-#   (and add channel "nvidia" before "pytorch")
-#
-# OpenSim + Moco (required for osim.pipeline / moco_runtime / CLI on supported platforms):
-#   conda install -c opensim-org opensim-moco
-#   or follow https://simtk-confluence.stanford.edu/display/OpenSim/Conda+Package
-#
+# SINDyffuse: diffusion + SINDy + Nimble physics + OpenSim (future experiments).
+# OpenSim 4.5.2 (py311np125) requires numpy 1.25.x; SINDyffuse stays on numpy 1.x (<2).
 name: sindyffuse
 channels:
   - pytorch
+  - nvidia
   - conda-forge
+  - opensim-org
 dependencies:
   - python=3.11
-  - numpy>=1.24
+  - numpy>=1.25,<1.26
+  - opensim=4.5.2
   - scipy>=1.11
-  - pytorch::pytorch>=2.2
-  - pytorch::cpuonly
+  - scikit-learn>=1.3
+  - joblib>=1.3
+  - pillow>=10.0
+  - packaging>=23.0
+  - tqdm>=4.66
   - pip
+  - pytorch>=2.2
+  - pytorch-cuda=12.4
+  - torchvision
+  - torchaudio
   - pip:
-      # OpenAI CLIP (``import clip``) — used by train_diffusion.py / generate_motion.py
+      - nimblephysics
+      - clip @ git+https://github.com/openai/CLIP.git
       - ftfy
       - regex
-      - tqdm
-      - git+https://github.com/openai/CLIP.git
+      - wcwidth

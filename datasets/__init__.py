@@ -1,23 +1,23 @@
 from __future__ import annotations
 
 from common.paths import (
-    checkpoints_dir,
+    NIMBLE_B3D_SUBDIR,
     default_datasets_dir,
     default_humanml3d_root,
+    nimble_b3d_dir,
     repo_root,
     resolve_data_root,
-    runs_dir,
 )
 
-from .humanml3d import CaptionSample, HumanML3DTextMotionDataset
+from .nimble_dataset import NimbleDataset, compute_nimble_normalization_stats
 
 __all__ = [
-    "CaptionSample",
-    "HumanML3DTextMotionDataset",
-    "checkpoints_dir",
+    "NimbleDataset",
+    "compute_nimble_normalization_stats",
+    "NIMBLE_B3D_SUBDIR",
     "default_datasets_dir",
     "default_humanml3d_root",
+    "nimble_b3d_dir",
     "repo_root",
     "resolve_data_root",
-    "runs_dir",
 ]

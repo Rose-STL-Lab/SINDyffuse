@@ -1,7 +1,13 @@
 """Central, clone-friendly path defaults for SINDyffuse.
 
-All defaults are anchored to :func:`repo_root`, so clones work on any machine
-without hard-coded absolute prefixes.
+Layout (default)::
+
+    <repo>/datasets/HumanML3D/          # dataset root (texts, splits, raw motion)
+        new_joints/ | new_joint_vecs/
+        Mean.npy, Std.npy               # HumanML3D 263-D normalization (source only)
+        nimble_b3d/                   # offline IK cache + q-space training artifacts
+            {motion_id}.b3d
+            Mean.npy, Std.npy           # Nimble q normalization for training
 """
 
 from __future__ import annotations
@@ -9,16 +15,17 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+# Subdirectory under the HumanML3D root for per-motion Nimble B3D exports.
+NIMBLE_B3D_SUBDIR = "nimble_b3d"
+
 __all__ = [
-    "DEFAULT_HML3D_JOINTS_DIR",
-    "DEFAULT_MODEL_PATH",
-    "DEFAULT_NPZ_EXPORT_DIR",
-    "checkpoints_dir",
+    "NIMBLE_B3D_SUBDIR",
     "default_datasets_dir",
     "default_humanml3d_root",
+    "nimble_b3d_dir",
     "repo_root",
     "resolve_data_root",
-    "runs_dir",
+    "resolve_repo_path",
 ]
 
 
@@ -30,16 +37,6 @@ def default_datasets_dir() -> Path:
     return repo_root() / "datasets"
 
 
-def checkpoints_dir() -> Path:
-    p = os.environ.get("SINDYFFUSE_CHECKPOINTS_DIR", "").strip()
-    return Path(p) if p else repo_root() / "checkpoints"
-
-
-def runs_dir() -> Path:
-    p = os.environ.get("SINDYFFUSE_RUNS_DIR", "").strip()
-    return Path(p) if p else repo_root() / "runs"
-
-
 def default_humanml3d_root() -> str:
     explicit = os.environ.get("HUMANML3D_ROOT", "").strip()
     if explicit:
@@ -47,17 +44,20 @@ def default_humanml3d_root() -> str:
     return str(default_datasets_dir() / "HumanML3D")
 
 
+def nimble_b3d_dir(data_root: str | Path) -> Path:
+    """Path to ``…/HumanML3D/nimble_b3d/`` (per-motion ``.b3d`` + q ``Mean.npy`` / ``Std.npy``)."""
+    return Path(data_root).expanduser().resolve() / NIMBLE_B3D_SUBDIR
+
+
 def resolve_data_root(path: str | None) -> str:
     if path is None or str(path).strip() == "":
         return default_humanml3d_root()
-    p = Path(path)
+    return str(resolve_repo_path(path))
+
+
+def resolve_repo_path(path: str | Path) -> Path:
+    """Resolve a config path relative to the repo root when not absolute."""
+    p = Path(path).expanduser()
     if p.is_absolute():
-        return str(p.resolve())
-    return str((repo_root() / p).resolve())
-
-
-DEFAULT_MODEL_PATH: str = str(
-    repo_root() / "osim" / "FullBodyModel-4.0" / "Rajagopal2015.osim"
-)
-DEFAULT_HML3D_JOINTS_DIR: str = str(Path(default_humanml3d_root()) / "new_joints")
-DEFAULT_NPZ_EXPORT_DIR: str = str(default_datasets_dir() / "HML3D_biomechanics_npz")
+        return p.resolve()
+    return (repo_root() / p).resolve()

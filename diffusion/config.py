@@ -8,12 +8,11 @@ from common.paths import default_humanml3d_root
 class GuidanceMode(str, Enum):
     NONE = "none"
     SINDY = "sindy"
-    OSIM = "osim"
+    NIMBLE = "nimble"
 
 
 class DatasetName(str, Enum):
-    HUMANML3D = "humanml3d"
+    NIMBLE = "nimble"
 
 
 __all__ = ["DatasetName", "GuidanceMode", "default_humanml3d_root"]
-

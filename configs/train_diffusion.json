@@ -1,11 +1,17 @@
 {
   "seed": 42,
+  "distributed": {
+    "enabled": "auto",
+    "backend": "nccl",
+    "find_unused_parameters": false
+  },
   "data": {
-    "dataset": "humanml3d",
-    "data_root": "/mnt/BiomechAI/datasets/HumanML3D",
+    "dataset": "nimble",
+    "data_root": "datasets/HumanML3D",
     "window_size": 64,
     "fps": 20,
-    "normalize": true
+    "normalize": true,
+    "preload": true
   },
   "model": {
     "model_dim": 512,
@@ -18,8 +24,8 @@
   },
   "train": {
     "device": "auto",
-    "batch_size": 32,
-    "num_workers": 4,
+    "batch_size": 8,
+    "num_workers": 0,
     "lr": 0.0002,
     "weight_decay": 0.01,
     "max_steps": 100000,
@@ -27,43 +33,56 @@
     "save_every": 5000,
     "grad_clip": 1.0,
     "cond_drop_prob": 0.1,
-    "guidance": "sindy",
+    "guidance": "nimble",
     "lambda_sindy": 0.1,
-    "lambda_osim": 0.1,
-    "osim_oracle": {
+    "lambda_nimble": 0.1,
+    "sindy_checkpoint_dir": "results/sindy/latest",
+    "nimble_guidance": {
       "weights": {
-        "lambda_vel": 0.1,
-        "lambda_acc": 0.1,
-        "lambda_torque": 0.1,
-        "lambda_jerk": 0.1,
-        "lambda_effort": 0.1,
-        "lambda_contact": 0.1
+        "lambda_vel": 0.05,
+        "lambda_acc": 0.05,
+        "lambda_torque": 0.05,
+        "lambda_torque_rate": 0.05,
+        "lambda_jerk": 0.05,
+        "lambda_effort": 0.05,
+        "lambda_joint_limit": 0.05,
+        "lambda_kinetic_q": 0.05,
+        "lambda_torque_power": 0.05,
+        "lambda_com_speed": 0.05,
+        "lambda_com_acc": 0.05,
+        "lambda_com_jerk": 0.05,
+        "lambda_contact": 0.05,
+        "lambda_contact_wrench": 0.05,
+        "lambda_grf_left": 0.05,
+        "lambda_grf_right": 0.05,
+        "lambda_grf_vertical": 0.05,
+        "lambda_grf_weight_deficit": 0.05,
+        "lambda_foot_slip": 0.05,
+        "lambda_pose_vel": 0.05,
+        "lambda_pose_acc": 0.05,
+        "lambda_ang_momentum": 0.05
       },
-      "oracle": {
+      "physics": {
         "time_reduce": "mean",
         "robust": "huber",
         "huber_delta": 10.0,
         "charbonnier_eps": 0.001,
         "cvar_alpha": 0.1,
         "lse_temperature": 10.0,
-        "t_weight_schedule": "none",
-        "use_oracle_numpy": true,
+        "t_weight_schedule": "linear",
         "smooth_poses": true,
         "smooth_cutoff_hz": 6.0,
         "smooth_butterworth_order": 2,
-        "opensim_model_path": null,
-        "opensim_max_frames": 64,
-        "moco_weld_toes": true,
-        "moco_markers_global_weight": 10.0,
-        "moco_control_effort_weight": 0.1,
-        "moco_mesh_interval": null,
-        "moco_markers_lowpass_hz": 0.0,
-        "moco_max_solver_iterations": 200,
-        "moco_convergence_tolerance": 0.05,
-        "moco_constraint_tolerance": 0.05
+        "mass_kg": 70.0,
+        "g_mps2": 9.81,
+        "contact_height_thresh_m": 0.06,
+        "contact_speed_thresh_mps": 1.2,
+        "contact_gate_sharpness": 15.0,
+        "max_physics_frames": 64,
+        "fk_backend": "torch",
+        "physics_on_cpu": false,
+        "physics_batch_cap": 0
       }
-    },
-    "sindy_checkpoint_dir": "/path/to/sindy_checkpoint_dir"
+    }
   }
 }
-

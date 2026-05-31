@@ -1,9 +1,30 @@
 __pycache__/
-*.pyc
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Training outputs and checkpoints
 results/
+*.pt
+*.pth
+wandb/
 
-# HumanML3D install under repo default path (keep .gitkeep only)
-datasets/HumanML3D/**
-!datasets/HumanML3D/.gitkeep
+# Local datasets and caches (HumanML3D is ~20GB; never commit)
+datasets/*
+!datasets/*.py
 
-datasets/HML3D_biomechanics_npz/
+# Preprocess / OpenSim temp artifacts
+datasets/HumanML3D/nimble_b3d/
+sindyffuse_so_*/
+*.npz
+preprocess_manifest.jsonl
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+.env
+.env.*

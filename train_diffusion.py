@@ -2,63 +2,123 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from pathlib import Path
-from typing import List, Tuple
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
 
 import clip  # type: ignore
 
-from diffusion.common import load_json, resolve_data_root, resolve_torch_device, save_json, set_seed
+from common.distributed import (
+    cleanup_distributed,
+    get_rank,
+    get_world_size,
+    init_distributed,
+    is_main_process,
+    log_main,
+    model_state_dict,
+    resolve_train_device,
+    seed_all,
+    setup_spawn_if_distributed,
+    wrap_ddp,
+)
+from common.io import load_json, save_json
+from common.paths import nimble_b3d_dir, resolve_data_root, resolve_repo_path
+from diffusion.clip import clip_encode
 from diffusion.config import GuidanceMode
-from diffusion.data_registry import get_text_motion_dataset
+from diffusion.workers import num_workers
+from diffusion.registry import get_dataset
 from diffusion.model import DiffusionTransformer, GaussianDiffusionSchedule
-from osim.guidance import DeterministicOsimGuidance, OsimGuidanceWeights, OsimOracleConfig
+from nimble.guidance import build_nimble_guidance
 from sindy.guidance import LearnedSINDyGuidance
 
 
 def _collate(batch):
     motions = torch.stack([x["motion"] for x in batch], dim=0)
     captions = [x["caption"] for x in batch]
-    sample_ids = [x["sample_id"] for x in batch]
-    return motions, captions, sample_ids
+    motion_ids = [x["motion_id"] for x in batch]
+    return motions, captions, motion_ids
 
 
-@torch.no_grad()
-def _clip_text_ctx(clip_model: torch.nn.Module, captions: List[str], device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
-    toks = clip.tokenize(captions, truncate=True).to(device)
-    x = clip_model.token_embedding(toks).type(clip_model.dtype)
-    x = x + clip_model.positional_embedding.type(clip_model.dtype)
-    x = x.permute(1, 0, 2)
-    x = clip_model.transformer(x)
-    x = x.permute(1, 0, 2)
-    x = clip_model.ln_final(x).float()
-    mask = toks != 0
-    return x, mask
-
-
-def train(config_path: str, out_dir: str) -> None:
+def train(config_path: str, out_dir: str, *, preload: bool = False) -> None:
     cfg = load_json(config_path)
-    set_seed(int(cfg.get("seed", 42)))
+    dist_cfg = cfg.get("distributed") if isinstance(cfg.get("distributed"), dict) else {}
+    _g_pre = str((cfg.get("train") or {}).get("guidance", "")).strip().lower()
+    if _g_pre == "nimble" and int(np.__version__.split(".", maxsplit=1)[0]) >= 2:
+        print(
+            f"[train] ERROR: numpy {np.__version__} is incompatible with nimblephysics marker IK "
+            f"(segfault). Rebuild conda env: conda env update -n sindyffuse -f environment.yaml --prune",
+            flush=True,
+        )
+        sys.exit(1)
+
+    use_ddp = init_distributed(distributed_cfg=dist_cfg)
+    seed_all(int(cfg.get("seed", 42)))
     data_cfg = cfg.get("data", {})
     model_cfg = cfg.get("model", {})
     train_cfg = cfg.get("train", {})
 
-    dataset_name = str(data_cfg.get("dataset", "humanml3d"))
+    dataset_name = str(data_cfg.get("dataset", "nimble"))
     data_root = resolve_data_root(data_cfg.get("data_root"))
-    train_ds = get_text_motion_dataset(dataset_name, data_root=data_root, split="train", window_size=int(data_cfg.get("window_size", 64)), fps=int(data_cfg.get("fps", 20)), normalize=bool(data_cfg.get("normalize", True)))
-    train_loader = DataLoader(
-        train_ds,
-        batch_size=int(train_cfg.get("batch_size", 32)),
-        shuffle=True,
-        num_workers=int(train_cfg.get("num_workers", 4)),
-        drop_last=True,
-        collate_fn=_collate,
+    cache = nimble_b3d_dir(data_root)
+    if not cache.is_dir():
+        raise FileNotFoundError(
+            f"Nimble B3D cache required at {cache}. Run preprocess_nimble.py first."
+        )
+    _preload = bool(preload or data_cfg.get("preload", False))
+    train_ds = get_dataset(
+        dataset_name,
+        data_root=data_root,
+        split="train",
+        window_size=int(data_cfg.get("window_size", 64)),
+        fps=int(data_cfg.get("fps", 20)),
+        normalize=bool(data_cfg.get("normalize", True)),
+        preload=_preload,
+    )
+    log_main(
+        "[train] data.preload=True: q trajectories loaded into RAM"
+        if _preload
+        else "[train] data.preload=False: reading B3D windows on demand"
     )
 
-    device = resolve_torch_device(str(train_cfg.get("device", "auto")))
+    device = resolve_train_device(str(train_cfg.get("device", "auto")))
+    per_gpu_batch = int(train_cfg.get("batch_size", 32))
+    global_batch = per_gpu_batch * get_world_size()
+
+    _nw_requested = int(train_cfg.get("num_workers", 4))
+    _allow_fork = bool(train_cfg.get("allow_dataloader_fork_after_cuda", False))
+    _nw = num_workers(device, _nw_requested, allow_fork_after_cuda=_allow_fork or use_ddp)
+    if is_main_process() and _nw != _nw_requested:
+        print(
+            f"[train] num_workers={_nw_requested} disabled on CUDA (fork-after-GPU init crashes); using {_nw}. "
+            f"Set train.allow_dataloader_fork_after_cuda=true with spawn for multi-worker loading.",
+            flush=True,
+        )
+
+    train_sampler = None
+    if use_ddp:
+        train_sampler = DistributedSampler(
+            train_ds,
+            num_replicas=get_world_size(),
+            rank=get_rank(),
+            shuffle=True,
+            drop_last=True,
+        )
+    train_loader = DataLoader(
+        train_ds,
+        batch_size=per_gpu_batch,
+        shuffle=train_sampler is None,
+        sampler=train_sampler,
+        num_workers=_nw,
+        drop_last=True,
+        collate_fn=_collate,
+        pin_memory=device.type == "cuda",
+    )
+
     clip_model_name = str(model_cfg.get("clip_model_name", "ViT-B/32"))
     clip_model, _ = clip.load(clip_model_name, device=device, jit=False)
     clip_model.eval()
@@ -74,16 +134,27 @@ def train(config_path: str, out_dir: str) -> None:
         max_seq_len=int(data_cfg.get("window_size", 64)),
         clip_dim=int(model_cfg.get("clip_dim", 512)),
     ).to(device)
-    sched = GaussianDiffusionSchedule(timesteps=int(model_cfg.get("timesteps", 1000))).to(device)
-    opt = torch.optim.AdamW(model.parameters(), lr=float(train_cfg.get("lr", 2e-4)), weight_decay=float(train_cfg.get("weight_decay", 1e-2)))
+    find_unused = bool(dist_cfg.get("find_unused_parameters", False))
+    model = wrap_ddp(model, find_unused_parameters=find_unused)
 
-    guidance_mode = GuidanceMode(str(train_cfg.get("guidance", "sindy")))
+    sched = GaussianDiffusionSchedule(timesteps=int(model_cfg.get("timesteps", 1000))).to(device)
+    opt = torch.optim.AdamW(
+        model.parameters(),
+        lr=float(train_cfg.get("lr", 2e-4)),
+        weight_decay=float(train_cfg.get("weight_decay", 1e-2)),
+    )
+
+    _g = str(train_cfg.get("guidance", "sindy")).strip().lower()
+    guidance_mode = GuidanceMode(_g)
     lambda_sindy = float(train_cfg.get("lambda_sindy", 0.1))
-    lambda_osim = float(train_cfg.get("lambda_osim", 0.1))
-    osim_cfg = train_cfg.get("osim_oracle", {}) if isinstance(train_cfg.get("osim_oracle", {}), dict) else {}
-    sindy_dir = str(train_cfg.get("sindy_checkpoint_dir", "")).strip()
+    lambda_nimble = float(train_cfg.get("lambda_nimble", 0.1))
+    nimble_cfg = train_cfg.get("nimble_guidance") or {}
+    if not isinstance(nimble_cfg, dict):
+        nimble_cfg = {}
+    sindy_dir_raw = str(train_cfg.get("sindy_checkpoint_dir", "")).strip()
+    sindy_dir = str(resolve_repo_path(sindy_dir_raw)) if sindy_dir_raw else ""
     sindy_guidance = None
-    osim_guidance = None
+    nimble_guidance = None
     if guidance_mode == GuidanceMode.SINDY:
         if not sindy_dir:
             raise ValueError("Default guidance=sindy requires train.sindy_checkpoint_dir")
@@ -93,148 +164,144 @@ def train(config_path: str, out_dir: str) -> None:
             fps=float(data_cfg.get("fps", 20.0)),
             clip_model_name=clip_model_name,
         )
-    elif guidance_mode == GuidanceMode.OSIM:
-        wcfg = osim_cfg.get("weights", {}) if isinstance(osim_cfg.get("weights", {}), dict) else {}
-        ocfg = osim_cfg.get("oracle", {}) if isinstance(osim_cfg.get("oracle", {}), dict) else {}
-        osim_guidance = DeterministicOsimGuidance(
+    elif guidance_mode == GuidanceMode.NIMBLE:
+        nimble_guidance = build_nimble_guidance(
             data_root=data_root,
             fps=float(data_cfg.get("fps", 20.0)),
-            weights=OsimGuidanceWeights(
-                lambda_vel=float(wcfg.get("lambda_vel", 0.1)),
-                lambda_acc=float(wcfg.get("lambda_acc", 0.1)),
-                lambda_torque=float(wcfg.get("lambda_torque", 0.1)),
-                lambda_jerk=float(wcfg.get("lambda_jerk", 0.1)),
-                lambda_effort=float(wcfg.get("lambda_effort", 0.1)),
-                lambda_contact=float(wcfg.get("lambda_contact", 0.1)),
-            ),
-            oracle=OsimOracleConfig(
-                time_reduce=str(ocfg.get("time_reduce", "mean")),
-                robust=str(ocfg.get("robust", "huber")),
-                huber_delta=float(ocfg.get("huber_delta", 10.0)),
-                charbonnier_eps=float(ocfg.get("charbonnier_eps", 1e-3)),
-                cvar_alpha=float(ocfg.get("cvar_alpha", 0.1)),
-                lse_temperature=float(ocfg.get("lse_temperature", 10.0)),
-                t_weight_schedule=str(ocfg.get("t_weight_schedule", "none")),
-                use_oracle_numpy=bool(ocfg.get("use_oracle_numpy", True)),
-                smooth_poses=bool(ocfg.get("smooth_poses", True)),
-                smooth_cutoff_hz=float(ocfg.get("smooth_cutoff_hz", 6.0)),
-                smooth_butterworth_order=int(ocfg.get("smooth_butterworth_order", 2)),
-                opensim_model_path=(str(ocfg["opensim_model_path"]) if ocfg.get("opensim_model_path") else None),
-                opensim_max_frames=int(ocfg.get("opensim_max_frames", 64)),
-                moco_weld_toes=bool(ocfg.get("moco_weld_toes", True)),
-                moco_markers_global_weight=float(ocfg.get("moco_markers_global_weight", 10.0)),
-                moco_control_effort_weight=float(ocfg.get("moco_control_effort_weight", 0.1)),
-                moco_mesh_interval=(
-                    None if ocfg.get("moco_mesh_interval") is None else float(ocfg.get("moco_mesh_interval"))
-                ),
-                moco_markers_lowpass_hz=float(ocfg.get("moco_markers_lowpass_hz", 0.0)),
-                moco_max_solver_iterations=int(ocfg.get("moco_max_solver_iterations", 200)),
-                moco_convergence_tolerance=float(ocfg.get("moco_convergence_tolerance", 5e-2)),
-                moco_constraint_tolerance=float(ocfg.get("moco_constraint_tolerance", 5e-2)),
-            ),
+            nimble_cfg=nimble_cfg if isinstance(nimble_cfg, dict) else {},
+            window_frames=int(data_cfg.get("window_size", 64)),
         )
 
-    print(
-        f"[train] guidance={guidance_mode.value} device={device} data_root={data_root} cwd={os.getcwd()}",
-        flush=True,
+    log_main(
+        f"[train] guidance={guidance_mode.value} dataset={dataset_name} "
+        f"feature_dim={train_ds.feature_dim} device={device} "
+        f"per_gpu_batch={per_gpu_batch} global_batch={global_batch} "
+        f"world_size={get_world_size()} distributed={use_ddp} data_root={data_root}"
     )
     if guidance_mode == GuidanceMode.SINDY:
-        print(f"[train] lambda_sindy={lambda_sindy} sindy_dir={sindy_dir!r}", flush=True)
-    if guidance_mode == GuidanceMode.OSIM:
-        print(
-            f"[train] lambda_osim={lambda_osim} "
-            f"osim.time_reduce={osim_guidance.oracle.time_reduce if osim_guidance else 'n/a'} "
-            f"osim.robust={osim_guidance.oracle.robust if osim_guidance else 'n/a'} "
-            f"osim.t_weight={osim_guidance.oracle.t_weight_schedule if osim_guidance else 'n/a'} "
-            f"osim.numpy_oracle={osim_guidance.oracle.use_oracle_numpy if osim_guidance else 'n/a'} "
-            f"osim.oracle_physics=moco_track",
-            flush=True,
+        log_main(f"[train] lambda_sindy={lambda_sindy} sindy_dir={sindy_dir!r}")
+    if guidance_mode == GuidanceMode.NIMBLE:
+        log_main(
+            f"[train] lambda_nimble={lambda_nimble} "
+            f"nimble.time_reduce={nimble_guidance.nimble_settings.time_reduce if nimble_guidance else 'n/a'} "
+            f"nimble.robust={nimble_guidance.nimble_settings.robust if nimble_guidance else 'n/a'} "
+            f"nimble.t_weight={nimble_guidance.nimble_settings.t_weight_schedule if nimble_guidance else 'n/a'} "
+            f"nimble.max_frames={nimble_guidance.nimble_settings.max_physics_frames if nimble_guidance else 'n/a'}"
         )
 
     out = Path(out_dir)
-    out.mkdir(parents=True, exist_ok=True)
-    save_json(str(out / "config_resolved.json"), cfg)
+    if is_main_process():
+        out.mkdir(parents=True, exist_ok=True)
+        cfg.setdefault("train", {})["global_batch_size"] = int(global_batch)
+        cfg.setdefault("train", {})["world_size"] = int(get_world_size())
+        save_json(str(out / "config_resolved.json"), cfg)
 
     max_steps = int(train_cfg.get("max_steps", 100000))
     log_every = int(train_cfg.get("log_every", 100))
     save_every = int(train_cfg.get("save_every", 5000))
     cond_drop_prob = float(train_cfg.get("cond_drop_prob", 0.1))
 
-    train_iter = iter(train_loader)
-    for step in range(1, max_steps + 1):
-        try:
-            motion, captions, _sample_ids = next(train_iter)
-        except StopIteration:
-            train_iter = iter(train_loader)
-            motion, captions, _sample_ids = next(train_iter)
-        x0 = motion.to(device)
-        text_in = list(captions)
-        if cond_drop_prob > 0:
-            drop_mask = torch.rand((len(text_in),), device=device) < cond_drop_prob
-            for i in range(len(text_in)):
-                if bool(drop_mask[i].item()):
-                    text_in[i] = ""
-        text_ctx, text_mask = _clip_text_ctx(clip_model, text_in, device=device)
-        b = x0.shape[0]
-        t = torch.randint(0, sched.timesteps, (b,), device=device).long()
-        noise = torch.randn_like(x0)
-        sqrt_ab = sched.extract(sched.sqrt_alphas_cumprod, t, x0.shape)
-        sqrt_1mab = sched.extract(sched.sqrt_one_minus_alphas_cumprod, t, x0.shape)
-        x_t = sqrt_ab * x0 + sqrt_1mab * noise
-        eps_pred = model(x_t, t.float(), text_ctx=text_ctx, text_mask=text_mask)
-        loss_diff = F.mse_loss(eps_pred, noise)
+    step = 0
+    epoch = 0
+    while step < max_steps:
+        if train_sampler is not None:
+            train_sampler.set_epoch(epoch)
+        for motion, captions, _motion_ids in train_loader:
+            if step >= max_steps:
+                break
+            step += 1
+            x0 = motion.to(device, non_blocking=True)
+            text_in = list(captions)
+            if cond_drop_prob > 0:
+                drop_mask = torch.rand((len(text_in),), device=device) < cond_drop_prob
+                for i in range(len(text_in)):
+                    if bool(drop_mask[i].item()):
+                        text_in[i] = ""
+            text_ctx, text_mask = clip_encode(clip_model, text_in, device=device)
+            b = x0.shape[0]
+            t = torch.randint(0, sched.timesteps, (b,), device=device).long()
+            noise = torch.randn_like(x0)
+            sqrt_ab = sched.extract(sched.sqrt_alphas_cumprod, t, x0.shape)
+            sqrt_1mab = sched.extract(sched.sqrt_one_minus_alphas_cumprod, t, x0.shape)
+            x_t = sqrt_ab * x0 + sqrt_1mab * noise
+            eps_pred = model(x_t, t.float(), text_ctx=text_ctx, text_mask=text_mask)
+            loss_diff = F.mse_loss(eps_pred, noise)
 
-        loss_guidance = torch.tensor(0.0, device=device)
-        guide_stats = {}
-        denom = torch.clamp(sqrt_ab, min=1e-8)
-        x0_pred = (x_t - sqrt_1mab * eps_pred) / denom
-        if guidance_mode == GuidanceMode.SINDY and sindy_guidance is not None:
-            loss_guidance = float(lambda_sindy) * sindy_guidance.loss(x0_pred, captions=text_in, device=device)
-        elif guidance_mode == GuidanceMode.OSIM and osim_guidance is not None:
-            raw_guide, guide_stats = osim_guidance.loss_and_stats(x0_pred)
-            t_weight = osim_guidance.guidance_weight(t=t, total_timesteps=int(sched.timesteps))
-            loss_guidance = float(lambda_osim) * t_weight * raw_guide
-
-        loss = loss_diff + loss_guidance
-        opt.zero_grad(set_to_none=True)
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=float(train_cfg.get("grad_clip", 1.0)))
-        opt.step()
-
-        if step % log_every == 0:
-            msg = (
-                f"step={step} loss={float(loss.item()):.6f} "
-                f"diff={float(loss_diff.item()):.6f} guide={float(loss_guidance.item()):.6f}"
-            )
-            if guidance_mode == GuidanceMode.OSIM and guide_stats:
-                msg += (
-                    f" osim_vel={guide_stats.get('osim_vel', 0.0):.4f}"
-                    f" osim_acc={guide_stats.get('osim_acc', 0.0):.4f}"
-                    f" osim_tau={guide_stats.get('osim_torque', 0.0):.4f}"
-                    f" osim_jerk={guide_stats.get('osim_jerk', 0.0):.4f}"
-                    f" osim_eff={guide_stats.get('osim_effort', 0.0):.4f}"
-                    f" osim_contact_gap={guide_stats.get('osim_contact_gap', 0.0):.4f}"
+            loss_guidance = torch.tensor(0.0, device=device)
+            guide_stats = {}
+            denom = torch.clamp(sqrt_ab, min=1e-8)
+            x0_pred = (x_t - sqrt_1mab * eps_pred) / denom
+            if guidance_mode == GuidanceMode.SINDY and sindy_guidance is not None:
+                loss_guidance = float(lambda_sindy) * sindy_guidance.loss(
+                    x0_pred, captions=text_in, device=device
                 )
-                if "osim_oracle_scalar" in guide_stats:
-                    msg += (
-                        f" oracle={guide_stats.get('osim_oracle_scalar', 0.0):.4f}"
-                        f" oracle_tau={guide_stats.get('osim_oracle_torque', 0.0):.4f}"
-                    )
-            print(msg)
-        if step % save_every == 0:
-            torch.save({"model_state": model.state_dict(), "step": step, "feature_dim": int(train_ds.feature_dim)}, out / f"ckpt_step_{step:07d}.pt")
+            elif guidance_mode == GuidanceMode.NIMBLE and nimble_guidance is not None:
+                raw_guide, guide_stats = nimble_guidance.loss_and_stats(x0_pred)
+                t_weight = nimble_guidance.guidance_weight(t=t, total_timesteps=int(sched.timesteps))
+                loss_guidance = float(lambda_nimble) * t_weight * raw_guide
 
-    torch.save({"model_state": model.state_dict(), "step": max_steps, "feature_dim": int(train_ds.feature_dim)}, out / "last.pt")
+            loss = loss_diff + loss_guidance
+            opt.zero_grad(set_to_none=True)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(
+                model.parameters(), max_norm=float(train_cfg.get("grad_clip", 1.0))
+            )
+            opt.step()
+
+            if step % log_every == 0 and is_main_process():
+                msg = (
+                    f"step={step} loss={float(loss.item()):.6f} "
+                    f"diff={float(loss_diff.item()):.6f} guide={float(loss_guidance.item()):.6f}"
+                )
+                if guidance_mode == GuidanceMode.NIMBLE and guide_stats:
+                    msg += (
+                        f" nimble_vel={guide_stats.get('nimble_vel', 0.0):.4f}"
+                        f" nimble_acc={guide_stats.get('nimble_acc', 0.0):.4f}"
+                        f" nimble_tau={guide_stats.get('nimble_torque', 0.0):.4f}"
+                        f" nimble_jerk={guide_stats.get('nimble_jerk', 0.0):.4f}"
+                        f" nimble_eff={guide_stats.get('nimble_effort', 0.0):.4f}"
+                        f" nimble_contact_gap={guide_stats.get('nimble_contact_gap', 0.0):.4f}"
+                        f" guide_scalar={guide_stats.get('nimble_guidance_scalar', 0.0):.4f}"
+                    )
+                print(msg, flush=True)
+            if step % save_every == 0 and is_main_process():
+                torch.save(
+                    {
+                        "model_state": model_state_dict(model),
+                        "step": step,
+                        "feature_dim": int(train_ds.feature_dim),
+                    },
+                    out / f"ckpt_step_{step:07d}.pt",
+                )
+        epoch += 1
+
+    if is_main_process():
+        torch.save(
+            {
+                "model_state": model_state_dict(model),
+                "step": max_steps,
+                "feature_dim": int(train_ds.feature_dim),
+            },
+            out / "last.pt",
+        )
 
 
 def main() -> None:
+    setup_spawn_if_distributed()
     parser = argparse.ArgumentParser(description="Train text-conditioned diffusion model with guidance modes.")
     parser.add_argument("--config", required=True)
     parser.add_argument("--out_dir", required=True)
+    parser.add_argument(
+        "--preload",
+        action="store_true",
+        help="Load q trajectories into RAM before training (default: read B3D on demand)",
+    )
     args = parser.parse_args()
-    train(config_path=str(args.config), out_dir=str(args.out_dir))
+    try:
+        train(config_path=str(args.config), out_dir=str(args.out_dir), preload=bool(args.preload))
+    finally:
+        cleanup_distributed()
 
 
 if __name__ == "__main__":
     main()
-

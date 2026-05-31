@@ -1,23 +1,25 @@
-FROM nvidia/cuda:12.1-cudnn-runtime-ubuntu22.04
+FROM nvidia/cuda:13.1.2-cudnn-runtime-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CONDA_DIR=/opt/conda
 ENV PATH=${CONDA_DIR}/bin:${PATH}
-
-# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
     ca-certificates \
     curl \
     git \
+    libegl1 \
+    libgomp1 \
     libglib2.0-0 \
+    libgl1 \
     libsm6 \
     libxext6 \
     libxrender1 \
     wget \
+    liblapack3 \
+    libblas3 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Miniforge (conda-forge based)
 RUN wget -qO /tmp/miniforge.sh \
     https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh \
     && bash /tmp/miniforge.sh -b -p ${CONDA_DIR} \
@@ -27,24 +29,27 @@ RUN wget -qO /tmp/miniforge.sh \
 
 WORKDIR /workspace
 
-# Copy environment definition and create conda environment
 COPY environment.yaml /workspace/environment.yaml
-RUN conda env create -f /workspace/environment.yaml \
-    && conda clean -afy
 
-# Install GPU PyTorch instead of CPU-only version
-RUN conda run -n sindyffuse python -m pip install --upgrade pip \
-    && conda run -n sindyffuse python -m pip install \
-    --index-url https://download.pytorch.org/whl/cu121 \
-    torch torchvision torchaudio
+RUN conda env create -f /workspace/environment.yaml && \
+    conda clean -afy
 
-# Copy project
-COPY . /workspace
+# Sanity-check core stack (fail the image build if anything is missing).
+RUN ${CONDA_DIR}/envs/sindyffuse/bin/python -c "\
+import numpy as np; \
+import scipy, sklearn, joblib, torch, torchvision, clip; \
+import nimblephysics as nimble; \
+import opensim; \
+assert np.__version__.startswith('1.25'), np.__version__; \
+assert hasattr(nimble, 'biomechanics'); \
+assert hasattr(opensim, 'Model'); \
+print('numpy', np.__version__); \
+print('torch', torch.__version__, 'cuda', torch.cuda.is_available()); \
+print('opensim', opensim.GetVersion())"
 
 ENV CONDA_DEFAULT_ENV=sindyffuse
 ENV PATH=${CONDA_DIR}/envs/sindyffuse/bin:${PATH}
 
 SHELL ["conda", "run", "-n", "sindyffuse", "/bin/bash", "-c"]
 
-# Default command: interactive shell in prepared environment
 CMD ["/bin/bash"]

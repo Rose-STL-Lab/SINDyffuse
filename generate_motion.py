@@ -2,30 +2,19 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import List, Tuple
-
 import numpy as np
 import torch
 
 import clip  # type: ignore
 
-from diffusion.common import resolve_data_root, resolve_torch_device
+from common.io import load_json
+from common.paths import nimble_b3d_dir, resolve_data_root, resolve_repo_path
+from common.runtime import resolve_torch_device
+from diffusion.clip import clip_encode
 from diffusion.config import GuidanceMode
 from diffusion.model import DiffusionTransformer, GaussianDiffusionSchedule
-from osim.guidance import DeterministicOsimGuidance
+from nimble.guidance import build_nimble_guidance
 from sindy.guidance import LearnedSINDyGuidance
-
-
-@torch.no_grad()
-def _clip_text_ctx(clip_model: torch.nn.Module, captions: List[str], device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
-    toks = clip.tokenize(captions, truncate=True).to(device)
-    x = clip_model.token_embedding(toks).type(clip_model.dtype)
-    x = x + clip_model.positional_embedding.type(clip_model.dtype)
-    x = x.permute(1, 0, 2)
-    x = clip_model.transformer(x)
-    x = x.permute(1, 0, 2)
-    x = clip_model.ln_final(x).float()
-    return x, toks != 0
 
 
 @torch.no_grad()
@@ -67,7 +56,7 @@ def _optimize_with_guidance(
     captions: List[str],
     mode: GuidanceMode,
     sindy_guidance,
-    osim_guidance,
+    nimble_guidance,
     device: torch.device,
     steps: int,
     lr: float,
@@ -78,8 +67,8 @@ def _optimize_with_guidance(
         optimizer.zero_grad()
         if mode == GuidanceMode.SINDY and sindy_guidance is not None:
             loss = sindy_guidance.loss(motion, captions=captions, device=device)
-        elif mode == GuidanceMode.OSIM and osim_guidance is not None:
-            loss = osim_guidance.loss(motion)
+        elif mode == GuidanceMode.NIMBLE and nimble_guidance is not None:
+            loss = nimble_guidance.loss(motion)
         else:
             loss = torch.tensor(0.0, device=device)
         loss.backward()
@@ -88,13 +77,14 @@ def _optimize_with_guidance(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate motions with none|sindy|osim guidance.")
+    parser = argparse.ArgumentParser(description="Generate motions with none|sindy|nimble guidance.")
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--caption", required=True)
     parser.add_argument("--out_npz", required=True)
-    parser.add_argument("--guidance", choices=["none", "sindy", "osim"], default="sindy")
+    parser.add_argument("--guidance", choices=["none", "sindy", "nimble"], default="sindy")
     parser.add_argument("--sindy_checkpoint_dir", default="")
-    parser.add_argument("--data_root", default="", help="Empty = <repo>/datasets/HumanML3D; relative paths resolve from repo root.")
+    parser.add_argument("--data_root", default="", help="HumanML3D dataset root (default: datasets/HumanML3D).")
+    parser.add_argument("--train_config", default="", help="Optional train JSON; reads train.nimble_guidance when guidance=nimble.")
     parser.add_argument("--seq_len", type=int, default=64)
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--timesteps", type=int, default=1000)
@@ -104,17 +94,24 @@ def main() -> None:
     parser.add_argument("--device", default="auto")
     args = parser.parse_args()
     data_root = resolve_data_root(args.data_root or None)
+    cache = nimble_b3d_dir(data_root)
+    if not cache.is_dir():
+        raise FileNotFoundError(
+            f"Nimble B3D cache required at {cache}. Run preprocess_nimble.py first."
+        )
 
     device = resolve_torch_device(args.device)
     ckpt = torch.load(args.checkpoint, map_location=device)
-    feature_dim = int(ckpt.get("feature_dim", 263))
+    feature_dim = int(ckpt.get("feature_dim", 0))
+    if feature_dim <= 0:
+        raise ValueError("Checkpoint missing feature_dim; retrain on Nimble B3D.")
     model = DiffusionTransformer(input_dim=feature_dim, max_seq_len=int(args.seq_len)).to(device)
     model.load_state_dict(ckpt["model_state"], strict=True)
     model.eval()
     sched = GaussianDiffusionSchedule(timesteps=int(args.timesteps)).to(device)
     clip_model, _ = clip.load("ViT-B/32", device=device, jit=False)
     clip_model.eval()
-    text_ctx, text_mask = _clip_text_ctx(clip_model, [args.caption] * int(args.batch_size), device=device)
+    text_ctx, text_mask = clip_encode(clip_model, [args.caption] * int(args.batch_size), device=device)
     motion = _sample_motion(
         model=model,
         sched=sched,
@@ -127,20 +124,33 @@ def main() -> None:
         device=device,
     )
 
-    mode = GuidanceMode(str(args.guidance))
+    _g = str(args.guidance).strip().lower()
+    mode = GuidanceMode(_g)
     sindy_guidance = None
-    osim_guidance = None
+    nimble_guidance = None
     if mode == GuidanceMode.SINDY:
         if not args.sindy_checkpoint_dir:
             raise ValueError("--sindy_checkpoint_dir is required when guidance=sindy")
         sindy_guidance = LearnedSINDyGuidance(
-            sild_dir=str(args.sindy_checkpoint_dir),
+            sild_dir=str(resolve_repo_path(args.sindy_checkpoint_dir)),
             data_root=data_root,
             fps=20.0,
             clip_model_name="ViT-B/32",
         )
-    elif mode == GuidanceMode.OSIM:
-        osim_guidance = DeterministicOsimGuidance(data_root=data_root, fps=20.0)
+    elif mode == GuidanceMode.NIMBLE:
+        nimble_cfg: dict = {}
+        if str(args.train_config).strip():
+            train_cfg = load_json(str(args.train_config)).get("train", {})
+            if isinstance(train_cfg, dict):
+                block = train_cfg.get("nimble_guidance") or {}
+                if isinstance(block, dict):
+                    nimble_cfg = block
+        nimble_guidance = build_nimble_guidance(
+            data_root=data_root,
+            fps=20.0,
+            nimble_cfg=nimble_cfg,
+            window_frames=int(args.seq_len),
+        )
 
     if int(args.opt_steps) > 0 and mode != GuidanceMode.NONE:
         motion = _optimize_with_guidance(
@@ -148,7 +158,7 @@ def main() -> None:
             captions=[args.caption] * int(args.batch_size),
             mode=mode,
             sindy_guidance=sindy_guidance,
-            osim_guidance=osim_guidance,
+            nimble_guidance=nimble_guidance,
             device=device,
             steps=int(args.opt_steps),
             lr=float(args.opt_lr),
