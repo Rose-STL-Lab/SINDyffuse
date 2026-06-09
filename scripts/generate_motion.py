@@ -1,7 +1,13 @@
 from __future__ import annotations
 
-import argparse
+import sys
 from pathlib import Path
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+import argparse
 import numpy as np
 import torch
 
@@ -9,6 +15,7 @@ import clip  # type: ignore
 
 from common.io import load_json
 from common.paths import nimble_b3d_dir, resolve_data_root, resolve_repo_path
+from common.run_logging import RunLogger, add_run_log_cli_args, run_logged_main
 from common.runtime import resolve_torch_device
 from diffusion.clip import clip_encode
 from diffusion.config import GuidanceMode
@@ -92,7 +99,22 @@ def main() -> None:
     parser.add_argument("--opt_steps", type=int, default=0)
     parser.add_argument("--opt_lr", type=float, default=1e-3)
     parser.add_argument("--device", default="auto")
+    add_run_log_cli_args(parser)
     args = parser.parse_args()
+
+    def _run(logger: RunLogger) -> None:
+        _generate(args, logger)
+
+    run_logged_main(
+        Path(__file__).stem,
+        args.log_dir,
+        _run,
+        argv=sys.argv,
+        no_run_log=bool(args.no_run_log),
+    )
+
+
+def _generate(args: argparse.Namespace, logger: RunLogger) -> None:
     data_root = resolve_data_root(args.data_root or None)
     cache = nimble_b3d_dir(data_root)
     if not cache.is_dir():
@@ -167,7 +189,7 @@ def main() -> None:
     out = Path(args.out_npz)
     out.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(out, motion=motion.detach().cpu().numpy().astype(np.float32))
-    print(f"saved: {out}")
+    logger.progress(f"saved: {out}")
 
 
 if __name__ == "__main__":

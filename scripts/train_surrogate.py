@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 import argparse
 import json
 import os
-import sys
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict
 
 import torch
@@ -15,6 +20,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from common.paths import default_humanml3d_root
+from common.run_logging import RunLogger, add_run_log_cli_args, get_run_logger, run_logged_main
 from surrogate.dataset import ActivationB3DDataset
 from surrogate.model import build_activation_surrogate
 
@@ -22,16 +28,27 @@ from surrogate.model import build_activation_surrogate
 def activation_surrogate_loss(
     pred: torch.Tensor,
     target: torch.Tensor,
+    mask: torch.Tensor,
     *,
     lambda_temporal: float = 0.1,
 ) -> torch.Tensor:
-    """L1 reconstruction + temporal L1 on frame-to-frame deltas (BIGE-style)."""
-    loss_main = F.l1_loss(pred, target)
+    """Masked L1 reconstruction + temporal L1 on frame-to-frame deltas.
+
+    ``mask`` is ``[B, T]`` with 1.0 on frames with valid MocoTrack labels.
+    """
+    m = mask.unsqueeze(-1)
+    denom = m.sum().clamp_min(1.0)
+    loss_main = (torch.abs(pred - target) * m).sum() / denom
     if pred.shape[1] < 2 or float(lambda_temporal) <= 0.0:
+        return loss_main
+    pair_mask = (mask[:, 1:] > 0.5) & (mask[:, :-1] > 0.5)
+    if not pair_mask.any():
         return loss_main
     dp = pred[:, 1:] - pred[:, :-1]
     dt = target[:, 1:] - target[:, :-1]
-    loss_temporal = F.l1_loss(dp, dt)
+    pm = pair_mask.unsqueeze(-1)
+    denom_t = pm.sum().clamp_min(1.0)
+    loss_temporal = (torch.abs(dp - dt) * pm).sum() / denom_t
     return loss_main + float(lambda_temporal) * loss_temporal
 
 
@@ -56,6 +73,8 @@ def train_activation_surrogate(
     epochs: int = 50,
     batch_size: int = 32,
     lambda_temporal: float = 0.1,
+    min_window_valid_fraction: float = 0.5,
+    require_activation_mask: bool = False,
     device_name: str = "auto",
     num_workers: int = 0,
 ) -> Dict[str, Any]:
@@ -73,6 +92,8 @@ def train_activation_surrogate(
         window_stride=window_stride,
         normalize_q=normalize_q,
         max_motions=max_motions,
+        min_window_valid_fraction=min_window_valid_fraction,
+        require_activation_mask=require_activation_mask,
     )
     try:
         val_ds = ActivationB3DDataset(
@@ -82,6 +103,8 @@ def train_activation_surrogate(
             window_stride=window_stride,
             normalize_q=normalize_q,
             max_motions=max_motions,
+            min_window_valid_fraction=min_window_valid_fraction,
+            require_activation_mask=require_activation_mask,
         )
     except ValueError:
         val_ds = None
@@ -99,7 +122,7 @@ def train_activation_surrogate(
         else None
     )
 
-    sample_q, _ = train_ds[0]
+    sample_q, _, _ = train_ds[0]
     model = build_activation_surrogate(
         model_type=model_type,
         input_dim=int(sample_q.shape[-1]),
@@ -125,46 +148,66 @@ def train_activation_surrogate(
     for epoch in range(int(epochs)):
         model.train()
         train_loss = 0.0
+        train_mask_frac = 0.0
         n_batches = 0
-        for q, act in train_loader:
+        for q, act, mask in train_loader:
             q = q.to(device)
             act = act.to(device)
+            mask = mask.to(device)
             optimizer.zero_grad(set_to_none=True)
             pred = model(q)
             loss = activation_surrogate_loss(
-                pred, act, lambda_temporal=lambda_temporal
+                pred, act, mask, lambda_temporal=lambda_temporal
             )
             loss.backward()
             optimizer.step()
             train_loss += float(loss.item())
+            train_mask_frac += float(mask.mean().item())
             n_batches += 1
         train_loss /= max(1, n_batches)
+        train_mask_frac /= max(1, n_batches)
 
         val_loss = float("nan")
+        val_mask_frac = float("nan")
         if val_loader is not None:
             model.eval()
             vsum = 0.0
+            vmask = 0.0
             vb = 0
             with torch.no_grad():
-                for q, act in val_loader:
+                for q, act, mask in val_loader:
                     q = q.to(device)
                     act = act.to(device)
+                    mask = mask.to(device)
                     pred = model(q)
                     vsum += float(
                         activation_surrogate_loss(
-                            pred, act, lambda_temporal=lambda_temporal
+                            pred, act, mask, lambda_temporal=lambda_temporal
                         ).item()
                     )
+                    vmask += float(mask.mean().item())
                     vb += 1
             val_loss = vsum / max(1, vb)
+            val_mask_frac = vmask / max(1, vb)
             if val_loss < best_val:
                 best_val = val_loss
 
-        history.append({"epoch": float(epoch), "train_loss": train_loss, "val_loss": val_loss})
-        print(
+        history.append(
+            {
+                "epoch": float(epoch),
+                "train_loss": train_loss,
+                "val_loss": val_loss,
+                "train_mask_fraction": train_mask_frac,
+                "val_mask_fraction": val_mask_frac,
+            }
+        )
+        get_run_logger().progress(
+            f"epoch {epoch + 1}/{epochs} train={train_loss:.6f} val={val_loss:.6f}"
+        )
+        get_run_logger().verbose(
             f"[activation_surrogate] epoch {epoch + 1}/{epochs} "
-            f"train={train_loss:.6f} val={val_loss:.6f}",
-            flush=True,
+            f"train={train_loss:.6f} val={val_loss:.6f} "
+            f"mask_train={train_mask_frac:.3f}"
         )
 
     torch.save(
@@ -219,8 +262,7 @@ def _default_output_dir() -> Path:
     out = os.environ.get("ACTIVATION_SURROGATE_OUTPUT", "").strip()
     if out:
         return Path(out).expanduser()
-    repo_root = Path(__file__).resolve().parent
-    return repo_root / "results" / f"activation_surrogate_{datetime.now():%Y%m%d_%H%M%S}"
+    return _REPO_ROOT / "results" / f"activation_surrogate_{datetime.now():%Y%m%d_%H%M%S}"
 
 
 def main() -> None:
@@ -249,8 +291,21 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--lambda_temporal", type=float, default=0.1)
+    parser.add_argument(
+        "--min_window_valid_fraction",
+        type=float,
+        default=0.35,
+        help="Drop training windows with fewer valid Moco label frames.",
+    )
+    parser.add_argument(
+        "--require_activation_mask",
+        type=int,
+        default=0,
+        help="1 = only use B3D files with muscle_activation_mask channel.",
+    )
     parser.add_argument("--device", default="auto")
     parser.add_argument("--num_workers", type=int, default=0)
+    add_run_log_cli_args(parser)
     args = parser.parse_args()
 
     if not str(args.output).strip():
@@ -266,37 +321,48 @@ def main() -> None:
 
     cfg_path = str(args.config).strip()
     if not cfg_path:
-        default_cfg = Path(__file__).resolve().parent / "configs" / "train_surrogate.json"
+        default_cfg = _REPO_ROOT / "configs" / "train_surrogate.json"
         if default_cfg.is_file():
             cfg_path = str(default_cfg)
     if cfg_path:
         _apply_json_config(args, cfg_path)
 
-    metrics = train_activation_surrogate(
-        data_root=args.data_root,
-        output=args.output,
-        split=args.split,
-        val_split=args.val_split,
-        window_size=int(args.window_size),
-        window_stride=int(args.window_stride),
-        normalize_q=bool(int(args.normalize_q)),
-        max_motions=int(args.max_motions),
-        model_type=args.model_type,
-        hidden_dim=int(args.hidden_dim),
-        num_layers=int(args.num_layers),
-        dropout=float(args.dropout),
-        num_heads=int(args.num_heads),
-        dim_feedforward=int(args.dim_feedforward),
-        lr=float(args.lr),
-        weight_decay=float(args.weight_decay),
-        epochs=int(args.epochs),
-        batch_size=int(args.batch_size),
-        lambda_temporal=float(args.lambda_temporal),
-        device_name=args.device,
-        num_workers=int(args.num_workers),
+    def _run(_logger: RunLogger) -> None:
+        metrics = train_activation_surrogate(
+            data_root=args.data_root,
+            output=args.output,
+            split=args.split,
+            val_split=args.val_split,
+            window_size=int(args.window_size),
+            window_stride=int(args.window_stride),
+            normalize_q=bool(int(args.normalize_q)),
+            max_motions=int(args.max_motions),
+            model_type=args.model_type,
+            hidden_dim=int(args.hidden_dim),
+            num_layers=int(args.num_layers),
+            dropout=float(args.dropout),
+            num_heads=int(args.num_heads),
+            dim_feedforward=int(args.dim_feedforward),
+            lr=float(args.lr),
+            weight_decay=float(args.weight_decay),
+            epochs=int(args.epochs),
+            batch_size=int(args.batch_size),
+            lambda_temporal=float(args.lambda_temporal),
+            min_window_valid_fraction=float(args.min_window_valid_fraction),
+            require_activation_mask=bool(int(args.require_activation_mask)),
+            device_name=args.device,
+            num_workers=int(args.num_workers),
+        )
+        _logger.verbose(json.dumps(metrics, indent=2))
+        os._exit(0)
+
+    run_logged_main(
+        Path(__file__).stem,
+        args.log_dir,
+        _run,
+        argv=sys.argv,
+        no_run_log=bool(args.no_run_log),
     )
-    print(json.dumps(metrics, indent=2), flush=True)
-    os._exit(0)
 
 
 if __name__ == "__main__":

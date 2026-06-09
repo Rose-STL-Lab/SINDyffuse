@@ -1,4 +1,4 @@
-"""Map Nimble Rajagopal ``q`` to OpenSim coordinate motion (``.mot``) for Static Optimization."""
+"""Map Nimble Rajagopal ``q`` to OpenSim coordinate motion (``.mot``) for MocoTrack."""
 
 from __future__ import annotations
 
@@ -91,10 +91,10 @@ NIMBLE_TO_OPENSIM_COORD: Dict[str, str] = {
     "radius_hand_l_1": "wrist_dev_l",
 }
 
-# OpenSim-only coupled coordinates (locked / beta DOFs in Nimble).
-OPENSIM_BETA_COORD_DEFAULTS: Dict[str, float] = {
-    "knee_angle_r_beta": 0.0,
-    "knee_angle_l_beta": 0.0,
+# Rajagopal patellofemoral coupled coordinates (not in Nimble q); parent knee coords.
+OPENSIM_COUPLED_BETA_FROM_KNEE: Dict[str, str] = {
+    "knee_angle_r_beta": "knee_angle_r",
+    "knee_angle_l_beta": "knee_angle_l",
 }
 
 
@@ -140,7 +140,7 @@ def build_rajagopal_coord_mapping(model_path: str | Path | None = None) -> Rajag
             raise KeyError(f"OpenSim coordinate {on!r} missing from model")
         nimble_to_idx.append(coord_idx[on])
 
-    for beta_name in OPENSIM_BETA_COORD_DEFAULTS:
+    for beta_name in OPENSIM_COUPLED_BETA_FROM_KNEE:
         if beta_name not in coord_idx:
             raise KeyError(f"OpenSim beta coordinate {beta_name!r} missing from model")
 
@@ -167,16 +167,34 @@ def q_to_opensim_coordinates(
     m = mapping or build_rajagopal_coord_mapping()
     t_len = int(arr.shape[0])
     out = np.zeros((t_len, m.num_opensim_coords), dtype=np.float64)
-    beta_idx = {m.opensim_coord_names.index(k): v for k, v in OPENSIM_BETA_COORD_DEFAULTS.items()}
+    name_to_col = {n: i for i, n in enumerate(m.opensim_coord_names)}
+    beta_from_knee = {
+        name_to_col[beta]: name_to_col[parent]
+        for beta, parent in OPENSIM_COUPLED_BETA_FROM_KNEE.items()
+    }
     for t in range(t_len):
         for ni, oi in enumerate(m.nimble_to_opensim_idx):
             val = float(arr[t, ni])
             if m.rotational_coord_mask[oi]:
                 val = float(np.rad2deg(val))
             out[t, oi] = val
-        for oi, val in beta_idx.items():
-            out[t, oi] = float(val)
+        for beta_col, knee_col in beta_from_knee.items():
+            out[t, beta_col] = float(out[t, knee_col])
     return out
+
+
+def build_moco_states_table_processor(
+    mot_path: str | Path,
+    *,
+    lowpass_hz: float = 6.0,
+) -> osim.TableProcessor:
+    """TableProcessor for MocoTrack: optional low-pass, absolute states, coupled betas."""
+    tp = osim.TableProcessor(str(mot_path))
+    if float(lowpass_hz) > 0.0:
+        tp.append(osim.TabOpLowPassFilter(float(lowpass_hz)))
+    tp.append(osim.TabOpUseAbsoluteStateNames())
+    tp.append(osim.TabOpAppendCoupledCoordinateValues())
+    return tp
 
 
 def write_coordinates_mot(

@@ -7,7 +7,7 @@ from typing import Any, Dict
 import torch
 import torch.nn as nn
 
-from surrogate.opensim_coord_map import RAJAGOPAL_NIMBLE_DOF_NAMES
+from nimble.rajagopal_coord_map import RAJAGOPAL_NIMBLE_DOF_NAMES
 
 
 class ActivationSurrogate(nn.Module):

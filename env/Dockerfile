@@ -29,7 +29,7 @@ RUN wget -qO /tmp/miniforge.sh \
 
 WORKDIR /workspace
 
-COPY environment.yaml /workspace/environment.yaml
+COPY env/environment.yaml /workspace/environment.yaml
 
 RUN conda env create -f /workspace/environment.yaml && \
     conda clean -afy

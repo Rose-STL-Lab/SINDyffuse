@@ -1,0 +1,148 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sindyffuse-diffusion-train-none
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      name: sindyffuse-diffusion-train-none
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: sindyffuse-diffusion
+        image: ncking/bige:latest
+        workingDir: /mnt/SINDyffuse
+        env:
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        - name: PYTORCH_CUDA_ALLOC_CONF
+          value: "expandable_segments:True"
+        - name: HUMANML3D_ROOT
+          value: "/mnt/SINDyffuse/datasets/HumanML3D"
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          # Tee everything to a log file on the PVC so it survives pod death.
+          # Done BEFORE any other command so even conda-env failures are captured.
+          EXP_TS="$(date +%Y%m%d_%H%M%S)"
+          LOG_DIR="/mnt/SINDyffuse/results/logs"
+          mkdir -p "${LOG_DIR}"
+          LOG_FILE="${LOG_DIR}/diffusion_none_${EXP_TS}.log"
+          exec > >(tee -a "${LOG_FILE}") 2>&1
+          echo "[run] log file: ${LOG_FILE}"
+          echo "[run] node: $(hostname) pod: ${HOSTNAME:-unknown}"
+          trap 'rc=$?; echo "[run] exit_code=${rc} at $(date -Iseconds)"; exit ${rc}' EXIT
+
+          set -eo pipefail
+          eval "$(conda shell.bash hook)"
+          set +u
+          conda activate base
+          set -u
+
+          # Park the conda env and package cache on the PVC so they persist
+          # across pods. Without this, every job re-downloads ~1.5 GB of
+          # pytorch from conda.anaconda.org and dies the moment that flakes.
+          ENV_FILE="/mnt/SINDyffuse/env/environment.yaml"
+          ENV_PREFIX="/mnt/SINDyffuse/.conda-envs/sindyffuse"
+          export CONDA_PKGS_DIRS="/mnt/SINDyffuse/.conda-pkgs"
+          mkdir -p "${CONDA_PKGS_DIRS}" "$(dirname "${ENV_PREFIX}")"
+
+          if [ ! -x "${ENV_PREFIX}/bin/python" ]; then
+            echo "[env] creating ${ENV_PREFIX} from ${ENV_FILE}"
+            for attempt in 1 2 3; do
+              if conda env create --prefix "${ENV_PREFIX}" -f "${ENV_FILE}"; then
+                break
+              fi
+              echo "[env] create attempt ${attempt} failed; retry in 30s"
+              sleep 30
+              if [ "${attempt}" = "3" ]; then
+                echo "[env] giving up after 3 attempts"; exit 1
+              fi
+            done
+          elif [ "${FORCE_ENV_UPDATE:-0}" = "1" ]; then
+            echo "[env] FORCE_ENV_UPDATE=1: updating ${ENV_PREFIX}"
+            for attempt in 1 2 3; do
+              if conda env update --prefix "${ENV_PREFIX}" -f "${ENV_FILE}" --prune; then
+                break
+              fi
+              echo "[env] update attempt ${attempt} failed; retry in 30s"
+              sleep 30
+              if [ "${attempt}" = "3" ]; then
+                echo "[env] giving up after 3 attempts"; exit 1
+              fi
+            done
+          else
+            echo "[env] reusing existing ${ENV_PREFIX} (set FORCE_ENV_UPDATE=1 to refresh)"
+          fi
+          set +u
+          conda activate "${ENV_PREFIX}"
+          set -u
+          export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
+          export PYTHONPATH="/mnt/SINDyffuse:${PYTHONPATH:-}"
+          export OMP_NUM_THREADS=1
+          export MKL_NUM_THREADS=1
+          export OPENBLAS_NUM_THREADS=1
+
+          test -d "${HUMANML3D_ROOT}/nimble_b3d" || { echo "Missing ${HUMANML3D_ROOT}/nimble_b3d (run preprocess first)"; exit 1; }
+
+          RUN_ROOT="/mnt/SINDyffuse/results/diffusion_none_${EXP_TS}"
+          mkdir -p "${RUN_ROOT}"
+          # Mirror the persistent log into the run directory for convenience.
+          ln -sf "${LOG_FILE}" "${RUN_ROOT}/train.log" || true
+
+          RESOLVED_CFG="${RUN_ROOT}/config_resolved.json"
+          export RESOLVED_CFG HUMANML3D_ROOT
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          cfg = json.loads(Path("/mnt/SINDyffuse/configs/train_diffusion.json").read_text(encoding="utf-8"))
+          cfg.setdefault("train", {})["guidance"] = "none"
+          cfg.setdefault("data", {})["data_root"] = os.environ["HUMANML3D_ROOT"]
+          cfg.setdefault("data", {})["dataset"] = "nimble"
+          out = Path(os.environ["RESOLVED_CFG"])
+          out.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+          print(f"wrote {out} guidance=none")
+          PY
+
+          NGPU=$(nvidia-smi -L | wc -l)
+          if [ "${NGPU}" -gt 2 ]; then NGPU=2; fi
+          echo "DDP nproc_per_node=${NGPU}"
+          torchrun --standalone --nproc_per_node="${NGPU}" \
+            scripts/train_diffusion.py \
+            --config "${RESOLVED_CFG}" \
+            --out_dir "${RUN_ROOT}" \
+            --preload
+
+          {
+            echo "model=sindyffuse_diffusion"
+            echo "guidance=none"
+            echo "run_root=${RUN_ROOT}"
+            echo "config=${RESOLVED_CFG}"
+            echo "completed_at=$(date -Iseconds)"
+          } > "${RUN_ROOT}/RUN_INFO.txt"
+
+          echo "Done. Results written under ${RUN_ROOT}"
+        resources:
+          limits:
+            nvidia.com/gpu: 2
+            memory: 64Gi
+            cpu: "16"
+          requests:
+            nvidia.com/gpu: 2
+            memory: 64Gi
+            cpu: "16"
+        volumeMounts:
+        - name: biomech-ai
+          mountPath: /mnt
+        - name: dshm
+          mountPath: /dev/shm
+      volumes:
+      - name: biomech-ai
+        persistentVolumeClaim:
+          claimName: biomech-ai
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 64Gi

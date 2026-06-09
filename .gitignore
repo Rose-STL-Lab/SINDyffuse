@@ -17,7 +17,11 @@ datasets/*
 
 # Preprocess / OpenSim temp artifacts
 datasets/HumanML3D/nimble_b3d/
+logs/
+delete_this_to_stop_optimization__*.txt
+moco_track_segment_*_tracked_states.sto
 sindyffuse_so_*/
+sindyffuse_moco_*/
 *.npz
 preprocess_manifest.jsonl
 

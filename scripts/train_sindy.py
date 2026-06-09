@@ -5,6 +5,10 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 
 def _argv_has_flag(argv: list[str], flag: str) -> bool:
     sep = flag + "="
@@ -12,7 +16,7 @@ def _argv_has_flag(argv: list[str], flag: str) -> bool:
 
 
 def _prepare_argv() -> list[str]:
-    repo_root = Path(__file__).resolve().parent
+    repo_root = _REPO_ROOT
     merged = list(sys.argv[1:])
 
     if not _argv_has_flag(merged, "--output"):

@@ -164,4 +164,6 @@ def setup_spawn_if_distributed() -> None:
 
 def log_main(msg: str) -> None:
     if is_main_process():
-        print(msg, flush=True)
+        from common.run_logging import get_run_logger
+
+        get_run_logger().verbose(msg)

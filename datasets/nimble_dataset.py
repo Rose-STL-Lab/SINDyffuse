@@ -141,7 +141,7 @@ def compute_nimble_normalization_stats(
     max_motions: int = 0,
     max_frames_per_motion: int = 0,
 ) -> dict:
-    """Accumulate q mean/std over a split; write ``nimble_b3d/Mean.npy`` and ``Std.npy``."""
+    """Accumulate q mean/std over a split; write ``Mean.npy`` and ``Std.npy`` under the B3D cache."""
     root = Path(data_root).expanduser().resolve()
     cache_dir = nimble_b3d_dir(root)
     if not cache_dir.is_dir():

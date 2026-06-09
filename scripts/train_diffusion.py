@@ -1,9 +1,14 @@
 from __future__ import annotations
 
-import argparse
-import os
 import sys
 from pathlib import Path
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+import argparse
+import os
 
 import numpy as np
 import torch
@@ -28,6 +33,7 @@ from common.distributed import (
 )
 from common.io import load_json, save_json
 from common.paths import nimble_b3d_dir, resolve_data_root, resolve_repo_path
+from common.run_logging import RunLogger, add_run_log_cli_args, get_run_logger, run_logged_main
 from diffusion.clip import clip_encode
 from diffusion.config import GuidanceMode
 from diffusion.workers import num_workers
@@ -49,10 +55,9 @@ def train(config_path: str, out_dir: str, *, preload: bool = False) -> None:
     dist_cfg = cfg.get("distributed") if isinstance(cfg.get("distributed"), dict) else {}
     _g_pre = str((cfg.get("train") or {}).get("guidance", "")).strip().lower()
     if _g_pre == "nimble" and int(np.__version__.split(".", maxsplit=1)[0]) >= 2:
-        print(
-            f"[train] ERROR: numpy {np.__version__} is incompatible with nimblephysics marker IK "
-            f"(segfault). Rebuild conda env: conda env update -n sindyffuse -f environment.yaml --prune",
-            flush=True,
+        get_run_logger().progress(
+            f"ERROR: numpy {np.__version__} is incompatible with nimblephysics marker IK "
+            f"(segfault). Rebuild conda env: conda env update -n sindyffuse -f environment.yaml --prune"
         )
         sys.exit(1)
 
@@ -93,10 +98,9 @@ def train(config_path: str, out_dir: str, *, preload: bool = False) -> None:
     _allow_fork = bool(train_cfg.get("allow_dataloader_fork_after_cuda", False))
     _nw = num_workers(device, _nw_requested, allow_fork_after_cuda=_allow_fork or use_ddp)
     if is_main_process() and _nw != _nw_requested:
-        print(
+        log_main(
             f"[train] num_workers={_nw_requested} disabled on CUDA (fork-after-GPU init crashes); using {_nw}. "
-            f"Set train.allow_dataloader_fork_after_cuda=true with spawn for multi-worker loading.",
-            flush=True,
+            f"Set train.allow_dataloader_fork_after_cuda=true with spawn for multi-worker loading."
         )
 
     train_sampler = None
@@ -263,7 +267,7 @@ def train(config_path: str, out_dir: str, *, preload: bool = False) -> None:
                         f" nimble_contact_gap={guide_stats.get('nimble_contact_gap', 0.0):.4f}"
                         f" guide_scalar={guide_stats.get('nimble_guidance_scalar', 0.0):.4f}"
                     )
-                print(msg, flush=True)
+                get_run_logger().progress(msg)
             if step % save_every == 0 and is_main_process():
                 torch.save(
                     {
@@ -296,11 +300,26 @@ def main() -> None:
         action="store_true",
         help="Load q trajectories into RAM before training (default: read B3D on demand)",
     )
+    add_run_log_cli_args(parser)
     args = parser.parse_args()
-    try:
-        train(config_path=str(args.config), out_dir=str(args.out_dir), preload=bool(args.preload))
-    finally:
-        cleanup_distributed()
+
+    def _run(_logger: RunLogger) -> None:
+        try:
+            train(
+                config_path=str(args.config),
+                out_dir=str(args.out_dir),
+                preload=bool(args.preload),
+            )
+        finally:
+            cleanup_distributed()
+
+    run_logged_main(
+        Path(__file__).stem,
+        args.log_dir,
+        _run,
+        argv=sys.argv,
+        no_run_log=bool(args.no_run_log),
+    )
 
 
 if __name__ == "__main__":

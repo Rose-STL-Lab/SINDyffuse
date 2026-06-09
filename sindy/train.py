@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -20,6 +21,7 @@ from sklearn.preprocessing import StandardScaler
 
 from common.distributed import (
     cleanup_distributed,
+    get_rank,
     get_world_size,
     init_distributed,
     is_distributed,
@@ -34,6 +36,7 @@ from common.distributed import (
     wrap_ddp,
 )
 from common.paths import default_humanml3d_root, nimble_b3d_dir
+from common.run_logging import RunLogger, add_run_log_cli_args, get_run_logger, run_logged_main
 from nimble.channels import BIOMECH_COMPONENT_KEYS
 
 from sindy.dataset import SindyWindowDataset, prepare_lazy_sindy_data
@@ -195,7 +198,11 @@ def _run_training_loop(
                 best_state = {k: v.detach().cpu().clone() for k, v in model_state_dict(model).items()}
         if (ep % max(1, epochs // 20) == 0 or ep == 1) and is_main_process():
             vl = val_loss if run_validation else float("nan")
-            print(f"epoch={ep}/{epochs} train_loss={np.mean(losses):.6f} val_loss={vl:.6f}", flush=True)
+            from common.run_logging import get_run_logger
+
+            get_run_logger().progress(
+                f"epoch={ep}/{epochs} train_loss={np.mean(losses):.6f} val_loss={vl:.6f}"
+            )
     return best_val, best_state
 
 
@@ -484,6 +491,7 @@ def main() -> None:
         action="store_true",
         help="Load all B3D windows into RAM before training (default: read on demand)",
     )
+    add_run_log_cli_args(parser)
     args = parser.parse_args()
     cfg_path = str(args.config).strip()
     dist_cfg: Dict[str, Any] = {}
@@ -500,46 +508,63 @@ def main() -> None:
             dist_cfg = full_cfg["distributed"]
     else:
         full_cfg = {}
-    try:
-        metrics = train(
-            data_root=args.data_root,
-            split=args.split,
-            fps=float(args.fps),
-            output=args.output,
-            window_size=int(args.window_size),
-            window_stride=int(args.window_stride),
-            theta_tier=args.theta_tier,
-            include_u=bool(args.include_u),
-            include_c=bool(args.include_c),
-            max_samples=int(args.max_samples),
-            lr=float(args.lr),
-            epochs=int(args.epochs),
-            batch_size=int(args.batch_size),
-            lambda_l1=float(args.lambda_l1),
-            lambda_xi_smooth=float(args.lambda_xi_smooth),
-            hidden_dim=int(args.hidden_dim),
-            num_experts=int(args.num_experts),
-            fallback_caption_weight=float(args.fallback_caption_weight),
-            clip_model_name=args.clip_model_name,
-            clip_text_batch_size=int(args.clip_text_batch_size),
-            device_name=args.device,
-            bio_log_every=int(args.bio_log_every),
-            preload=bool(args.preload),
-            distributed_cfg=dist_cfg,
-            seed=int(full_cfg.get("seed", 42)) if cfg_path else 42,
-        )
-        if is_main_process():
-            print(json.dumps(metrics, indent=2), flush=True)
-    finally:
-        cleanup_distributed()
-    # nimblephysics can segfault during interpreter teardown after successful runs.
-    try:
-        from nimble.physics import clear_cache
+    def _run(_logger: RunLogger) -> None:
+        try:
+            metrics = train(
+                data_root=args.data_root,
+                split=args.split,
+                fps=float(args.fps),
+                output=args.output,
+                window_size=int(args.window_size),
+                window_stride=int(args.window_stride),
+                theta_tier=args.theta_tier,
+                include_u=bool(args.include_u),
+                include_c=bool(args.include_c),
+                max_samples=int(args.max_samples),
+                lr=float(args.lr),
+                epochs=int(args.epochs),
+                batch_size=int(args.batch_size),
+                lambda_l1=float(args.lambda_l1),
+                lambda_xi_smooth=float(args.lambda_xi_smooth),
+                hidden_dim=int(args.hidden_dim),
+                num_experts=int(args.num_experts),
+                fallback_caption_weight=float(args.fallback_caption_weight),
+                clip_model_name=args.clip_model_name,
+                clip_text_batch_size=int(args.clip_text_batch_size),
+                device_name=args.device,
+                bio_log_every=int(args.bio_log_every),
+                preload=bool(args.preload),
+                distributed_cfg=dist_cfg,
+                seed=int(full_cfg.get("seed", 42)) if cfg_path else 42,
+            )
+            if is_main_process():
+                _logger.verbose(json.dumps(metrics, indent=2))
+        finally:
+            cleanup_distributed()
+        try:
+            from nimble.physics import clear_cache
 
-        clear_cache()
-    except Exception:
-        pass
-    os._exit(0)
+            clear_cache()
+        except Exception:
+            pass
+        os._exit(0)
+
+    rank = get_rank() if is_distributed() else None
+    if args.no_run_log:
+        _run(RunLogger(terminal=__import__("sys").stdout, log_file=None))
+    else:
+        from common.run_logging import run_log_session
+
+        script_name = Path(__file__).stem
+        with run_log_session(
+            args.log_dir,
+            script_name=script_name,
+            argv=sys.argv,
+            rank=rank,
+        ) as (_paths, logger):
+            if is_main_process():
+                logger.progress(f"log: {_paths.latest_log}")
+            _run(logger)
 
 
 if __name__ == "__main__":

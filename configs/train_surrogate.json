@@ -18,6 +18,8 @@
   "epochs": 50,
   "batch_size": 32,
   "lambda_temporal": 0.1,
+  "min_window_valid_fraction": 0.35,
+  "require_activation_mask": 1,
   "device": "auto",
   "num_workers": 0
 }

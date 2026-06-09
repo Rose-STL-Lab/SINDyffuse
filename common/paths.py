@@ -44,9 +44,10 @@ def default_humanml3d_root() -> str:
     return str(default_datasets_dir() / "HumanML3D")
 
 
-def nimble_b3d_dir(data_root: str | Path) -> Path:
-    """Path to ``…/HumanML3D/nimble_b3d/`` (per-motion ``.b3d`` + q ``Mean.npy`` / ``Std.npy``)."""
-    return Path(data_root).expanduser().resolve() / NIMBLE_B3D_SUBDIR
+def nimble_b3d_dir(data_root: str | Path, *, subdir: str | None = None) -> Path:
+    """Path to per-motion B3D cache (default ``nimble_b3d/`` under the dataset root)."""
+    name = str(subdir).strip() if subdir else NIMBLE_B3D_SUBDIR
+    return Path(data_root).expanduser().resolve() / name
 
 
 def resolve_data_root(path: str | None) -> str:

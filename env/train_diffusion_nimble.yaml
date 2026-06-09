@@ -1,0 +1,110 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sindyffuse-diffusion-train-nimble
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      name: sindyffuse-diffusion-train-nimble
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: sindyffuse-diffusion
+        image: ncking/bige:latest
+        workingDir: /mnt/SINDyffuse
+        env:
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        - name: PYTORCH_CUDA_ALLOC_CONF
+          value: "expandable_segments:True"
+        - name: HUMANML3D_ROOT
+          value: "/mnt/SINDyffuse/datasets/HumanML3D"
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          set -eo pipefail
+          eval "$(conda shell.bash hook)"
+          set +u
+          conda activate base
+          set -u
+
+          ENV_NAME="sindyffuse"
+          ENV_FILE="/mnt/SINDyffuse/env/environment.yaml"
+          if conda env list | grep -Eq "^(\*| )*[[:space:]]*${ENV_NAME}[[:space:]]"; then
+            conda env update -n "${ENV_NAME}" -f "${ENV_FILE}" --prune
+          else
+            conda env create -n "${ENV_NAME}" -f "${ENV_FILE}"
+          fi
+          set +u
+          conda activate "${ENV_NAME}"
+          set -u
+          export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
+          export PYTHONPATH="/mnt/SINDyffuse:${PYTHONPATH:-}"
+          export OMP_NUM_THREADS=1
+          export MKL_NUM_THREADS=1
+          export OPENBLAS_NUM_THREADS=1
+
+          python -c "import numpy as np; print('numpy', np.__version__, flush=True); assert int(np.__version__.split('.')[0]) < 2, 'need numpy<2 for nimblephysics'"
+
+          test -d "${HUMANML3D_ROOT}/nimble_b3d" || { echo "Missing ${HUMANML3D_ROOT}/nimble_b3d (run preprocess first)"; exit 1; }
+
+          EXP_TS="$(date +%Y%m%d_%H%M%S)"
+          RUN_ROOT="/mnt/SINDyffuse/results/diffusion_nimble_${EXP_TS}"
+          mkdir -p "${RUN_ROOT}"
+
+          RESOLVED_CFG="${RUN_ROOT}/config_resolved.json"
+          export RESOLVED_CFG HUMANML3D_ROOT
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          cfg = json.loads(Path("/mnt/SINDyffuse/configs/train_diffusion.json").read_text(encoding="utf-8"))
+          cfg.setdefault("train", {})["guidance"] = "nimble"
+          cfg.setdefault("data", {})["data_root"] = os.environ["HUMANML3D_ROOT"]
+          cfg.setdefault("data", {})["dataset"] = "nimble"
+          out = Path(os.environ["RESOLVED_CFG"])
+          out.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+          print(f"wrote {out} guidance=nimble")
+          PY
+
+          NGPU=$(nvidia-smi -L | wc -l)
+          if [ "${NGPU}" -gt 2 ]; then NGPU=2; fi
+          echo "DDP nproc_per_node=${NGPU} (per-GPU batch_size from config; global batch = batch_size * NGPU)"
+          torchrun --standalone --nproc_per_node="${NGPU}" \
+            scripts/train_diffusion.py \
+            --config "${RESOLVED_CFG}" \
+            --out_dir "${RUN_ROOT}" \
+            --preload
+
+          {
+            echo "model=sindyffuse_diffusion"
+            echo "guidance=nimble"
+            echo "run_root=${RUN_ROOT}"
+            echo "config=${RESOLVED_CFG}"
+            echo "completed_at=$(date -Iseconds)"
+          } > "${RUN_ROOT}/RUN_INFO.txt"
+
+          echo "Done. Results written under ${RUN_ROOT}"
+        resources:
+          limits:
+            nvidia.com/gpu: 2
+            memory: 64Gi
+            cpu: "16"
+          requests:
+            nvidia.com/gpu: 2
+            memory: 64Gi
+            cpu: "16"
+        volumeMounts:
+        - name: biomech-ai
+          mountPath: /mnt
+        - name: dshm
+          mountPath: /dev/shm
+      volumes:
+      - name: biomech-ai
+        persistentVolumeClaim:
+          claimName: biomech-ai
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 64Gi

@@ -2,40 +2,91 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import List, Tuple
 
 import numpy as np
 
 from nimble.channels import BIOMECH_COMPONENT_KEYS
+from nimble.muscle_b3d import (
+    MUSCLE_ACTIVATION_MASK_ROWS,
+    MUSCLE_ACTIVATION_ROWS,
+    pack_muscle_activation_mask,
+    pack_muscle_activations,
+    unpack_muscle_activation_mask,
+    unpack_muscle_activations,
+)
+from nimble.muscle_activation import muscle_names, opensim_quiet
 from nimble.physics import load_model
 from sindy.features import features_from_q
 
 GUIDANCE_FEATURES = "guidance_features"
 SINDY_FEATURES = "sindy_features"
 MUSCLE_ACTIVATIONS = "muscle_activations"
-
-# Rajagopal 2015 full-body muscle count (fixed).
-MUSCLE_ACTIVATION_ROWS = 80
+MUSCLE_ACTIVATION_MASK = "muscle_activation_mask"
 
 B3D_CUSTOM_VALUE_NAMES: Tuple[str, ...] = (
     GUIDANCE_FEATURES,
     SINDY_FEATURES,
     MUSCLE_ACTIVATIONS,
+    MUSCLE_ACTIVATION_MASK,
 )
 
 GUIDANCE_FEATURE_ROWS = len(BIOMECH_COMPONENT_KEYS)
 
-_sk = load_model().skeleton
-_ndof = int(_sk.getNumDofs())
-_, _, _U_NAMES, _C_NAMES = features_from_q(
-    np.zeros((2, _ndof), dtype=np.float64), _sk, fps=20.0
-)
-SINDY_U_ROWS = len(_U_NAMES)
-SINDY_C_ROWS = len(_C_NAMES)
-SINDY_FEATURE_ROWS = SINDY_U_ROWS + SINDY_C_ROWS
 
-U_FEATURE_NAMES: Tuple[str, ...] = tuple(_U_NAMES)
-C_FEATURE_NAMES: Tuple[str, ...] = tuple(_C_NAMES)
+@lru_cache(maxsize=1)
+def _sindy_layout() -> Tuple[int, int, int, Tuple[str, ...], Tuple[str, ...]]:
+    with opensim_quiet("Off"):
+        sk = load_model().skeleton
+        ndof = int(sk.getNumDofs())
+        _, _, u_names, c_names = features_from_q(
+            np.zeros((2, ndof), dtype=np.float64), sk, fps=20.0
+        )
+    u_rows = len(u_names)
+    c_rows = len(c_names)
+    return u_rows, c_rows, u_rows + c_rows, tuple(u_names), tuple(c_names)
+
+
+def _sindy_u_rows() -> int:
+    return _sindy_layout()[0]
+
+
+def _sindy_c_rows() -> int:
+    return _sindy_layout()[1]
+
+
+def _sindy_feature_rows() -> int:
+    return _sindy_layout()[2]
+
+
+def _u_feature_names() -> Tuple[str, ...]:
+    return _sindy_layout()[3]
+
+
+def _c_feature_names() -> Tuple[str, ...]:
+    return _sindy_layout()[4]
+
+
+@lru_cache(maxsize=1)
+def _muscle_names_quiet() -> Tuple[str, ...]:
+    with opensim_quiet("Off"):
+        return muscle_names()
+
+
+# Backward-compatible module constants (lazy on first use via PEP 562).
+def __getattr__(name: str):
+    if name == "SINDY_U_ROWS":
+        return _sindy_u_rows()
+    if name == "SINDY_C_ROWS":
+        return _sindy_c_rows()
+    if name == "SINDY_FEATURE_ROWS":
+        return _sindy_feature_rows()
+    if name == "U_FEATURE_NAMES":
+        return _u_feature_names()
+    if name == "C_FEATURE_NAMES":
+        return _c_feature_names()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def pack_guidance_features(bio: np.ndarray) -> np.ndarray:
@@ -58,12 +109,14 @@ def unpack_guidance_features(matrix: np.ndarray) -> np.ndarray:
 
 def pack_sindy_features(u: np.ndarray, c: np.ndarray) -> np.ndarray:
     """``u`` ``[T, U]``, ``c`` ``[T, C]`` → B3D matrix ``[U+C, T]`` float64."""
+    u_rows = _sindy_u_rows()
+    c_rows = _sindy_c_rows()
     u_arr = np.asarray(u, dtype=np.float64)
     c_arr = np.asarray(c, dtype=np.float64)
-    if u_arr.ndim != 2 or u_arr.shape[1] != SINDY_U_ROWS:
-        raise ValueError(f"Expected u [T, {SINDY_U_ROWS}], got {u_arr.shape}")
-    if c_arr.ndim != 2 or c_arr.shape[1] != SINDY_C_ROWS:
-        raise ValueError(f"Expected c [T, {SINDY_C_ROWS}], got {c_arr.shape}")
+    if u_arr.ndim != 2 or u_arr.shape[1] != u_rows:
+        raise ValueError(f"Expected u [T, {u_rows}], got {u_arr.shape}")
+    if c_arr.ndim != 2 or c_arr.shape[1] != c_rows:
+        raise ValueError(f"Expected c [T, {c_rows}], got {c_arr.shape}")
     if u_arr.shape[0] != c_arr.shape[0]:
         raise ValueError(f"u/c length mismatch: {u_arr.shape[0]} vs {c_arr.shape[0]}")
     return np.ascontiguousarray(np.vstack([u_arr.T, c_arr.T]))
@@ -71,46 +124,36 @@ def pack_sindy_features(u: np.ndarray, c: np.ndarray) -> np.ndarray:
 
 def unpack_sindy_features(matrix: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """B3D ``[U+C, T]`` or ``[T, U+C]`` → ``u``, ``c``."""
+    u_rows = _sindy_u_rows()
+    feature_rows = _sindy_feature_rows()
     arr = np.asarray(matrix, dtype=np.float32)
-    if arr.ndim == 2 and arr.shape[0] == SINDY_FEATURE_ROWS:
-        return arr[:SINDY_U_ROWS, :].T, arr[SINDY_U_ROWS:, :].T
-    if arr.ndim == 2 and arr.shape[1] >= SINDY_FEATURE_ROWS:
-        arr = arr[:, :SINDY_FEATURE_ROWS]
-        return arr[:, :SINDY_U_ROWS], arr[:, SINDY_U_ROWS:]
-    raise ValueError(f"Expected sindy_features with {SINDY_FEATURE_ROWS} rows, got {arr.shape}")
-
-
-def pack_muscle_activations(activations: np.ndarray) -> np.ndarray:
-    """``activations`` ``[T, M]`` → B3D matrix ``[M, T]`` float64."""
-    from surrogate.b3d_activation import pack_muscle_activations as _pack
-
-    return _pack(activations)
-
-
-def unpack_muscle_activations(matrix: np.ndarray) -> np.ndarray:
-    """B3D ``[M, T]`` or ``[T, M]`` → ``[T, M]`` float32."""
-    from surrogate.b3d_activation import unpack_muscle_activations as _unpack
-
-    return _unpack(matrix)
+    if arr.ndim == 2 and arr.shape[0] == feature_rows:
+        return arr[:u_rows, :].T, arr[u_rows:, :].T
+    if arr.ndim == 2 and arr.shape[1] >= feature_rows:
+        arr = arr[:, :feature_rows]
+        return arr[:, :u_rows], arr[:, u_rows:]
+    raise ValueError(f"Expected sindy_features with {feature_rows} rows, got {arr.shape}")
 
 
 def metadata_custom_values_block() -> dict:
-    from surrogate.opensim_activation import muscle_names
-
     return {
         GUIDANCE_FEATURES: {
             "rows": GUIDANCE_FEATURE_ROWS,
             "channel_order": list(BIOMECH_COMPONENT_KEYS),
         },
         SINDY_FEATURES: {
-            "rows": SINDY_FEATURE_ROWS,
-            "u_rows": SINDY_U_ROWS,
-            "c_rows": SINDY_C_ROWS,
-            "u_names": list(U_FEATURE_NAMES),
-            "c_names": list(C_FEATURE_NAMES),
+            "rows": _sindy_feature_rows(),
+            "u_rows": _sindy_u_rows(),
+            "c_rows": _sindy_c_rows(),
+            "u_names": list(_u_feature_names()),
+            "c_names": list(_c_feature_names()),
         },
         MUSCLE_ACTIVATIONS: {
             "rows": MUSCLE_ACTIVATION_ROWS,
-            "muscle_names": list(muscle_names()),
+            "muscle_names": list(_muscle_names_quiet()),
+        },
+        MUSCLE_ACTIVATION_MASK: {
+            "rows": MUSCLE_ACTIVATION_MASK_ROWS,
+            "description": "1.0 = MocoTrack succeeded at frame; 0.0 = failed/interpolated",
         },
     }
