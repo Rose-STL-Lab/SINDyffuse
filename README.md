@@ -71,11 +71,12 @@ OpenSim console output is **hidden by default** (`--opensim_log_level Off`).
 
 Useful Moco flags: `--moco_reference_lowpass_hz`, `--moco_states_speed_tracking_weight`, `--moco_aux_coord_tracking_weight`, `--moco_no_reference_lowpass`, `--moco_no_apply_tracked_guess`, `--moco_mesh_interval`, `--moco_states_tracking_weight`, `--moco_max_reserve_fraction`, `--moco_allow_high_reserve`, `--moco_reserve_scale`, `--moco_min_success_fraction` (default 0.5), `--moco_allow_low_valid`, `--moco_no_repair`, `--moco_no_adaptive_mesh`, `--moco_min_frames`, `--moco_min_ik_success_fraction`, `--moco_max_pelvis_ty_range_m`, `--opensim_log_level`.
 
-**Kubernetes pilot (5 motions):**
+**Kubernetes (static optimization, single pod with parallel workers):**
 
 ```bash
-kubectl apply -f env/preprocess_nimble.yaml
-kubectl logs -f job/sindyffuse-preprocess-nimble
+# Edit deploy/components/cluster-config/ for your image and PVC first — see deploy/README.md
+kubectl apply -k deploy/jobs/preprocess-static-optimization
+kubectl get pods -l job-name=sindyffuse-preprocess-nimble -w
 ```
 
 Local equivalent:
@@ -117,6 +118,24 @@ Config: `configs/train_diffusion.json`
 python scripts/generate_motion.py --prompt "a person walks forward"
 ```
 
+## Kubernetes
+
+Job manifests live under `deploy/`. Configure your image and PVC in `deploy/components/cluster-config/`, then apply individual jobs:
+
+```bash
+kubectl apply -k deploy/jobs/preprocess-static-optimization
+kubectl apply -k deploy/jobs/train-sindy
+kubectl apply -k deploy/jobs/train-diffusion-nimble
+
+# Interactive dev shell on the cluster
+kubectl apply -k deploy/dev-pod
+kubectl exec -it sindyffuse-dev -- bash -l
+```
+
+See [deploy/README.md](deploy/README.md) for image build, storage setup, and the full job list.
+
+**Container image:** GitHub Actions publishes `ghcr.io/rose-stl-lab/sindyffuse:latest` from `env/Dockerfile` (GHCR container storage is currently free; see deploy docs for size notes).
+
 ## Project layout
 
 | Path | Role |
@@ -127,8 +146,8 @@ python scripts/generate_motion.py --prompt "a person walks forward"
 | `scripts/train_diffusion.py` | Train text-conditioned diffusion |
 | `scripts/generate_motion.py` | Sample motion from trained diffusion |
 | `env/environment.yaml` | Conda environment |
-| `env/Dockerfile` | Container image (`docker build -f env/Dockerfile .`) |
-| `env/*.yaml` | Kubernetes job manifests |
+| `env/Dockerfile` | Container image (`docker build -f env/Dockerfile .`; CI publishes to GHCR) |
+| `deploy/` | Kubernetes job manifests (see `deploy/README.md`) |
 | `nimble/` | IK, B3D I/O, OpenSim muscle activation, Rajagopal guidance |
 | `surrogate/` | Differentiable activation surrogate (ML) |
 | `sindy/` | SINDy library, dataset, training |

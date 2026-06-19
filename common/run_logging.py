@@ -1,4 +1,4 @@
-"""Dual-channel run logging: minimal terminal progress, verbose details in ``logs/``."""
+"""Run logging to terminal and optional timestamped log files under ``logs/``."""
 
 from __future__ import annotations
 
@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterator, Optional, TextIO, TypeVar
+
+from tqdm import tqdm
 
 _T = TypeVar("_T")
 
@@ -51,7 +53,7 @@ class RunLogPaths:
 
 
 class RunLogger:
-    """Terminal progress vs file-only verbose logging."""
+    """Mirror progress and verbose messages to terminal and an optional log file."""
 
     def __init__(
         self,
@@ -68,29 +70,108 @@ class RunLogger:
     def enabled(self) -> bool:
         return self._log_file is not None
 
-    def progress(self, msg: str) -> None:
+    @property
+    def terminal(self) -> TextIO:
+        return self._terminal
+
+    @property
+    def log_file_stream(self) -> TextIO | None:
+        return self._log_file
+
+    def _emit(self, msg: str) -> None:
         if self._progress_enabled:
             print(msg, file=self._terminal, flush=True)
+        if self._log_file is not None:
+            print(msg, file=self._log_file, flush=True)
+
+    def progress(self, msg: str) -> None:
+        self._emit(msg)
 
     def verbose(self, msg: str) -> None:
-        if self._log_file is not None:
-            print(msg, file=self._log_file, flush=True)
-        elif self._progress_enabled:
-            print(msg, file=self._terminal, flush=True)
+        self._emit(msg)
 
     def warn(self, msg: str) -> None:
-        print(msg, file=self._terminal, flush=True)
-        if self._log_file is not None:
-            print(msg, file=self._log_file, flush=True)
+        self._emit(msg)
 
     def log_exception(self, msg: str, *, exc: BaseException | None = None) -> None:
-        self.progress(msg)
-        if self._log_file is not None:
-            print(msg, file=self._log_file, flush=True)
-            if exc is not None:
-                traceback.print_exception(type(exc), exc, exc.__traceback__, file=self._log_file)
-            else:
+        self._emit(msg)
+        if exc is not None:
+            if self._progress_enabled:
+                traceback.print_exception(type(exc), exc, exc.__traceback__)
+            if self._log_file is not None:
+                traceback.print_exception(
+                    type(exc), exc, exc.__traceback__, file=self._log_file
+                )
+        else:
+            if self._progress_enabled:
+                traceback.print_exc()
+            if self._log_file is not None:
                 traceback.print_exc(file=self._log_file)
+
+
+class DualTqdm:
+    """Progress bar mirrored to terminal and an optional log file stream."""
+
+    def __init__(
+        self,
+        *,
+        total: int,
+        desc: str = "",
+        unit: str = "",
+        terminal: TextIO,
+        log_file: TextIO | None = None,
+    ) -> None:
+        self._bars: list[tqdm] = [
+            tqdm(
+                total=total,
+                desc=desc,
+                unit=unit,
+                file=terminal,
+                dynamic_ncols=True,
+            )
+        ]
+        if log_file is not None:
+            self._bars.append(
+                tqdm(
+                    total=total,
+                    desc=desc,
+                    unit=unit,
+                    file=log_file,
+                    ascii=True,
+                    dynamic_ncols=False,
+                    mininterval=1.0,
+                )
+            )
+
+    def update(self, n: int = 1) -> None:
+        for bar in self._bars:
+            bar.update(n)
+
+    def set_postfix(self, ordered_dict=None, refresh: bool = True, **kwargs) -> None:
+        for bar in self._bars:
+            bar.set_postfix(ordered_dict=ordered_dict, refresh=refresh, **kwargs)
+
+    def close(self) -> None:
+        for bar in self._bars:
+            bar.close()
+
+
+def dual_tqdm(
+    *,
+    total: int,
+    desc: str = "",
+    unit: str = "",
+    logger: RunLogger | None = None,
+) -> DualTqdm:
+    """Create a progress bar on the active logger's terminal and log file."""
+    log = logger if logger is not None else get_run_logger()
+    return DualTqdm(
+        total=total,
+        desc=desc,
+        unit=unit,
+        terminal=log.terminal,
+        log_file=log.log_file_stream,
+    )
 
 
 _NULL_LOGGER: RunLogger | None = None
@@ -143,7 +224,7 @@ def build_run_log_paths(
     script_name: str,
     rank: int | None = None,
 ) -> RunLogPaths:
-    """Return paths for ``{script_name}_{timestamp}.log`` and ``{script_name}_latest``."""
+    """Return paths for ``{script_name}_{timestamp}.log`` and ``{script_name}.log``."""
     directory = Path(log_dir).expanduser().resolve()
     directory.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -151,12 +232,12 @@ def build_run_log_paths(
     if rank is not None and rank > 0:
         safe_name = f"{safe_name}_rank{rank}"
     log_file = directory / f"{safe_name}_{stamp}.log"
-    latest_stem = safe_name if rank is None or rank == 0 else f"{Path(script_name).stem}_latest"
+    latest_stem = safe_name if rank is None or rank == 0 else Path(script_name).stem
     return RunLogPaths(
         log_dir=directory,
         log_file=log_file,
         latest_log=directory / f"{latest_stem}.log",
-        latest_exit_code=directory / f"{Path(script_name).stem}_latest.exitcode",
+        latest_exit_code=directory / f"{Path(script_name).stem}.exitcode",
     )
 
 

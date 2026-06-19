@@ -5,8 +5,7 @@ Run from the SINDyffuse repo root, e.g.:
 
   python scripts/preprocess_nimble.py
   python scripts/preprocess_nimble.py --num_workers 32   # Moco uses 32 threads (default: auto)
-  python scripts/preprocess_nimble.py --skip_if_moco_valid   # resume: skip B3D with valid Moco mask
-  python scripts/preprocess_nimble.py --motion_shard_index 0 --motion_shard_count 8
+  python scripts/preprocess_nimble.py --skip_existing   # skip motions that already have .b3d
   python scripts/preprocess_nimble.py --moco_parallel_motions 4 --num_workers 64
   python scripts/preprocess_nimble.py --skip_muscle_activation --num_workers 8   # IK-only, 8 parallel
   python scripts/preprocess_nimble.py --max_motions 1   # smoke test
@@ -34,7 +33,6 @@ except ImportError:
 from pathlib import Path
 
 import numpy as np
-from tqdm import tqdm
 
 _REPO = Path(__file__).resolve().parent.parent
 if str(_REPO) not in sys.path:
@@ -52,9 +50,11 @@ warnings.filterwarnings(
 from common.cpu import configure_compute_threads, detect_usable_cpus, resolve_preprocess_parallelism
 from common.paths import NIMBLE_B3D_SUBDIR, default_humanml3d_root, nimble_b3d_dir
 from common.run_logging import (
+    DualTqdm,
     RunLogger,
     add_run_log_cli_args,
     append_verbose_log,
+    dual_tqdm,
     null_logger,
     run_log_session,
 )
@@ -80,8 +80,6 @@ WorkItem = tuple[
     float,
     float,
     bool,
-    bool,
-    float,
     str,
     str,
     str,
@@ -126,28 +124,6 @@ def _load_joints(
         return None
 
 
-def _b3d_activation_valid_fraction(b3d_path: Path) -> float | None:
-    """Mean muscle_activation_mask if present; ``None`` when activation labels are absent."""
-    if not b3d_path.is_file():
-        return None
-    try:
-        import nimblephysics as nimble
-
-        from nimble.b3d_io import read_muscle_activation_mask_frames, subject_has_custom_value
-        from nimble.b3d_schema import MUSCLE_ACTIVATION_MASK
-
-        subj = nimble.biomechanics.SubjectOnDisk(str(b3d_path))
-        if not subject_has_custom_value(subj, MUSCLE_ACTIVATION_MASK):
-            return None
-        tlen = int(subj.getTrialLength(0))
-        if tlen < 1:
-            return None
-        mask = read_muscle_activation_mask_frames(subj, 0, 0, tlen)
-        return float(np.mean(mask))
-    except Exception:
-        return None
-
-
 def _link_or_copy_tree(src: Path, dst: Path) -> None:
     if dst.exists():
         return
@@ -169,8 +145,6 @@ def _process_one(args: WorkItem) -> dict:
         mass_kg,
         height_m,
         skip_existing,
-        skip_if_moco_valid,
-        moco_valid_fraction_threshold,
         joint_source,
         joints_root_s,
         act_cfg_json,
@@ -192,19 +166,6 @@ def _process_one(args: WorkItem) -> dict:
     if skip_existing and out_b3d.is_file():
         append_verbose_log(f"{sid}: skipped (existing b3d)")
         return {"id": sid, "status": "skipped", "path": str(out_b3d)}
-    if skip_if_moco_valid and out_b3d.is_file():
-        valid_frac = _b3d_activation_valid_fraction(out_b3d)
-        if valid_frac is not None and valid_frac >= float(moco_valid_fraction_threshold):
-            append_verbose_log(
-                f"{sid}: skipped (activation_valid fraction={valid_frac:.4f})"
-            )
-            return {
-                "id": sid,
-                "status": "skipped",
-                "path": str(out_b3d),
-                "skip_reason": "activation_valid",
-                "activation_valid_fraction": valid_frac,
-            }
 
     joints = _load_joints(
         hml_root,
@@ -276,7 +237,7 @@ def _moco_activation_objective(ik_stats: dict) -> float | None:
 
 
 def _log_motion_verbose(row: dict, logger: RunLogger) -> None:
-    """File-only per-motion summary (IK loss, Moco objective, timing)."""
+    """Per-motion summary (IK loss, activation objective, timing)."""
     mid = str(row.get("id", ""))
     status = row.get("status")
     logger.verbose(f"=== motion {mid} status={status} ===")
@@ -324,7 +285,7 @@ def _log_motion_verbose(row: dict, logger: RunLogger) -> None:
 
 
 def _print_motion_progress(row: dict, *, logger: RunLogger) -> None:
-    """Terminal: IK / muscle-activation errors only (metrics go to the run log)."""
+    """Log per-motion metrics and warnings for IK / muscle-activation failures."""
     mid = str(row.get("id", ""))
     status = row.get("status")
     _log_motion_verbose(row, logger)
@@ -361,52 +322,6 @@ def _motion_loss(row: dict) -> float | None:
     return _ik_fit_loss(row.get("ik_stats") or {})
 
 
-def _migrate_legacy_b3d_moco(out_root: Path, logger: RunLogger) -> None:
-    """Merge ``nimble_b3d_moco/`` into canonical ``nimble_b3d/`` (idempotent)."""
-    legacy_dir = out_root / "nimble_b3d_moco"
-    target_dir = nimble_b3d_dir(out_root)
-    if not legacy_dir.is_dir():
-        return
-    target_dir.mkdir(parents=True, exist_ok=True)
-    migrated = 0
-    for src in sorted(legacy_dir.glob("*.b3d")):
-        dst = target_dir / src.name
-        if not dst.is_file():
-            shutil.copy2(src, dst)
-            migrated += 1
-            continue
-        src_frac = _b3d_activation_valid_fraction(src) or 0.0
-        dst_frac = _b3d_activation_valid_fraction(dst) or 0.0
-        if src_frac > dst_frac:
-            shutil.copy2(src, dst)
-            migrated += 1
-    legacy_manifest = out_root / "preprocess_manifest_nimble_b3d_moco.jsonl"
-    manifest_path = out_root / "preprocess_manifest.jsonl"
-    if legacy_manifest.is_file():
-        existing_ids: set[str] = set()
-        if manifest_path.is_file():
-            for line in manifest_path.read_text(encoding="utf-8").splitlines():
-                if not line.strip():
-                    continue
-                try:
-                    existing_ids.add(str(json.loads(line).get("id", "")))
-                except json.JSONDecodeError:
-                    pass
-        with manifest_path.open("a", encoding="utf-8") as out_fp:
-            for line in legacy_manifest.read_text(encoding="utf-8").splitlines():
-                if not line.strip():
-                    continue
-                try:
-                    row_id = str(json.loads(line).get("id", ""))
-                except json.JSONDecodeError:
-                    continue
-                if row_id and row_id not in existing_ids:
-                    out_fp.write(line + "\n")
-                    existing_ids.add(row_id)
-    if migrated:
-        logger.verbose(f"Migrated {migrated} .b3d file(s) from nimble_b3d_moco/ to nimble_b3d/")
-
-
 def _symlink_metadata(hml_root: Path, out_root: Path) -> None:
     if hml_root.resolve() == out_root.resolve():
         return
@@ -435,23 +350,11 @@ def run_preprocess(args: argparse.Namespace, logger: RunLogger | None = None) ->
     out_root = Path(getattr(args, "out_root", default_root) or default_root).expanduser().resolve()
     b3d_cache = nimble_b3d_dir(out_root)
     b3d_cache.mkdir(parents=True, exist_ok=True)
-    _migrate_legacy_b3d_moco(out_root, log)
 
     ids = all_motion_ids(hml_root)
     max_motions = int(getattr(args, "max_motions", 0) or 0)
     if max_motions > 0:
         ids = ids[:max_motions]
-
-    shard_count = int(getattr(args, "motion_shard_count", 1) or 1)
-    shard_index = int(getattr(args, "motion_shard_index", 0) or 0)
-    if shard_count > 1:
-        if shard_index < 0 or shard_index >= shard_count:
-            log.progress(
-                f"ERROR: motion_shard_index={shard_index} must be in [0, {shard_count})"
-            )
-            sys.exit(1)
-        ids = [mid for i, mid in enumerate(ids) if i % shard_count == shard_index]
-        log.verbose(f"Motion shard {shard_index}/{shard_count}: {len(ids)} motion(s)")
 
     _symlink_metadata(hml_root, out_root)
 
@@ -464,15 +367,6 @@ def run_preprocess(args: argparse.Namespace, logger: RunLogger | None = None) ->
     mass_kg = float(getattr(args, "mass_kg", 70.0))
     height_m = float(getattr(args, "height_m", 1.75))
     skip_existing = bool(getattr(args, "skip_existing", False))
-    skip_if_activation_valid = bool(
-        getattr(args, "skip_if_activation_valid", False)
-        or getattr(args, "skip_if_moco_valid", False)
-    )
-    valid_threshold = getattr(args, "activation_valid_fraction_threshold", None)
-    if valid_threshold is None:
-        valid_threshold = getattr(args, "moco_valid_fraction_threshold", 0.5)
-    moco_valid_fraction_threshold = float(valid_threshold)
-    skip_if_moco_valid = skip_if_activation_valid
 
     act_cfg = muscle_activation_config_from_args(args, fps=fps, mass_kg=mass_kg)
     act_cfg_json = json.dumps(muscle_activation_config_to_dict(act_cfg))
@@ -489,8 +383,6 @@ def run_preprocess(args: argparse.Namespace, logger: RunLogger | None = None) ->
             mass_kg,
             height_m,
             skip_existing,
-            skip_if_moco_valid,
-            moco_valid_fraction_threshold,
             str(getattr(args, "joint_source", "auto")),
             joints_root,
             act_cfg_json,
@@ -507,9 +399,11 @@ def run_preprocess(args: argparse.Namespace, logger: RunLogger | None = None) ->
     moco_obj_sum = 0.0
     moco_obj_count = 0
     total_motions = len(work)
-    use_tqdm = bool(sys.stdout.isatty()) and total_motions > 0
+    if total_motions == 0:
+        log.progress("No motions to process; exiting successfully")
+        sys.exit(0)
 
-    def _record(row: dict, *, pbar: tqdm | None = None) -> None:
+    def _record(row: dict, *, pbar: DualTqdm | None = None) -> None:
         nonlocal ok, err, skip, num_dofs_ref, loss_sum, loss_count
         nonlocal moco_obj_sum, moco_obj_count
         _print_motion_progress(row, logger=log)
@@ -576,21 +470,18 @@ def run_preprocess(args: argparse.Namespace, logger: RunLogger | None = None) ->
             f"(usable_cpus={detect_usable_cpus()})"
         )
 
-    manifest_name = "preprocess_manifest"
-    if shard_count > 1:
-        manifest_name += f"_shard{shard_index}of{shard_count}"
-    manifest_path = out_root / f"{manifest_name}.jsonl"
+    manifest_path = out_root / "preprocess_manifest.jsonl"
     pending = list(work)
     with manifest_path.open("w", encoding="utf-8") as mf:
         while pending:
             if motion_workers <= 1:
                 batch = pending
                 pending = []
-                pbar = tqdm(
+                pbar = dual_tqdm(
                     total=len(batch),
                     desc="preprocess",
                     unit="motion",
-                    disable=not use_tqdm,
+                    logger=log,
                 )
                 try:
                     for w in batch:
@@ -611,11 +502,11 @@ def run_preprocess(args: argparse.Namespace, logger: RunLogger | None = None) ->
                     pool_kwargs["max_tasks_per_child"] = 1
                 finished_in_batch: set[str] = set()
                 pool_broken = False
-                pbar = tqdm(
+                pbar = dual_tqdm(
                     total=len(batch),
                     desc="preprocess",
                     unit="motion",
-                    disable=not use_tqdm,
+                    logger=log,
                 )
                 try:
                     with ProcessPoolExecutor(**pool_kwargs) as ex:
@@ -673,23 +564,13 @@ def run_preprocess(args: argparse.Namespace, logger: RunLogger | None = None) ->
         "moco_parallel_motions": (
             moco_parallel if activation_method == "moco_track" else None
         ),
-        "motion_shard_index": shard_index if shard_count > 1 else None,
-        "motion_shard_count": shard_count if shard_count > 1 else None,
-        "skip_if_activation_valid": skip_if_activation_valid,
-        "skip_if_moco_valid": skip_if_activation_valid,
-        "activation_valid_fraction_threshold": (
-            moco_valid_fraction_threshold if skip_if_activation_valid else None
-        ),
         "manifest_path": str(manifest_path),
         "use_all_frames_per_motion": True,
     }
     run_log_file = getattr(args, "_run_log_file", None)
     if run_log_file:
         meta["run_log_file"] = str(run_log_file)
-    meta_name = "preprocess_meta"
-    if shard_count > 1:
-        meta_name += f"_shard{shard_index}of{shard_count}"
-    (out_root / f"{meta_name}.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    (out_root / "preprocess_meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
     log.progress(f"Done: {ok} ok, {err} failed, {skip} skipped")
     log.verbose(f"B3D cache: {b3d_cache}")
@@ -755,51 +636,9 @@ def main() -> None:
         help="Alias for --activation_method none (IK-only parallel workers).",
     )
     parser.add_argument(
-        "--verbose_progress",
-        action="store_true",
-        help="Deprecated (no-op): per-motion details are always written to the run log.",
-    )
-    parser.add_argument(
         "--skip_existing",
         action="store_true",
         help="Skip motions that already have a .b3d in nimble_b3d/",
-    )
-    parser.add_argument(
-        "--skip_if_activation_valid",
-        action="store_true",
-        help=(
-            "Skip motions whose existing .b3d has muscle_activation_mask mean "
-            "above --activation_valid_fraction_threshold."
-        ),
-    )
-    parser.add_argument(
-        "--skip_if_moco_valid",
-        action="store_true",
-        help="Alias for --skip_if_activation_valid.",
-    )
-    parser.add_argument(
-        "--activation_valid_fraction_threshold",
-        type=float,
-        default=None,
-        help="Min mean muscle_activation_mask to skip (default 0.5).",
-    )
-    parser.add_argument(
-        "--moco_valid_fraction_threshold",
-        type=float,
-        default=0.5,
-        help="Alias for --activation_valid_fraction_threshold.",
-    )
-    parser.add_argument(
-        "--motion_shard_index",
-        type=int,
-        default=0,
-        help="Shard index for parallel jobs (0 .. motion_shard_count-1).",
-    )
-    parser.add_argument(
-        "--motion_shard_count",
-        type=int,
-        default=1,
-        help="Number of motion shards for parallel K8s jobs (default 1 = no sharding).",
     )
     parser.add_argument(
         "--max_motions",

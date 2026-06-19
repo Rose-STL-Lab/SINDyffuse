@@ -11,7 +11,7 @@ import opensim as osim
 from nimble.muscle_activation import (
     MuscleActivationConfig,
     MuscleActivationResult,
-    _repair_activation_frames,
+    apply_activation_repair_and_smooth,
     _storage_to_array,
     opensim_quiet,
 )
@@ -194,16 +194,23 @@ def run_static_optimization(
         )
 
     repaired = activations
-    repaired_count = 0
-    if cfg.repair_failed_frames:
-        repaired = _repair_activation_frames(activations, label_valid)
-        repaired_count = int((label_valid < 0.5).sum())
+    repair_meta: Dict[str, Any] = {}
+    if cfg.repair_failed_frames or float(cfg.activation_smooth_hz) > 0.0:
+        repaired, label_valid, repair_meta = apply_activation_repair_and_smooth(
+            activations,
+            label_valid,
+            cfg,
+        )
+    repaired_count = int(repair_meta.get("repaired_frame_count", 0))
 
     valid_frac = float(np.mean(label_valid)) if label_valid.size else 0.0
     meta: Dict[str, Any] = {
         "activation_method": "static_optimization",
         "label_valid_fraction": valid_frac,
         "repaired_frame_count": repaired_count,
+        "interpolated_frame_count": int(repair_meta.get("interpolated_frame_count", 0)),
+        "extrapolated_frame_count": int(repair_meta.get("extrapolated_frame_count", 0)),
+        "marked_valid_frame_count": int(repair_meta.get("marked_valid_frame_count", 0)),
         "static_activation_exponent": float(cfg.static_activation_exponent),
         "static_use_muscle_physiology": bool(cfg.static_use_muscle_physiology),
         "static_lowpass_cutoff_hz": float(cfg.static_lowpass_cutoff_hz),
@@ -212,6 +219,7 @@ def run_static_optimization(
         "static_reserve_invalid_frames": reserve_invalid,
         **{k: v for k, v in parse_meta.items() if k != "static_max_reserve_per_frame"},
     }
+    meta.update(repair_meta)
     return MuscleActivationResult(
         activations=repaired,
         muscle_names=tuple(muscle_name_list),

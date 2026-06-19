@@ -1,5 +1,8 @@
 FROM nvidia/cuda:13.1.2-cudnn-runtime-ubuntu24.04
 
+LABEL org.opencontainers.image.source=https://github.com/Rose-STL-Lab/SINDyffuse
+LABEL org.opencontainers.image.description="SINDyffuse: diffusion + SINDy + Nimble/OpenSim physics"
+
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CONDA_DIR=/opt/conda
 ENV PATH=${CONDA_DIR}/bin:${PATH}
@@ -31,8 +34,11 @@ WORKDIR /workspace
 
 COPY env/environment.yaml /workspace/environment.yaml
 
-RUN conda env create -f /workspace/environment.yaml && \
-    conda clean -afy
+# mamba (from Miniforge) is faster and uses less peak disk than conda during solves.
+RUN mamba env create -f /workspace/environment.yaml && \
+    mamba clean --all --yes && \
+    conda clean --all --yes && \
+    rm -rf /opt/conda/pkgs/* /root/.cache/pip
 
 # Sanity-check core stack (fail the image build if anything is missing).
 RUN ${CONDA_DIR}/envs/sindyffuse/bin/python -c "\

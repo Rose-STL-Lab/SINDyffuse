@@ -1,0 +1,15 @@
+# PVC for SINDyffuse data (repo checkout, HumanML3D, results, logs).
+#
+# Apply once per cluster:
+#   kubectl apply -f deploy/pvc.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: biomech-ai
+spec:
+  storageClassName: rook-cephfs
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 500Gi

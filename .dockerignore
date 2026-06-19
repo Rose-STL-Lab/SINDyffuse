@@ -1,0 +1,18 @@
+# Keep build context small — runtime image only needs env/ (via Dockerfile COPY).
+.git
+.github
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+
+results/
+logs/
+wandb/
+datasets/HumanML3D/
+*.pt
+*.pth
+*.npz
+.env
+.env.*

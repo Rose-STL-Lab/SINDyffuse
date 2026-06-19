@@ -135,3 +135,31 @@ def apply_pose_smoothing_numpy(
     )
     return out.numpy(), meta
 
+
+def smooth_activation_trajectory(
+    activations: np.ndarray,
+    *,
+    fps: float,
+    cutoff_hz: float,
+    butterworth_order: int = 2,
+) -> np.ndarray:
+    """Low-pass muscle activations along time; input ``[T, M]``."""
+    act = np.asarray(activations, dtype=np.float64)
+    if float(cutoff_hz) <= 0.0 or act.ndim != 2 or act.shape[0] < 3:
+        return act.astype(np.float32)
+
+    sr = float(fps)
+    eff_fc = effective_pose_smooth_cutoff_hz(float(cutoff_hz), sr)
+    num_taps = _fir_num_taps(sr, eff_fc, int(butterworth_order))
+    if act.shape[0] <= num_taps:
+        return act.astype(np.float32)
+
+    kernel = sp_signal.firwin(num_taps, eff_fc, fs=sr)
+    out = np.empty_like(act)
+    for m in range(int(act.shape[1])):
+        col = act[:, m]
+        if not np.isfinite(col).all():
+            col = np.nan_to_num(col, nan=0.0, posinf=0.0, neginf=0.0)
+        out[:, m] = sp_signal.filtfilt(kernel, [1.0], col, method="gust")
+    return np.clip(out, 0.0, 1.0).astype(np.float32)
+

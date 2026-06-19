@@ -1,0 +1,65 @@
+# Apply: kubectl apply -k deploy/jobs/train-sindy
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sindyffuse-sindy-train
+  labels:
+    app: sindyffuse-sindy-train
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: sindyffuse-sindy-train
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: sindyffuse-sindy
+        image: sindyffuse:latest
+        imagePullPolicy: IfNotPresent
+        workingDir: /workspace/SINDyffuse
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          set -eo pipefail
+          eval "$(conda shell.bash hook)"
+          conda activate sindyffuse
+          export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
+          export PYTHONPATH=/workspace/SINDyffuse
+          export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+          export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
+          HML=/workspace/SINDyffuse/datasets/HumanML3D
+          test -d "${HML}/nimble_b3d" || { echo "Missing ${HML}/nimble_b3d"; exit 1; }
+          RUN=/workspace/SINDyffuse/results/sindy_$(date +%Y%m%d_%H%M%S)
+          mkdir -p "${RUN}"
+          NGPU=$(nvidia-smi -L | wc -l)
+          [ "${NGPU}" -gt 2 ] && NGPU=2
+          torchrun --standalone --nproc_per_node="${NGPU}" \
+            -m sindy.train \
+            --config /workspace/SINDyffuse/configs/train_sindy.json \
+            --data_root "${HML}" \
+            --output "${RUN}" \
+            --preload
+          ln -sfn "${RUN}" /workspace/SINDyffuse/results/sindy/latest
+        resources:
+          limits:
+            nvidia.com/gpu: 2
+            memory: 64Gi
+            cpu: "16"
+          requests:
+            nvidia.com/gpu: 2
+            memory: 64Gi
+            cpu: "16"
+        volumeMounts:
+        - name: data
+          mountPath: /workspace
+        - name: dshm
+          mountPath: /dev/shm
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: biomech-ai
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 64Gi

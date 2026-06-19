@@ -1,0 +1,41 @@
+# Apply: kubectl apply -k deploy/dev-pod
+# Shell:  kubectl exec -it sindyffuse-dev -- bash -l
+apiVersion: v1
+kind: Pod
+metadata:
+  name: sindyffuse-dev
+  labels:
+    app: sindyffuse-dev
+spec:
+  restartPolicy: Always
+  containers:
+  - name: sindyffuse-dev
+    image: sindyffuse:latest
+    imagePullPolicy: Always
+    stdin: true
+    tty: true
+    workingDir: /workspace/SINDyffuse
+    command: ["/bin/bash", "-c"]
+    args:
+    - |
+      grep -q sindyffuse /root/.bashrc 2>/dev/null || cat >> /root/.bashrc <<'EOF'
+      eval "$(conda shell.bash hook)"
+      conda activate sindyffuse
+      export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
+      export PYTHONPATH=/workspace/SINDyffuse
+      EOF
+      exec sleep infinity
+    resources:
+      requests:
+        cpu: "8"
+        memory: 32Gi
+      limits:
+        cpu: "32"
+        memory: 64Gi
+    volumeMounts:
+    - name: data
+      mountPath: /workspace
+  volumes:
+  - name: data
+    persistentVolumeClaim:
+          claimName: biomech-ai

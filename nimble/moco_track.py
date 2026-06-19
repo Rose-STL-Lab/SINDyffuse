@@ -20,7 +20,7 @@ from common.working_directory import working_directory
 from nimble.muscle_activation import (
     MuscleActivationConfig,
     MuscleActivationResult,
-    _repair_activation_frames,
+    apply_activation_repair_and_smooth,
     _storage_to_array,
     muscle_names,
     opensim_quiet,
@@ -221,15 +221,6 @@ def prepare_rajagopal_moco_track_model(
     model.initSystem()
     model.printToXML(str(out))
     return out
-
-
-def prepare_rajagopal_moco_model(
-    work_dir: Path,
-    *,
-    model_path: Path | None = None,
-) -> Path:
-    """Backward-compatible alias for :func:`prepare_rajagopal_moco_track_model`."""
-    return prepare_rajagopal_moco_track_model(work_dir, model_path=model_path)
 
 
 def _trial_time_bounds(t_len: int, fps: float) -> Tuple[float, float]:
@@ -575,11 +566,15 @@ def run_moco_track(
         if solver_ok and reserve_ok and np.isfinite(activations[t]).all():
             label_valid[t] = True
 
-    repaired_frame_count = 0
-    if cfg.repair_failed_frames:
-        need = (~label_valid) | (~np.isfinite(activations).all(axis=1))
-        repaired_frame_count = int(need.sum())
-        activations = _repair_activation_frames(activations, label_valid)
+    repair_meta: Dict[str, Any] = {}
+    if cfg.repair_failed_frames or float(cfg.activation_smooth_hz) > 0.0:
+        activations, label_valid_f, repair_meta = apply_activation_repair_and_smooth(
+            activations,
+            label_valid.astype(np.float64),
+            cfg,
+        )
+        label_valid = label_valid_f.astype(bool)
+    repaired_frame_count = int(repair_meta.get("repaired_frame_count", 0))
 
     label_valid_fraction = float(label_valid.mean())
     obj = solve_meta.get("objective")
@@ -626,6 +621,7 @@ def run_moco_track(
         "moco_mod_ops": list(_MOCO_MOD_OPS),
         "moco_solve_details": solve_meta,
     }
+    meta.update(repair_meta)
     if solve_meta.get("solver_status"):
         meta["moco_solver_status"] = str(solve_meta["solver_status"])
     if solve_meta.get("solver_iterations") is not None:
