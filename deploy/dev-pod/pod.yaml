@@ -11,10 +11,10 @@ spec:
   containers:
   - name: sindyffuse-dev
     image: sindyffuse:latest
-    imagePullPolicy: Always
+    imagePullPolicy: IfNotPresent
     stdin: true
     tty: true
-    workingDir: /workspace/SINDyffuse
+    workingDir: /mnt/SINDyffuse
     command: ["/bin/bash", "-c"]
     args:
     - |
@@ -22,19 +22,19 @@ spec:
       eval "$(conda shell.bash hook)"
       conda activate sindyffuse
       export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
-      export PYTHONPATH=/workspace/SINDyffuse
+      export PYTHONPATH=/mnt/SINDyffuse
       EOF
       exec sleep infinity
     resources:
       requests:
-        cpu: "8"
+        cpu: "16"
         memory: 32Gi
       limits:
-        cpu: "32"
-        memory: 64Gi
+        cpu: "16"
+        memory: 32Gi
     volumeMounts:
     - name: data
-      mountPath: /workspace
+      mountPath: /mnt
   volumes:
   - name: data
     persistentVolumeClaim:

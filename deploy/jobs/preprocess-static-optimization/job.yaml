@@ -18,7 +18,7 @@ spec:
       - name: sindyffuse-preprocess-nimble
         image: sindyffuse:latest
         imagePullPolicy: IfNotPresent
-        workingDir: /workspace/SINDyffuse
+        workingDir: /mnt/SINDyffuse
         env:
         - name: MAX_MOTIONS
           value: "0"
@@ -33,13 +33,13 @@ spec:
           eval "$(conda shell.bash hook)"
           conda activate sindyffuse
           export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
-          export PYTHONPATH=/workspace/SINDyffuse
-          HML=/workspace/SINDyffuse/datasets/HumanML3D
+          export PYTHONPATH=/mnt/SINDyffuse
+          HML=/mnt/SINDyffuse/datasets/HumanML3D
           ARGS=(
             scripts/preprocess_nimble.py
             --hml_root "${HML}"
             --out_root "${HML}"
-            --log_dir /workspace/SINDyffuse/logs
+            --log_dir /mnt/SINDyffuse/logs
             --activation_method static_optimization
             --num_workers "${PREPROCESS_NUM_WORKERS:-64}"
             --opensim_log_level Off
@@ -58,7 +58,7 @@ spec:
             cpu: "64"
         volumeMounts:
         - name: data
-          mountPath: /workspace
+          mountPath: /mnt
       volumes:
       - name: data
         persistentVolumeClaim:

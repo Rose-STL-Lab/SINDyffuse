@@ -17,7 +17,7 @@ spec:
       - name: sindyffuse-diffusion
         image: sindyffuse:latest
         imagePullPolicy: IfNotPresent
-        workingDir: /workspace/SINDyffuse
+        workingDir: /mnt/SINDyffuse
         command: ["/bin/bash", "-c"]
         args:
         - |
@@ -25,20 +25,20 @@ spec:
           eval "$(conda shell.bash hook)"
           conda activate sindyffuse
           export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
-          export PYTHONPATH=/workspace/SINDyffuse
+          export PYTHONPATH=/mnt/SINDyffuse
           export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
           export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
-          HML=/workspace/SINDyffuse/datasets/HumanML3D
-          SINDY=/workspace/SINDyffuse/results/sindy/latest
+          HML=/mnt/SINDyffuse/datasets/HumanML3D
+          SINDY=/mnt/SINDyffuse/results/sindy/latest
           test -d "${HML}/nimble_b3d" || { echo "Missing ${HML}/nimble_b3d"; exit 1; }
           test -f "${SINDY}/text_to_xi.pt" || { echo "Missing ${SINDY}/text_to_xi.pt"; exit 1; }
-          RUN=/workspace/SINDyffuse/results/diffusion_sindy_$(date +%Y%m%d_%H%M%S)
+          RUN=/mnt/SINDyffuse/results/diffusion_sindy_$(date +%Y%m%d_%H%M%S)
           mkdir -p "${RUN}"
           CFG="${RUN}/config_resolved.json"
           python - <<PY
           import json
           from pathlib import Path
-          repo = Path("/workspace/SINDyffuse")
+          repo = Path("/mnt/SINDyffuse")
           cfg = json.loads((repo / "configs/train_diffusion.json").read_text(encoding="utf-8"))
           cfg.setdefault("train", {})["guidance"] = "sindy"
           cfg.setdefault("data", {})["data_root"] = str(repo / "datasets/HumanML3D")
@@ -64,7 +64,7 @@ spec:
             cpu: "16"
         volumeMounts:
         - name: data
-          mountPath: /workspace
+          mountPath: /mnt
         - name: dshm
           mountPath: /dev/shm
       volumes:

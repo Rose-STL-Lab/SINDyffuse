@@ -1,13 +1,13 @@
 # Cluster template — edit image and PVC for your environment (all jobs + dev pod).
 #
-#   images.newName / newTag  → container registry (default: GHCR publish from CI)
+#   images.newName / newTag  → container registry (default: ncking/sindyffuse on Nautilus)
 #   pvc-patch*.yaml          → claimName on the biomech-ai PVC
-apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
 
 images:
   - name: sindyffuse
-    newName: ghcr.io/rose-stl-lab/sindyffuse
+    newName: ncking/sindyffuse
     newTag: latest
 
 patches:

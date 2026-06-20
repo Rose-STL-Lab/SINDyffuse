@@ -30,12 +30,12 @@ RUN wget -qO /tmp/miniforge.sh \
     && conda config --system --set auto_activate_base false \
     && conda clean -afy
 
-WORKDIR /workspace
+WORKDIR /mnt
 
-COPY env/environment.yaml /workspace/environment.yaml
+COPY env/environment.yaml /mnt/environment.yaml
 
 # mamba (from Miniforge) is faster and uses less peak disk than conda during solves.
-RUN mamba env create -f /workspace/environment.yaml && \
+RUN mamba env create -f /mnt/environment.yaml && \
     mamba clean --all --yes && \
     conda clean --all --yes && \
     rm -rf /opt/conda/pkgs/* /root/.cache/pip

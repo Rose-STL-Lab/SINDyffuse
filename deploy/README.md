@@ -117,8 +117,8 @@ kubectl apply -f deploy/pvc.yaml
 
 The PVC should contain:
 
-- Repo checkout at `/workspace/SINDyffuse`
-- HumanML3D at `/workspace/SINDyffuse/datasets/HumanML3D`
+- Repo checkout at `/mnt/SINDyffuse`
+- HumanML3D at `/mnt/SINDyffuse/datasets/HumanML3D`
 
 ### 4. Apply a job
 
@@ -172,7 +172,7 @@ Default resources: 8–32 CPU, 32–64Gi memory. Edit `deploy/dev-pod/pod.yaml` 
 
 ## In-container layout
 
-All manifests assume the PVC is mounted at `/workspace` with the repo at `/workspace/SINDyffuse` (`workingDir` on every pod/job). HumanML3D lives at `/workspace/SINDyffuse/datasets/HumanML3D`.
+All manifests assume the PVC is mounted at `/mnt` with the repo at `/mnt/SINDyffuse` (`workingDir` on every pod/job). HumanML3D lives at `/mnt/SINDyffuse/datasets/HumanML3D`.
 
 Only **preprocess** exposes optional env overrides: `MAX_MOTIONS`, `SKIP_EXISTING`, `PREPROCESS_NUM_WORKERS`.
 
