@@ -78,12 +78,42 @@ def configure_compute_threads(num_threads: int) -> int:
     return n
 
 
+def resolve_k8s_shard(
+    *,
+    num_shards: int | None = None,
+    shard_index: int | None = None,
+) -> tuple[int, int]:
+    """Return ``(shard_index, num_shards)`` for distributed preprocess.
+
+    Defaults to ``(0, 1)`` (no sharding). When ``num_shards > 1``, ``shard_index``
+    is taken from ``shard_index`` or ``JOB_COMPLETION_INDEX``.
+    """
+    env_shards = os.environ.get("PREPROCESS_NUM_SHARDS", "").strip()
+    n = int(num_shards) if num_shards is not None else (int(env_shards) if env_shards.isdigit() else 1)
+    if n <= 1:
+        return 0, 1
+
+    if shard_index is not None:
+        i = int(shard_index)
+    else:
+        idx_env = os.environ.get("JOB_COMPLETION_INDEX", "").strip()
+        if not idx_env.isdigit():
+            raise ValueError(
+                "num_shards > 1 requires --shard_index or JOB_COMPLETION_INDEX (Indexed Job)"
+            )
+        i = int(idx_env)
+    if i < 0 or i >= n:
+        raise ValueError(f"shard_index must be in [0, {n}), got {i}")
+    return i, n
+
+
 def resolve_preprocess_parallelism(
     num_workers: int,
     *,
     activation_method: str = "moco_track",
     skip_muscle_activation: bool = False,
     moco_parallel_motions: int = 1,
+    num_shards: int = 1,
 ) -> tuple[int, int]:
     """Return ``(motion_process_workers, opensim_thread_count)``.
 
@@ -92,7 +122,13 @@ def resolve_preprocess_parallelism(
     ``static_optimization``: parallel motion workers, 1 thread each.
 
     ``moco_track``: concurrent Moco solves; threads per solve from ``num_workers``.
+
+    When ``num_shards > 1`` (K8s distributed), in-pod parallelism is 1 for all methods;
+    cluster-level parallelism comes from the shard count.
     """
+    if int(num_shards) > 1:
+        return 1, 1
+
     auto = detect_usable_cpus()
     method = "none" if skip_muscle_activation else str(activation_method)
     if method == "none":

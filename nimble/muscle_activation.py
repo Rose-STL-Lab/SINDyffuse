@@ -2,7 +2,8 @@
 
 Supports three methods: skip (``none``), ``moco_track``, and
 ``static_optimization``. Results are cached in B3D as ``muscle_activations``
-``[M, T]`` and ``muscle_activation_mask`` ``[1, T]``.
+``[M, T]``. Non-finite frames are linearly interpolated before optional
+temporal smoothing.
 
 OpenSim solves are **not differentiable**; use cached labels for training.
 """
@@ -40,12 +41,7 @@ class MuscleActivationConfig:
     activation_method: str = "moco_track"
     fps: float = 20.0
     mass_kg: float = 70.0
-    min_success_fraction: float = 0.5
-    fail_below_min_success_fraction: bool = False
-    repair_failed_frames: bool = True
-    # After repair/smoothing, muscle_activation_mask follows finite activations so
-    # downstream code always sees a full-length [T] series (metadata records repairs).
-    mark_repaired_frames_valid: bool = True
+    interpolate_activations: bool = True
     activation_smooth_hz: float = 6.0
     opensim_log_level: str = "Off"
     temp_dir: Optional[str] = None
@@ -294,31 +290,9 @@ def add_muscle_activation_cli_args(parser: argparse.ArgumentParser) -> None:
         help="Skip DeGrooteFregly2016 muscle replacement in Moco model pipeline.",
     )
     grp.add_argument(
-        "--moco_min_success_fraction",
-        type=float,
-        default=None,
-        help="Reject motion if valid-label frame fraction is below this.",
-    )
-    grp.add_argument(
-        "--moco_fail_below_min_success_fraction",
-        action="store_true",
-        help=(
-            "Reject motion when label_valid_fraction is below "
-            "--moco_min_success_fraction after repair (strict; not default)."
-        ),
-    )
-    grp.add_argument(
         "--moco_no_repair",
         action="store_true",
-        help="Disable temporal interpolation of failed activation frames.",
-    )
-    grp.add_argument(
-        "--moco_no_repaired_frames_valid",
-        action="store_true",
-        help=(
-            "Strict mask: leave failed timesteps at muscle_activation_mask=0 instead "
-            "of marking repaired/smoothed frames valid (not default)."
-        ),
+        help="Disable temporal interpolation of non-finite activation frames.",
     )
     grp.add_argument(
         "--activation_smooth_hz",
@@ -341,11 +315,7 @@ def add_muscle_activation_cli_args(parser: argparse.ArgumentParser) -> None:
 
 
 def _fail_on_high_reserve_from_args(args: argparse.Namespace) -> bool:
-    """Reserve QC defaults: on for MocoTrack, off for static optimization.
-
-    Static optimization has no foot contact, so pelvis residuals/reserves are
-    routinely large; failing those frames zeros ``label_valid_fraction``.
-    """
+    """Reserve QC defaults: on for MocoTrack, off for static optimization."""
     if bool(getattr(args, "moco_allow_high_reserve", False)):
         return False
     if resolve_activation_method(args) == "static_optimization":
@@ -369,8 +339,6 @@ def muscle_activation_config_from_args(
 
     max_fk = float(getattr(args, "moco_max_mean_fk_loss", -1.0))
     mesh = getattr(args, "moco_mesh_interval", None)
-    min_frac = getattr(args, "moco_min_success_fraction", None)
-
     return MuscleActivationConfig(
         activation_method=resolve_activation_method(args),
         fps=float(fps if fps is not None else getattr(args, "fps", base.fps)),
@@ -447,16 +415,7 @@ def muscle_activation_config_from_args(
             "moco_max_pelvis_ty_range_m", "moco_max_pelvis_ty_range_m"
         ),
         use_degroote_muscles=not bool(getattr(args, "moco_no_degroote_muscles", False)),
-        min_success_fraction=float(
-            min_frac if min_frac is not None else base.min_success_fraction
-        ),
-        fail_below_min_success_fraction=bool(
-            getattr(args, "moco_fail_below_min_success_fraction", False)
-        ),
-        repair_failed_frames=not bool(getattr(args, "moco_no_repair", False)),
-        mark_repaired_frames_valid=not bool(
-            getattr(args, "moco_no_repaired_frames_valid", False)
-        ),
+        interpolate_activations=not bool(getattr(args, "moco_no_repair", False)),
         activation_smooth_hz=float(
             getattr(args, "activation_smooth_hz", None)
             if getattr(args, "activation_smooth_hz", None) is not None
@@ -559,13 +518,8 @@ class MuscleActivationResult:
 
     activations: np.ndarray
     muscle_names: Tuple[str, ...]
-    label_valid: np.ndarray
     metadata: Dict[str, Any] = field(default_factory=dict)
     forces: Optional[np.ndarray] = None
-
-    @property
-    def success_mask(self) -> np.ndarray:
-        return self.label_valid
 
     @property
     def num_frames(self) -> int:
@@ -586,40 +540,32 @@ def muscle_names(model: Any | None = None) -> Tuple[str, ...]:
     return tuple(muscles.get(i).getName() for i in range(muscles.getSize()))
 
 
-def repair_activation_frames(
+def interpolate_activation_frames(
     activations: np.ndarray,
-    label_valid: np.ndarray,
-    *,
-    mark_repaired_valid: bool = False,
-) -> tuple[np.ndarray, np.ndarray, Dict[str, int]]:
-    """Linearly interpolate activations at invalid timesteps.
-
-    Returns ``(activations, label_valid, meta)``. When ``mark_repaired_valid`` is
-    True, timesteps filled with finite values are marked valid in ``label_valid``.
-    """
+) -> tuple[np.ndarray, Dict[str, int]]:
+    """Linearly interpolate non-finite activation timesteps from finite neighbors."""
     act = np.asarray(activations, dtype=np.float32).copy()
-    valid = np.asarray(label_valid, dtype=bool).copy()
     t_len = int(act.shape[0])
     meta = {
         "repaired_frame_count": 0,
         "interpolated_frame_count": 0,
         "extrapolated_frame_count": 0,
-        "marked_valid_frame_count": 0,
     }
     if t_len == 0:
-        return act, valid.astype(np.float64), meta
+        return act, meta
 
-    need_repair = (~valid) | (~np.isfinite(act).all(axis=1))
+    good = np.isfinite(act).all(axis=1)
+    need_repair = ~good
     meta["repaired_frame_count"] = int(need_repair.sum())
     for t in np.where(need_repair)[0]:
         left: int | None = None
         for i in range(t - 1, -1, -1):
-            if valid[i] and np.isfinite(act[i]).all():
+            if good[i]:
                 left = i
                 break
         right: int | None = None
         for i in range(t + 1, t_len):
-            if valid[i] and np.isfinite(act[i]).all():
+            if good[i]:
                 right = i
                 break
         if left is not None and right is not None:
@@ -635,49 +581,35 @@ def repair_activation_frames(
         else:
             act[t] = 0.0
 
-        if mark_repaired_valid and np.isfinite(act[t]).all():
-            valid[t] = True
-            meta["marked_valid_frame_count"] += 1
-
-    return act, valid.astype(np.float64), meta
+    return act, meta
 
 
-def apply_activation_repair_and_smooth(
+def apply_activation_postprocess(
     activations: np.ndarray,
-    label_valid: np.ndarray,
     cfg: MuscleActivationConfig,
-) -> tuple[np.ndarray, np.ndarray, Dict[str, Any]]:
-    """Interpolate failed frames and optionally low-pass the activation trajectory."""
+) -> tuple[np.ndarray, Dict[str, Any]]:
+    """Interpolate non-finite frames and optionally low-pass the activation trajectory."""
     from nimble.smoothing import smooth_activation_trajectory
 
     meta: Dict[str, Any] = {}
     act = np.asarray(activations, dtype=np.float32)
-    valid = np.asarray(label_valid, dtype=np.float64)
 
-    if cfg.repair_failed_frames:
-        act, valid, repair_meta = repair_activation_frames(
-            act,
-            valid,
-            mark_repaired_valid=bool(cfg.mark_repaired_frames_valid),
-        )
-        meta.update(repair_meta)
-    else:
-        meta["repaired_frame_count"] = 0
+    if cfg.interpolate_activations or float(cfg.activation_smooth_hz) > 0.0:
+        if cfg.interpolate_activations:
+            act, repair_meta = interpolate_activation_frames(act)
+            meta.update(repair_meta)
+        else:
+            meta["repaired_frame_count"] = 0
 
-    if float(cfg.activation_smooth_hz) > 0.0:
-        act = smooth_activation_trajectory(
-            act,
-            fps=float(cfg.fps),
-            cutoff_hz=float(cfg.activation_smooth_hz),
-        )
-        meta["activation_smooth_hz"] = float(cfg.activation_smooth_hz)
+        if float(cfg.activation_smooth_hz) > 0.0:
+            act = smooth_activation_trajectory(
+                act,
+                fps=float(cfg.fps),
+                cutoff_hz=float(cfg.activation_smooth_hz),
+            )
+            meta["activation_smooth_hz"] = float(cfg.activation_smooth_hz)
 
-    if cfg.mark_repaired_frames_valid:
-        finite = np.isfinite(act).all(axis=1)
-        meta["mask_from_repaired_activations"] = True
-        valid = finite.astype(np.float64)
-
-    return act, valid, meta
+    return act, meta
 
 
 def _storage_to_array(storage: Any) -> Tuple[np.ndarray, List[str]]:
@@ -720,18 +652,8 @@ def _finalize_activation_result(
 ) -> MuscleActivationResult:
     if not np.isfinite(result.activations).all():
         raise RuntimeError(
-            f"{method_label} produced non-finite muscle activations after repair; "
-            f"label_valid_fraction={result.metadata.get('label_valid_fraction', 0.0)}"
-        )
-    frac = float(result.metadata.get("label_valid_fraction", 0.0))
-    result.metadata["below_min_success_fraction"] = frac < float(cfg.min_success_fraction)
-    if cfg.fail_below_min_success_fraction and frac < float(cfg.min_success_fraction):
-        raise RuntimeError(
-            f"{method_label} label_valid_fraction below threshold: "
-            f"{frac:.4f} < {cfg.min_success_fraction} "
-            f"(repaired={result.metadata.get('repaired_frame_count', 0)} frames). "
-            "Use --moco_fail_below_min_success_fraction for strict rejection, or "
-            "--moco_no_repaired_frames_valid to exclude bad frames in the mask."
+            f"{method_label} produced non-finite muscle activations after postprocess; "
+            f"repaired={result.metadata.get('repaired_frame_count', 0)} frames"
         )
     return result
 

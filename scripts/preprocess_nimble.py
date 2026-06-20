@@ -9,6 +9,7 @@ Run from the SINDyffuse repo root, e.g.:
   python scripts/preprocess_nimble.py --moco_parallel_motions 4 --num_workers 64
   python scripts/preprocess_nimble.py --skip_muscle_activation --num_workers 8   # IK-only, 8 parallel
   python scripts/preprocess_nimble.py --max_motions 1   # smoke test
+  python scripts/preprocess_nimble.py --num_shards 4 --shard_index 0 --skip_normalization  # K8s shard (local test)
 
 Defaults: ``datasets/HumanML3D`` for input and output; writes ``nimble_b3d/*.b3d``
 and q-space Mean.npy / Std.npy under that subfolder. The bundled Rajagopal 2015
@@ -47,7 +48,12 @@ warnings.filterwarnings(
 # ``nimble.export`` is imported lazily inside workers to avoid eagerly loading
 # the nimble skeleton in the parent process. ``compute_nimble_normalization_stats``
 # only touches written B3D files (post-processing) so it's safe to import here.
-from common.cpu import configure_compute_threads, detect_usable_cpus, resolve_preprocess_parallelism
+from common.cpu import (
+    configure_compute_threads,
+    detect_usable_cpus,
+    resolve_k8s_shard,
+    resolve_preprocess_parallelism,
+)
 from common.paths import NIMBLE_B3D_SUBDIR, default_humanml3d_root, nimble_b3d_dir
 from common.run_logging import (
     DualTqdm,
@@ -60,7 +66,7 @@ from common.run_logging import (
 )
 from datasets.hml3d_joints import default_joints_root, load_hml3d_joint_positions
 from datasets.nimble_dataset import compute_nimble_normalization_stats
-from datasets.splits import all_motion_ids
+from datasets.splits import all_motion_ids, shard_motion_ids
 from nimble.muscle_activation import (
     add_muscle_activation_cli_args,
     configure_opensim_logging,
@@ -270,9 +276,9 @@ def _log_motion_verbose(row: dict, logger: RunLogger) -> None:
     moco_obj = _moco_activation_objective(ik)
     if moco_obj is not None:
         logger.verbose(f"{mid}: muscle_activation_objective {moco_obj:.6f}")
-    label_frac = ik.get("muscle_activation_label_valid_fraction")
-    if label_frac is not None:
-        logger.verbose(f"{mid}: label_valid_fraction {float(label_frac):.4f}")
+    repaired = ik.get("muscle_activation_repaired_frames")
+    if repaired is not None:
+        logger.verbose(f"{mid}: muscle_activation_repaired_frames {int(repaired)}")
     for key in (
         "moco_solver_success",
         "moco_solver_status",
@@ -311,9 +317,9 @@ def _print_motion_progress(row: dict, *, logger: RunLogger) -> None:
             f"{mid} IK failed: success {success_count}/"
             f"{int(ik.get('total_frames', 0))}"
         )
-    label_frac = ik.get("muscle_activation_label_valid_fraction")
-    if label_frac is not None and float(label_frac) < 0.5:
-        logger.warn(f"{mid} muscle activation low valid fraction: {float(label_frac):.4f}")
+    repaired = ik.get("muscle_activation_repaired_frames")
+    if repaired is not None and float(repaired) > 0.0:
+        logger.warn(f"{mid} muscle activation interpolated {int(repaired)} frames")
 
 
 def _motion_loss(row: dict) -> float | None:
@@ -338,6 +344,12 @@ def _symlink_metadata(hml_root: Path, out_root: Path) -> None:
                 shutil.copy2(src, dst)
 
 
+def _manifest_path(out_root: Path, shard_index: int, num_shards: int) -> Path:
+    if int(num_shards) > 1:
+        return out_root / f"preprocess_manifest.{int(shard_index):04d}.jsonl"
+    return out_root / "preprocess_manifest.jsonl"
+
+
 def run_preprocess(args: argparse.Namespace, logger: RunLogger | None = None) -> None:
     """Run preprocessing from a populated argparse namespace."""
     log = logger or null_logger()
@@ -355,6 +367,18 @@ def run_preprocess(args: argparse.Namespace, logger: RunLogger | None = None) ->
     max_motions = int(getattr(args, "max_motions", 0) or 0)
     if max_motions > 0:
         ids = ids[:max_motions]
+
+    cli_shards = getattr(args, "num_shards", None)
+    cli_shard_index = getattr(args, "shard_index", None)
+    shard_index, num_shards = resolve_k8s_shard(
+        num_shards=int(cli_shards) if cli_shards is not None else None,
+        shard_index=int(cli_shard_index) if cli_shard_index is not None else None,
+    )
+    if num_shards > 1:
+        ids = shard_motion_ids(ids, shard_index, num_shards)
+        log.progress(
+            f"Shard {shard_index + 1}/{num_shards}: {len(ids)} motion(s) assigned"
+        )
 
     _symlink_metadata(hml_root, out_root)
 
@@ -445,10 +469,16 @@ def run_preprocess(args: argparse.Namespace, logger: RunLogger | None = None) ->
         activation_method=activation_method,
         skip_muscle_activation=skip_muscle_activation,
         moco_parallel_motions=moco_parallel,
+        num_shards=num_shards,
     )
     if activation_method != "none":
         configure_compute_threads(moco_threads)
-    if activation_method == "none":
+    if num_shards > 1:
+        log.verbose(
+            f"Distributed preprocess shard {shard_index}/{num_shards}: "
+            f"1 in-pod worker, {moco_threads} OpenSim thread(s)"
+        )
+    elif activation_method == "none":
         log.verbose(
             f"IK-only preprocess: {motion_workers} parallel motion worker(s) "
             f"(usable_cpus={detect_usable_cpus()}, activation_method=none)"
@@ -470,7 +500,8 @@ def run_preprocess(args: argparse.Namespace, logger: RunLogger | None = None) ->
             f"(usable_cpus={detect_usable_cpus()})"
         )
 
-    manifest_path = out_root / "preprocess_manifest.jsonl"
+    manifest_path = _manifest_path(out_root, shard_index, num_shards)
+    skip_normalization = bool(getattr(args, "skip_normalization", False)) or num_shards > 1
     pending = list(work)
     with manifest_path.open("w", encoding="utf-8") as mf:
         while pending:
@@ -564,13 +595,18 @@ def run_preprocess(args: argparse.Namespace, logger: RunLogger | None = None) ->
         "moco_parallel_motions": (
             moco_parallel if activation_method == "moco_track" else None
         ),
+        "num_shards": num_shards if num_shards > 1 else None,
+        "shard_index": shard_index if num_shards > 1 else None,
         "manifest_path": str(manifest_path),
         "use_all_frames_per_motion": True,
     }
     run_log_file = getattr(args, "_run_log_file", None)
     if run_log_file:
         meta["run_log_file"] = str(run_log_file)
-    (out_root / "preprocess_meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    if num_shards <= 1:
+        (out_root / "preprocess_meta.json").write_text(
+            json.dumps(meta, indent=2), encoding="utf-8"
+        )
 
     log.progress(f"Done: {ok} ok, {err} failed, {skip} skipped")
     log.verbose(f"B3D cache: {b3d_cache}")
@@ -588,7 +624,8 @@ def run_preprocess(args: argparse.Namespace, logger: RunLogger | None = None) ->
     if ok == 0 and skip == 0:
         sys.exit(1)
 
-    compute_nimble_normalization_stats(out_root)
+    if not skip_normalization:
+        compute_nimble_normalization_stats(out_root)
 
     from nimble.physics import clear_cache
 
@@ -657,9 +694,32 @@ def main() -> None:
         default="",
         help="Directory with pre-normalization joints/ (default: <hml_root>/joints or HUMANML3D_JOINTS_ROOT)",
     )
+    parser.add_argument(
+        "--num_shards",
+        type=int,
+        default=1,
+        help="Split motions across N shards for distributed K8s runs (default 1 = no sharding)",
+    )
+    parser.add_argument(
+        "--shard_index",
+        type=int,
+        default=-1,
+        help="This shard index in [0, num_shards); default auto from JOB_COMPLETION_INDEX when sharded",
+    )
+    parser.add_argument(
+        "--skip_normalization",
+        action="store_true",
+        help="Skip Mean.npy/Std.npy (automatic when num_shards > 1; run compute_normalization.py after)",
+    )
     add_muscle_activation_cli_args(parser)
     add_run_log_cli_args(parser)
     args = parser.parse_args()
+
+    shard_idx = int(args.shard_index)
+    if args.num_shards > 1 and shard_idx < 0:
+        args.shard_index = None
+    elif shard_idx >= 0:
+        args.shard_index = shard_idx
 
     if args.no_run_log:
         run_preprocess(args, null_logger())

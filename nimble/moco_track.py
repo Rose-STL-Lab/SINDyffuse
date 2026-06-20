@@ -20,7 +20,7 @@ from common.working_directory import working_directory
 from nimble.muscle_activation import (
     MuscleActivationConfig,
     MuscleActivationResult,
-    apply_activation_repair_and_smooth,
+    apply_activation_postprocess,
     _storage_to_array,
     muscle_names,
     opensim_quiet,
@@ -535,7 +535,7 @@ def run_moco_track(
             model_path=model_path,
             track_cfg=track_cfg,
         )
-        activations, solve_ok, solve_meta, _, reserve_by_time = _solve_moco_track(
+        activations, solve_ok, solve_meta, _, _reserve_by_time = _solve_moco_track(
             arr,
             cfg=cfg,
             solve_dir=solve_dir,
@@ -554,29 +554,11 @@ def run_moco_track(
             f"Moco muscle count {activations.shape[1]} != expected {len(names_ref)}"
         )
 
-    reserve_thresh = float(cfg.moco_max_reserve_fraction)
-    reserve_fail = bool(cfg.moco_fail_on_high_reserve)
-    solver_ok = bool(solve_meta.get("solver_success", solve_ok))
-    label_valid = np.zeros(t_len, dtype=bool)
-    for t in range(t_len):
-        reserve_ok = (
-            not reserve_fail
-            or float(reserve_by_time[t]) <= reserve_thresh
-        )
-        if solver_ok and reserve_ok and np.isfinite(activations[t]).all():
-            label_valid[t] = True
-
     repair_meta: Dict[str, Any] = {}
-    if cfg.repair_failed_frames or float(cfg.activation_smooth_hz) > 0.0:
-        activations, label_valid_f, repair_meta = apply_activation_repair_and_smooth(
-            activations,
-            label_valid.astype(np.float64),
-            cfg,
-        )
-        label_valid = label_valid_f.astype(bool)
+    if cfg.interpolate_activations or float(cfg.activation_smooth_hz) > 0.0:
+        activations, repair_meta = apply_activation_postprocess(activations, cfg)
     repaired_frame_count = int(repair_meta.get("repaired_frame_count", 0))
 
-    label_valid_fraction = float(label_valid.mean())
     obj = solve_meta.get("objective")
     moco_objective = float(obj) if obj is not None and np.isfinite(float(obj)) else float("nan")
 
@@ -593,9 +575,6 @@ def run_moco_track(
         "fps": float(cfg.fps),
         "mesh_interval": mesh_interval,
         "moco_solver_success": bool(solve_meta.get("solver_success", solve_ok)),
-        "moco_success_fraction": float(label_valid_fraction),
-        "label_valid_fraction": label_valid_fraction,
-        "success_fraction": label_valid_fraction,
         "moco_objective": moco_objective,
         "repaired_frame_count": repaired_frame_count,
         "moco_contact": True,
@@ -630,6 +609,5 @@ def run_moco_track(
     return MuscleActivationResult(
         activations=activations,
         muscle_names=tuple(names_ref),
-        label_valid=label_valid,
         metadata=meta,
     )

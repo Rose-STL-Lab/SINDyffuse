@@ -9,11 +9,8 @@ import numpy as np
 
 from nimble.channels import BIOMECH_COMPONENT_KEYS
 from nimble.muscle_b3d import (
-    MUSCLE_ACTIVATION_MASK_ROWS,
     MUSCLE_ACTIVATION_ROWS,
-    pack_muscle_activation_mask,
     pack_muscle_activations,
-    unpack_muscle_activation_mask,
     unpack_muscle_activations,
 )
 from nimble.muscle_activation import muscle_names, opensim_quiet
@@ -23,13 +20,11 @@ from sindy.features import features_from_q
 GUIDANCE_FEATURES = "guidance_features"
 SINDY_FEATURES = "sindy_features"
 MUSCLE_ACTIVATIONS = "muscle_activations"
-MUSCLE_ACTIVATION_MASK = "muscle_activation_mask"
 
 B3D_CUSTOM_VALUE_NAMES: Tuple[str, ...] = (
     GUIDANCE_FEATURES,
     SINDY_FEATURES,
     MUSCLE_ACTIVATIONS,
-    MUSCLE_ACTIVATION_MASK,
 )
 
 GUIDANCE_FEATURE_ROWS = len(BIOMECH_COMPONENT_KEYS)
@@ -151,9 +146,5 @@ def metadata_custom_values_block() -> dict:
         MUSCLE_ACTIVATIONS: {
             "rows": MUSCLE_ACTIVATION_ROWS,
             "muscle_names": list(_muscle_names_quiet()),
-        },
-        MUSCLE_ACTIVATION_MASK: {
-            "rows": MUSCLE_ACTIVATION_MASK_ROWS,
-            "description": "1.0 = MocoTrack succeeded at frame; 0.0 = failed/interpolated",
         },
     }

@@ -90,8 +90,6 @@ def pelvis_ty_range_m(q: np.ndarray) -> float:
 def summarize_moco_metadata(metadata: Dict[str, Any]) -> Dict[str, float | str | int]:
     """Flatten Moco run metadata for preprocess manifest / logs."""
     out: Dict[str, float | str | int] = {
-        "moco_success_fraction": float(metadata.get("moco_success_fraction", 0.0)),
-        "label_valid_fraction": float(metadata.get("label_valid_fraction", 0.0)),
         "repaired_frame_count": int(metadata.get("repaired_frame_count", 0)),
     }
     obj = metadata.get("moco_objective")

@@ -31,6 +31,17 @@ def all_motion_ids(root: Path) -> list[str]:
     return sorted(set(ids))
 
 
+def shard_motion_ids(ids: list[str], shard_index: int, num_shards: int) -> list[str]:
+    """Strided subset for distributed preprocess (``ids[shard_index::num_shards]``)."""
+    n = int(num_shards)
+    if n <= 1:
+        return ids
+    i = int(shard_index)
+    if i < 0 or i >= n:
+        raise ValueError(f"shard_index must be in [0, {n}), got {i}")
+    return ids[i::n]
+
+
 def kinematics_pass_index(subj: nimble.biomechanics.SubjectOnDisk, trial: int) -> int:
     n = int(subj.getTrialNumProcessingPasses(trial))
     for i in range(n):

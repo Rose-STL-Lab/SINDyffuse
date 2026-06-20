@@ -7,24 +7,30 @@ SINDyffuse runs locally via `scripts/*.py` and on Kubernetes via Job manifests i
 ```
 deploy/
   pvc.yaml                    # cluster PVC (apply once)
+  scripts/
+    run-preprocess-nimble.sh  # preprocess worker + normalization pipeline
   components/
     cluster-config/           # edit image + PVC here (applies to all jobs/dev pod)
   jobs/
-    preprocess-static-optimization/
+    preprocess-nimble/
+      none/                   # IK-only (--activation_method none)
+      static-optimization/
+      moco-track/
     benchmark-moco-parallel/
     train-sindy/
-    train-diffusion-none/
-    train-diffusion-sindy/
-    train-diffusion-nimble/
-  dev-pod/                  # long-running interactive pod
+    train-diffusion/
+      none/
+      nimble/
+      sindy/
+  dev-pod/                    # long-running interactive pod
 ```
 
 | Local | Kubernetes |
 |-------|------------|
-| `python scripts/preprocess_nimble.py ...` | `kubectl apply -k deploy/jobs/preprocess-static-optimization` |
+| `python scripts/preprocess_nimble.py ...` | `./deploy/scripts/run-preprocess-nimble.sh [none\|static-optimization\|moco-track]` |
 | `python scripts/benchmark_moco_parallel.py ...` | `kubectl apply -k deploy/jobs/benchmark-moco-parallel` |
 | `python scripts/train_sindy.py ...` | `kubectl apply -k deploy/jobs/train-sindy` |
-| `python scripts/train_diffusion.py ...` | `kubectl apply -k deploy/jobs/train-diffusion-{none,sindy,nimble}` |
+| `python scripts/train_diffusion.py ...` | `kubectl apply -k deploy/jobs/train-diffusion/{none,nimble,sindy}` |
 
 ## Container image (GHCR)
 
@@ -123,27 +129,33 @@ The PVC should contain:
 ### 4. Apply a job
 
 ```bash
-# Preprocess (static optimization, single pod, parallel workers)
-kubectl apply -k deploy/jobs/preprocess-static-optimization
-kubectl get pods -l job-name=sindyffuse-preprocess-nimble -w
+# Preprocess — pick activation method (default: static-optimization)
+./deploy/scripts/run-preprocess-nimble.sh none
+./deploy/scripts/run-preprocess-nimble.sh static-optimization
+./deploy/scripts/run-preprocess-nimble.sh moco-track
+
+kubectl get pods -l activation-method=static-optimization -w
 
 # Train SINDy (2× GPU)
 kubectl apply -k deploy/jobs/train-sindy
 
-# Train diffusion (pick guidance mode)
-kubectl apply -k deploy/jobs/train-diffusion-nimble
+# Train diffusion — pick guidance mode
+kubectl apply -k deploy/jobs/train-diffusion/none
+kubectl apply -k deploy/jobs/train-diffusion/nimble
+kubectl apply -k deploy/jobs/train-diffusion/sindy
 ```
 
-Preview rendered manifests:
+Preview a rendered preprocess worker manifest:
 
 ```bash
-kubectl kustomize deploy/jobs/preprocess-static-optimization
+kubectl kustomize deploy/jobs/preprocess-nimble/static-optimization
 ```
 
-Delete a job before re-running:
+Delete jobs before a manual re-run (example for static-optimization):
 
 ```bash
-kubectl delete job sindyffuse-preprocess-nimble --ignore-not-found
+kubectl delete job sindyffuse-preprocess-static-optimization \
+  sindyffuse-compute-normalization-static-optimization --ignore-not-found
 ```
 
 ## Dev pod
@@ -174,26 +186,31 @@ Default resources: 8–32 CPU, 32–64Gi memory. Edit `deploy/dev-pod/pod.yaml` 
 
 All manifests assume the PVC is mounted at `/mnt` with the repo at `/mnt/SINDyffuse` (`workingDir` on every pod/job). HumanML3D lives at `/mnt/SINDyffuse/datasets/HumanML3D`.
 
-Only **preprocess** exposes optional env overrides: `MAX_MOTIONS`, `SKIP_EXISTING`, `PREPROCESS_NUM_WORKERS`.
+Only **preprocess** is orchestrated via [`deploy/scripts/run-preprocess-nimble.sh`](scripts/run-preprocess-nimble.sh). Optional env: `PREPROCESS_NUM_SHARDS`, `MAX_MOTIONS`, `SKIP_EXISTING` (set in the job yaml).
+
+Each preprocess variant uses two Jobs: an Indexed worker Job (`parallelism=completions=64`) and a normalization Job (`compute_normalization.py`) that starts only after workers complete.
 
 ## Resource profiles
 
 | Job | CPUs | Memory | GPUs |
 |-----|------|--------|------|
 | dev-pod | 8–32 | 32–64Gi | — (add in pod.yaml if needed) |
-| preprocess-static-optimization | 64 | 64Gi | — |
+| preprocess-nimble/none (workers) | 64 × 1 | 64 × 2Gi | — |
+| preprocess-nimble/static-optimization (workers) | 64 × 1 | 64 × 2Gi | — |
+| preprocess-nimble/moco-track (workers) | 64 × 1 | 64 × 4Gi | — |
+| preprocess-nimble/*/normalization | 1 | 2Gi | — |
 | benchmark-moco-parallel | 64 | 64Gi | — |
 | train-sindy | 16 | 64Gi | 2 |
-| train-diffusion-* | 16 | 64Gi | 2 |
+| train-diffusion/* | 16 | 64Gi | 2 |
 
 Edit `deploy/jobs/<name>/job.yaml` to match your nodes.
 
 ## Pipeline order
 
-1. `preprocess-static-optimization` (or run `scripts/preprocess_nimble.py` locally)
+1. `preprocess-nimble/{none,static-optimization,moco-track}` via `run-preprocess-nimble.sh` (or `scripts/preprocess_nimble.py` locally)
 2. `train-sindy`
 3. `train-surrogate` — local only for now (`scripts/train_surrogate.py`)
-4. `train-diffusion-{none,sindy,nimble}`
+4. `train-diffusion/{none,nimble,sindy}`
 
 ## Local development
 

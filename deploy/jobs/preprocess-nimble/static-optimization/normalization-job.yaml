@@ -1,30 +1,28 @@
-# Apply: kubectl apply -k deploy/jobs/preprocess-static-optimization
+# Normalization phase: ./deploy/scripts/run-preprocess-nimble.sh static-optimization
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: sindyffuse-preprocess-nimble
+  name: sindyffuse-compute-normalization-static-optimization
   labels:
-    app: sindyffuse-preprocess-nimble
+    app: sindyffuse-compute-normalization-static-optimization
+    activation-method: static-optimization
 spec:
   backoffLimit: 0
   template:
     metadata:
       labels:
-        app: sindyffuse-preprocess-nimble
+        app: sindyffuse-compute-normalization-static-optimization
+        activation-method: static-optimization
     spec:
       restartPolicy: Never
       terminationGracePeriodSeconds: 300
       containers:
-      - name: sindyffuse-preprocess-nimble
+      - name: sindyffuse-compute-normalization-static-optimization
         image: sindyffuse:latest
         imagePullPolicy: IfNotPresent
         workingDir: /mnt/SINDyffuse
         env:
-        - name: MAX_MOTIONS
-          value: "0"
-        - name: SKIP_EXISTING
-          value: "1"
-        - name: PREPROCESS_NUM_WORKERS
+        - name: PREPROCESS_NUM_SHARDS
           value: "64"
         command: ["/bin/bash", "-c"]
         args:
@@ -35,27 +33,22 @@ spec:
           export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
           export PYTHONPATH=/mnt/SINDyffuse
           HML=/mnt/SINDyffuse/datasets/HumanML3D
-          ARGS=(
-            scripts/preprocess_nimble.py
-            --hml_root "${HML}"
-            --out_root "${HML}"
+          NUM_SHARDS="${PREPROCESS_NUM_SHARDS:-64}"
+          python scripts/compute_normalization.py \
+            --out_root "${HML}" \
+            --num_shards "${NUM_SHARDS}" \
             --log_dir /mnt/SINDyffuse/logs
-            --activation_method static_optimization
-            --num_workers "${PREPROCESS_NUM_WORKERS:-64}"
-            --opensim_log_level Off
-          )
-          [ "${MAX_MOTIONS:-0}" != "0" ] && ARGS+=(--max_motions "${MAX_MOTIONS}")
-          [ "${SKIP_EXISTING:-1}" = "1" ] && ARGS+=(--skip_existing)
-          python "${ARGS[@]}"
-          test -d "${HML}/nimble_b3d"
           test -f "${HML}/preprocess_manifest.jsonl"
+          test -f "${HML}/preprocess_meta.json"
+          test -f "${HML}/nimble_b3d/Mean.npy"
+          test -f "${HML}/nimble_b3d/Std.npy"
         resources:
           limits:
-            memory: 64Gi
-            cpu: "64"
+            memory: 2Gi
+            cpu: "1"
           requests:
-            memory: 64Gi
-            cpu: "64"
+            memory: 2Gi
+            cpu: "1"
         volumeMounts:
         - name: data
           mountPath: /mnt

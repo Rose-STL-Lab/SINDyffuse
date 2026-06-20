@@ -61,7 +61,6 @@ def _fast_benchmark_cfg(base: MuscleActivationConfig) -> MuscleActivationConfig:
         moco_max_iterations=100,
         moco_convergence_tolerance=0.02,
         moco_min_frames=10,
-        fail_below_min_success_fraction=False,
         opensim_log_level="Off",
     )
 
@@ -128,7 +127,7 @@ def _run_one_moco(item: tuple[str, bytes, str, list[int]]) -> dict:
             "id": sid,
             "status": "ok",
             "seconds": sec,
-            "label_valid_fraction": float(result.metadata.get("label_valid_fraction", 0.0)),
+            "repaired_frame_count": int(result.metadata.get("repaired_frame_count", 0)),
             "solver_success": bool(result.metadata.get("moco_solver_success", False)),
         }
     except Exception as exc:
@@ -238,7 +237,7 @@ def run_benchmark(args: argparse.Namespace, logger: RunLogger | None = None) -> 
             if st == "ok":
                 log.progress(
                     f"  {row['id']}: {sec:.1f}s ok "
-                    f"valid={row.get('label_valid_fraction', 0.0):.2f} "
+                    f"repaired={row.get('repaired_frame_count', 0)} "
                     f"solver_ok={row.get('solver_success')}"
                 )
             else:

@@ -15,7 +15,6 @@ from nimble.b3d_schema import (
     B3D_CUSTOM_VALUE_NAMES,
     MUSCLE_ACTIVATION_ROWS,
     pack_guidance_features,
-    pack_muscle_activation_mask,
     pack_muscle_activations,
     pack_sindy_features,
 )
@@ -214,7 +213,6 @@ def export_motion_to_b3d(
         ik_stats["muscle_activation_skipped"] = 1.0
         ik_stats["muscle_activation_computed"] = 0.0
         muscle_act = np.zeros((num_frames, MUSCLE_ACTIVATION_ROWS), dtype=np.float64)
-        muscle_mask = np.zeros(num_frames, dtype=np.float64)
     else:
         ik_stats["pelvis_ty_range_m"] = pelvis_ty_range_m(q_traj)
         gate_ok, gate_reason = evaluate_activation_gate(
@@ -242,7 +240,7 @@ def export_motion_to_b3d(
         append_verbose_log(
             f"{trial_name}: {method} done "
             f"seconds={ik_stats['muscle_activation_seconds']:.1f} "
-            f"label_valid_fraction={act_result.metadata.get('label_valid_fraction', 0.0):.4f} "
+            f"repaired_frames={act_result.metadata.get('repaired_frame_count', 0)} "
             f"objective={obj_s} "
             f"solver_success={act_result.metadata.get('moco_solver_success')}"
         )
@@ -257,9 +255,6 @@ def export_motion_to_b3d(
                     f"iterations={iters} status={status} mesh_interval={mesh}"
                 )
         ik_stats["muscle_activation_computed"] = 1.0
-        label_frac = float(act_result.metadata.get("label_valid_fraction", 1.0))
-        ik_stats["muscle_activation_label_valid_fraction"] = label_frac
-        ik_stats["muscle_activation_success_fraction"] = label_frac
         ik_stats["muscle_activation_repaired_frames"] = float(
             act_result.metadata.get("repaired_frame_count", 0)
         )
@@ -270,7 +265,6 @@ def export_motion_to_b3d(
             if isinstance(val, (int, float)):
                 ik_stats[f"moco_{key}"] = float(val)
         muscle_act = act_result.activations
-        muscle_mask = act_result.label_valid
 
     b3d_subject.setCustomValueNames(list(B3D_CUSTOM_VALUE_NAMES))
     b3d_trial.setCustomValues(
@@ -278,7 +272,6 @@ def export_motion_to_b3d(
             pack_guidance_features(bio),
             pack_sindy_features(u, c),
             pack_muscle_activations(muscle_act),
-            pack_muscle_activation_mask(muscle_mask),
         ]
     )
     ik_stats["guidance_features_computed"] = 1.0

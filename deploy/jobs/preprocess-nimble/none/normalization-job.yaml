@@ -1,0 +1,58 @@
+# Normalization phase: ./deploy/scripts/run-preprocess-nimble.sh none
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sindyffuse-compute-normalization-none
+  labels:
+    app: sindyffuse-compute-normalization-none
+    activation-method: none
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: sindyffuse-compute-normalization-none
+        activation-method: none
+    spec:
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 300
+      containers:
+      - name: sindyffuse-compute-normalization-none
+        image: sindyffuse:latest
+        imagePullPolicy: IfNotPresent
+        workingDir: /mnt/SINDyffuse
+        env:
+        - name: PREPROCESS_NUM_SHARDS
+          value: "64"
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          set -eo pipefail
+          eval "$(conda shell.bash hook)"
+          conda activate sindyffuse
+          export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
+          export PYTHONPATH=/mnt/SINDyffuse
+          HML=/mnt/SINDyffuse/datasets/HumanML3D
+          NUM_SHARDS="${PREPROCESS_NUM_SHARDS:-64}"
+          python scripts/compute_normalization.py \
+            --out_root "${HML}" \
+            --num_shards "${NUM_SHARDS}" \
+            --log_dir /mnt/SINDyffuse/logs
+          test -f "${HML}/preprocess_manifest.jsonl"
+          test -f "${HML}/preprocess_meta.json"
+          test -f "${HML}/nimble_b3d/Mean.npy"
+          test -f "${HML}/nimble_b3d/Std.npy"
+        resources:
+          limits:
+            memory: 2Gi
+            cpu: "1"
+          requests:
+            memory: 2Gi
+            cpu: "1"
+        volumeMounts:
+        - name: data
+          mountPath: /mnt
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: biomech-ai

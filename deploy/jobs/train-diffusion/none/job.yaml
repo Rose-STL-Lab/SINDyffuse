@@ -1,16 +1,18 @@
-# Apply: kubectl apply -k deploy/jobs/train-diffusion-none
+# Apply: kubectl apply -k deploy/jobs/train-diffusion/none
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: sindyffuse-diffusion-train-none
   labels:
     app: sindyffuse-diffusion-train-none
+    guidance: none
 spec:
   backoffLimit: 0
   template:
     metadata:
       labels:
         app: sindyffuse-diffusion-train-none
+        guidance: none
     spec:
       restartPolicy: Never
       containers:

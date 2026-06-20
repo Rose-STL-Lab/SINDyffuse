@@ -61,7 +61,7 @@ Three muscle-activation modes via `--activation_method`:
 
 By default, Moco runs one motion at a time and `--num_workers` sets Ipopt threads (`0` = auto). Static optimization uses parallel motion workers like IK-only. Optional env `MOCO_NUM_THREADS` overrides auto-detection.
 
-Each `.b3d` stores generalized coordinates plus custom channels: `guidance_features`, `sindy_features`, `muscle_activations` `[80, T]`, and `muscle_activation_mask` `[1, T]` (1.0 = valid label at that frame; 0.0 = failed frame).
+Each `.b3d` stores generalized coordinates plus custom channels: `guidance_features`, `sindy_features`, and `muscle_activations` `[80, T]`. Non-finite activation frames are interpolated during preprocess before optional temporal smoothing.
 
 **MocoTrack** (`moco_track`) — one-pass trajectory optimization with foot contact (20 fps tuned): 0.05 s mesh (1 node/frame), **6 Hz reference + IK low-pass** (OpenCap), **uniform tracking weight 1** on all coordinates except `pelvis_ty` (contact-driven), adaptive refine to 0.02 s, tol 0.01, implicit-muscle auxiliary minimization.
 
@@ -69,24 +69,34 @@ Each `.b3d` stores generalized coordinates plus custom channels: `guidance_featu
 
 OpenSim console output is **hidden by default** (`--opensim_log_level Off`).
 
-Useful Moco flags: `--moco_reference_lowpass_hz`, `--moco_states_speed_tracking_weight`, `--moco_aux_coord_tracking_weight`, `--moco_no_reference_lowpass`, `--moco_no_apply_tracked_guess`, `--moco_mesh_interval`, `--moco_states_tracking_weight`, `--moco_max_reserve_fraction`, `--moco_allow_high_reserve`, `--moco_reserve_scale`, `--moco_min_success_fraction` (default 0.5), `--moco_allow_low_valid`, `--moco_no_repair`, `--moco_no_adaptive_mesh`, `--moco_min_frames`, `--moco_min_ik_success_fraction`, `--moco_max_pelvis_ty_range_m`, `--opensim_log_level`.
+Useful Moco flags: `--moco_reference_lowpass_hz`, `--moco_states_speed_tracking_weight`, `--moco_aux_coord_tracking_weight`, `--moco_no_reference_lowpass`, `--moco_no_apply_tracked_guess`, `--moco_mesh_interval`, `--moco_states_tracking_weight`, `--moco_max_reserve_fraction`, `--moco_allow_high_reserve`, `--moco_reserve_scale`, `--moco_no_repair`, `--moco_no_adaptive_mesh`, `--moco_min_frames`, `--moco_min_ik_success_fraction`, `--moco_max_pelvis_ty_range_m`, `--opensim_log_level`.
 
-**Kubernetes (static optimization, single pod with parallel workers):**
+**Kubernetes (64 worker pods + normalization pod):**
 
 ```bash
 # Edit deploy/components/cluster-config/ for your image and PVC first — see deploy/README.md
-kubectl apply -k deploy/jobs/preprocess-static-optimization
-kubectl get pods -l job-name=sindyffuse-preprocess-nimble -w
+./deploy/scripts/run-preprocess-nimble.sh static-optimization
+./deploy/scripts/run-preprocess-nimble.sh none              # IK-only
+./deploy/scripts/run-preprocess-nimble.sh moco-track
 ```
 
-Local equivalent:
+Local runs are unchanged (no sharding by default):
 
 ```bash
 python scripts/preprocess_nimble.py --max_motions 1 \
-  --opensim_log_level Warn --moco_allow_low_valid
+  --opensim_log_level Warn
 ```
 
-After upgrading the B3D schema (e.g. adding `muscle_activation_mask`), **re-run preprocess** without `--skip_existing` on old caches.
+Distributed local test (optional):
+
+```bash
+python scripts/preprocess_nimble.py --max_motions 8 --num_shards 4 --shard_index 0 \
+  --skip_normalization --activation_method none
+# repeat shard_index 1..3, then:
+python scripts/compute_normalization.py --num_shards 4
+```
+
+After upgrading the B3D schema (e.g. adding `muscle_activations`), **re-run preprocess** without `--skip_existing` on old caches.
 
 ### 2. Train SINDy
 
@@ -102,7 +112,7 @@ Config: `configs/train_sindy.json`
 python scripts/train_surrogate.py --config configs/train_surrogate.json --output results/activation_surrogate
 ```
 
-Config: `configs/train_surrogate.json`. Training uses **masked L1** on frames where `muscle_activation_mask == 1` (see `min_window_valid_fraction`, `require_activation_mask` in the config). Re-preprocess with the current pipeline before setting `require_activation_mask: 1`.
+Config: `configs/train_surrogate.json`. Training uses L1 on all frames in each window (plus optional temporal regularization via `lambda_temporal`).
 
 ### 4. Train diffusion
 
@@ -123,9 +133,9 @@ python scripts/generate_motion.py --prompt "a person walks forward"
 Job manifests live under `deploy/`. Configure your image and PVC in `deploy/components/cluster-config/`, then apply individual jobs:
 
 ```bash
-kubectl apply -k deploy/jobs/preprocess-static-optimization
+./deploy/scripts/run-preprocess-nimble.sh static-optimization
 kubectl apply -k deploy/jobs/train-sindy
-kubectl apply -k deploy/jobs/train-diffusion-nimble
+kubectl apply -k deploy/jobs/train-diffusion/nimble
 
 # Interactive dev shell on the cluster
 kubectl apply -k deploy/dev-pod
@@ -141,6 +151,7 @@ See [deploy/README.md](deploy/README.md) for image build, storage setup, and the
 | Path | Role |
 |------|------|
 | `scripts/preprocess_nimble.py` | HumanML3D → Nimble B3D cache |
+| `scripts/compute_normalization.py` | Merge shard manifests; compute `Mean.npy` / `Std.npy` |
 | `scripts/train_sindy.py` | Train SINDy text→Xi model |
 | `scripts/train_surrogate.py` | Train q→activation surrogate |
 | `scripts/train_diffusion.py` | Train text-conditioned diffusion |
@@ -172,8 +183,8 @@ RUN_MOCO_SMOKE=1 PYTHONPATH=. python3 -m unittest tests.test_muscle_activation -
 ## Troubleshooting
 
 ```bash
-python scripts/preprocess_nimble.py --max_motions 1 --opensim_log_level Warn --moco_allow_low_valid
+python scripts/preprocess_nimble.py --max_motions 1 --opensim_log_level Warn
 ```
 
-- Re-run `scripts/preprocess_nimble.py` after upgrading B3D schema (e.g. adding `muscle_activations` or `muscle_activation_mask`).  
+- Re-run `scripts/preprocess_nimble.py` after upgrading B3D schema (e.g. adding `muscle_activations`).  
 - If Ctrl+C does not stop Moco: `pkill -9 -f "python scripts/preprocess_nimble.py"`.

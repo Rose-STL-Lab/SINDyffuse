@@ -1,16 +1,18 @@
-# Apply: kubectl apply -k deploy/jobs/train-diffusion-nimble
+# Apply: kubectl apply -k deploy/jobs/train-diffusion/sindy
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: sindyffuse-diffusion-train-nimble
+  name: sindyffuse-diffusion-train-sindy
   labels:
-    app: sindyffuse-diffusion-train-nimble
+    app: sindyffuse-diffusion-train-sindy
+    guidance: sindy
 spec:
   backoffLimit: 0
   template:
     metadata:
       labels:
-        app: sindyffuse-diffusion-train-nimble
+        app: sindyffuse-diffusion-train-sindy
+        guidance: sindy
     spec:
       restartPolicy: Never
       containers:
@@ -29,8 +31,10 @@ spec:
           export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
           export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
           HML=/mnt/SINDyffuse/datasets/HumanML3D
+          SINDY=/mnt/SINDyffuse/results/sindy/latest
           test -d "${HML}/nimble_b3d" || { echo "Missing ${HML}/nimble_b3d"; exit 1; }
-          RUN=/mnt/SINDyffuse/results/diffusion_nimble_$(date +%Y%m%d_%H%M%S)
+          test -f "${SINDY}/text_to_xi.pt" || { echo "Missing ${SINDY}/text_to_xi.pt"; exit 1; }
+          RUN=/mnt/SINDyffuse/results/diffusion_sindy_$(date +%Y%m%d_%H%M%S)
           mkdir -p "${RUN}"
           CFG="${RUN}/config_resolved.json"
           python - <<PY
@@ -38,9 +42,10 @@ spec:
           from pathlib import Path
           repo = Path("/mnt/SINDyffuse")
           cfg = json.loads((repo / "configs/train_diffusion.json").read_text(encoding="utf-8"))
-          cfg.setdefault("train", {})["guidance"] = "nimble"
+          cfg.setdefault("train", {})["guidance"] = "sindy"
           cfg.setdefault("data", {})["data_root"] = str(repo / "datasets/HumanML3D")
           cfg.setdefault("data", {})["dataset"] = "nimble"
+          cfg.setdefault("train", {})["sindy_checkpoint_dir"] = str(repo / "results/sindy/latest")
           Path("${RUN}/config_resolved.json").write_text(json.dumps(cfg, indent=2), encoding="utf-8")
           PY
           NGPU=$(nvidia-smi -L | wc -l)

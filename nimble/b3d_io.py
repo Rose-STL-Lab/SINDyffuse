@@ -10,10 +10,8 @@ import numpy as np
 from nimble.b3d_schema import (
     GUIDANCE_FEATURES,
     MUSCLE_ACTIVATIONS,
-    MUSCLE_ACTIVATION_MASK,
     SINDY_FEATURES,
     unpack_guidance_features,
-    unpack_muscle_activation_mask,
     unpack_muscle_activations,
     unpack_sindy_features,
 )
@@ -86,36 +84,6 @@ def read_muscle_activations_frames(
     """``[num_frames, M]`` muscle activation scalars."""
     raw = read_custom_frames(subj, trial, start_frame, num_frames, MUSCLE_ACTIVATIONS)
     return unpack_muscle_activations(raw)
-
-
-def read_muscle_activation_mask_frames(
-    subj: Any,
-    trial: int,
-    start_frame: int,
-    num_frames: int,
-) -> np.ndarray:
-    """``[num_frames]`` float32 mask (1 = SO-good label, 0 = do not train)."""
-    raw = read_custom_frames(subj, trial, start_frame, num_frames, MUSCLE_ACTIVATION_MASK)
-    return unpack_muscle_activation_mask(raw)
-
-
-def b3d_has_activation_mask(subj: Any, trial: int = 0) -> bool:
-    """True when ``muscle_activation_mask`` is present and readable on disk."""
-    if not subject_has_custom_value(subj, MUSCLE_ACTIVATION_MASK):
-        return False
-    try:
-        frames = subj.readFrames(
-            trial=int(trial),
-            startFrame=0,
-            numFramesToRead=1,
-            includeSensorData=True,
-            includeProcessingPasses=False,
-        )
-    except Exception:
-        return False
-    if not frames:
-        return False
-    return _frame_has_custom(frames[0], MUSCLE_ACTIVATION_MASK)
 
 
 def read_sindy_features_frames(

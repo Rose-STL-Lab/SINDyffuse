@@ -11,7 +11,7 @@ import opensim as osim
 from nimble.muscle_activation import (
     MuscleActivationConfig,
     MuscleActivationResult,
-    apply_activation_repair_and_smooth,
+    apply_activation_postprocess,
     _storage_to_array,
     opensim_quiet,
 )
@@ -30,7 +30,7 @@ def _parse_activation_sto(
     sto_path: Path,
     muscle_name_list: Sequence[str],
     frame_times: np.ndarray,
-) -> Tuple[np.ndarray, np.ndarray, Dict[str, Any]]:
+) -> Tuple[np.ndarray, Dict[str, Any]]:
     """Parse static-opt activation ``.sto`` onto uniform ``frame_times``."""
     storage = osim.Storage(str(sto_path))
     data, labels = _storage_to_array(storage)
@@ -89,32 +89,11 @@ def _parse_activation_sto(
     else:
         reserve_max = np.zeros(n_frames, dtype=np.float64)
 
-    row_finite = np.isfinite(activations).all(axis=1)
-    label_valid = row_finite.astype(np.float64)
     meta: Dict[str, Any] = {
         "static_reserve_peaks": reserve_peaks,
         "static_max_reserve_per_frame": reserve_max.astype(np.float64),
     }
-    return activations.astype(np.float32), label_valid, meta
-
-
-def _apply_reserve_qc(
-    activations: np.ndarray,
-    label_valid: np.ndarray,
-    reserve_max: np.ndarray,
-    cfg: MuscleActivationConfig,
-) -> Tuple[np.ndarray, int]:
-    max_frac = float(cfg.moco_max_reserve_fraction)
-    fail_on_high = bool(cfg.moco_fail_on_high_reserve)
-    valid = label_valid.astype(bool).copy()
-    invalid_count = 0
-    if max_frac > 0.0 and reserve_max.size:
-        bad = reserve_max > max_frac
-        if fail_on_high:
-            valid[bad] = False
-            invalid_count = int(bad.sum())
-    out_valid = valid.astype(np.float64)
-    return out_valid, invalid_count
+    return activations.astype(np.float32), meta
 
 
 def run_static_optimization(
@@ -183,46 +162,30 @@ def run_static_optimization(
         if not act_sto.is_file():
             raise RuntimeError(f"Missing static optimization output: {act_sto}")
 
-        activations, label_valid, parse_meta = _parse_activation_sto(
+        activations, parse_meta = _parse_activation_sto(
             act_sto, muscle_name_list, frame_times
         )
-        label_valid, reserve_invalid = _apply_reserve_qc(
-            activations,
-            label_valid,
-            parse_meta.get("static_max_reserve_per_frame", np.zeros(t_len)),
-            cfg,
-        )
 
-    repaired = activations
     repair_meta: Dict[str, Any] = {}
-    if cfg.repair_failed_frames or float(cfg.activation_smooth_hz) > 0.0:
-        repaired, label_valid, repair_meta = apply_activation_repair_and_smooth(
-            activations,
-            label_valid,
-            cfg,
-        )
+    if cfg.interpolate_activations or float(cfg.activation_smooth_hz) > 0.0:
+        activations, repair_meta = apply_activation_postprocess(activations, cfg)
     repaired_count = int(repair_meta.get("repaired_frame_count", 0))
 
-    valid_frac = float(np.mean(label_valid)) if label_valid.size else 0.0
     meta: Dict[str, Any] = {
         "activation_method": "static_optimization",
-        "label_valid_fraction": valid_frac,
         "repaired_frame_count": repaired_count,
         "interpolated_frame_count": int(repair_meta.get("interpolated_frame_count", 0)),
         "extrapolated_frame_count": int(repair_meta.get("extrapolated_frame_count", 0)),
-        "marked_valid_frame_count": int(repair_meta.get("marked_valid_frame_count", 0)),
         "static_activation_exponent": float(cfg.static_activation_exponent),
         "static_use_muscle_physiology": bool(cfg.static_use_muscle_physiology),
         "static_lowpass_cutoff_hz": float(cfg.static_lowpass_cutoff_hz),
         "use_degroote_muscles": bool(cfg.use_degroote_muscles),
         "moco_max_reserve_fraction": float(cfg.moco_max_reserve_fraction),
-        "static_reserve_invalid_frames": reserve_invalid,
         **{k: v for k, v in parse_meta.items() if k != "static_max_reserve_per_frame"},
     }
     meta.update(repair_meta)
     return MuscleActivationResult(
-        activations=repaired,
+        activations=activations,
         muscle_names=tuple(muscle_name_list),
-        label_valid=label_valid,
         metadata=meta,
     )
