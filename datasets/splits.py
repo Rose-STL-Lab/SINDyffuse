@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-
-import nimblephysics as nimble
-
+from typing import Any
 
 _SPLIT_FILES = ("train.txt", "val.txt", "test.txt")
 
@@ -42,7 +40,9 @@ def shard_motion_ids(ids: list[str], shard_index: int, num_shards: int) -> list[
     return ids[i::n]
 
 
-def kinematics_pass_index(subj: nimble.biomechanics.SubjectOnDisk, trial: int) -> int:
+def kinematics_pass_index(subj: Any, trial: int) -> int:
+    import nimblephysics as nimble
+
     n = int(subj.getTrialNumProcessingPasses(trial))
     for i in range(n):
         ptype = str(subj.getProcessingPassType(i)).upper()

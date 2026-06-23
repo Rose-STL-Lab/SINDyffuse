@@ -52,7 +52,8 @@ class MuscleActivationConfig:
     moco_reserve_optimal_force: float = 250.0
     moco_reserve_scale: float = 1.3
     moco_convergence_tolerance: float = 0.01
-    moco_max_iterations: int = 300
+    # -1: OpenSim/Ipopt default (3000); set >0 to cap iterations explicitly.
+    moco_max_iterations: int = -1
     moco_states_tracking_weight: float = 1.0
     moco_states_speed_tracking_weight: float = 1.0
     moco_aux_coord_tracking_weight: float = 1.0
@@ -78,10 +79,8 @@ class MuscleActivationConfig:
     moco_min_ik_success_fraction: float = 0.5
     moco_max_mean_fk_loss: Optional[float] = None
     moco_max_pelvis_ty_range_m: float = 0.8
-    use_degroote_muscles: bool = True
     # Static optimization (OpenSim AnalyzeTool + StaticOptimization)
     static_activation_exponent: float = 2.0
-    static_use_muscle_physiology: bool = True
     static_convergence_criterion: float = 1e-4
     static_max_iterations: int = 100
     static_lowpass_cutoff_hz: float = 6.0
@@ -146,11 +145,6 @@ def add_muscle_activation_cli_args(parser: argparse.ArgumentParser) -> None:
     )
     static = parser.add_argument_group("static optimization")
     static.add_argument("--static_activation_exponent", type=float, default=None)
-    static.add_argument(
-        "--static_no_muscle_physiology",
-        action="store_true",
-        help="Disable muscle force-length curve in static optimization.",
-    )
     static.add_argument("--static_convergence_criterion", type=float, default=None)
     static.add_argument("--static_max_iterations", type=int, default=None)
     static.add_argument("--static_lowpass_cutoff_hz", type=float, default=None)
@@ -181,7 +175,15 @@ def add_muscle_activation_cli_args(parser: argparse.ArgumentParser) -> None:
         help="MocoControlGoal weight for reserve actuators (default 0.001).",
     )
     grp.add_argument("--moco_convergence_tolerance", type=float, default=None)
-    grp.add_argument("--moco_max_iterations", type=int, default=None)
+    grp.add_argument(
+        "--moco_max_iterations",
+        type=int,
+        default=None,
+        help=(
+            "Ipopt iteration cap (>0). Default -1 uses the solver default (3000); "
+            "matches OpenCap/OpenSim MocoTrack when unset."
+        ),
+    )
     grp.add_argument("--moco_states_tracking_weight", type=float, default=None)
     grp.add_argument(
         "--moco_states_speed_tracking_weight",
@@ -283,11 +285,6 @@ def add_muscle_activation_cli_args(parser: argparse.ArgumentParser) -> None:
         type=float,
         default=None,
         help="Reject clip when pelvis vertical range exceeds this (m); default 0.8.",
-    )
-    grp.add_argument(
-        "--moco_no_degroote_muscles",
-        action="store_true",
-        help="Skip DeGrooteFregly2016 muscle replacement in Moco model pipeline.",
     )
     grp.add_argument(
         "--moco_no_repair",
@@ -414,7 +411,6 @@ def muscle_activation_config_from_args(
         moco_max_pelvis_ty_range_m=_pick(
             "moco_max_pelvis_ty_range_m", "moco_max_pelvis_ty_range_m"
         ),
-        use_degroote_muscles=not bool(getattr(args, "moco_no_degroote_muscles", False)),
         interpolate_activations=not bool(getattr(args, "moco_no_repair", False)),
         activation_smooth_hz=float(
             getattr(args, "activation_smooth_hz", None)
@@ -429,9 +425,6 @@ def muscle_activation_config_from_args(
             getattr(args, "static_activation_exponent", None)
             if getattr(args, "static_activation_exponent", None) is not None
             else base.static_activation_exponent
-        ),
-        static_use_muscle_physiology=not bool(
-            getattr(args, "static_no_muscle_physiology", False)
         ),
         static_convergence_criterion=float(
             getattr(args, "static_convergence_criterion", None)

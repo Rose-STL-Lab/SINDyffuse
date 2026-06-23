@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from nimble.muscle_activation import muscle_names as _muscle_names
-
-MUSCLE_ACTIVATION_ROWS = len(_muscle_names())
+# Rajagopal 2015 full-body muscle count (fixed for bundled skeleton).
+MUSCLE_ACTIVATION_ROWS = 80
 
 
 def pack_muscle_activations(activations: np.ndarray) -> np.ndarray:

@@ -26,6 +26,7 @@ import shutil
 import sys
 import warnings
 from concurrent.futures import BrokenExecutor, ProcessPoolExecutor, as_completed
+from multiprocessing import get_context
 
 try:
     from concurrent.futures.process import BrokenProcessPool
@@ -206,6 +207,10 @@ def _process_one(args: WorkItem) -> dict:
         append_verbose_log(f"{sid}: error {exc}")
         return {"id": sid, "status": "error", "error": str(exc)}
 
+    from nimble.export import clear_export_caches
+
+    clear_export_caches()
+
     row: dict = {
         "id": sid,
         "status": "ok",
@@ -216,6 +221,44 @@ def _process_one(args: WorkItem) -> dict:
     if meta_strings:
         row["meta"] = meta_strings
     return row
+
+
+def _process_one_in_fresh_process(
+    work_item: WorkItem,
+    *,
+    log_level: str,
+    moco_threads: int,
+) -> dict:
+    """Run one motion in a short-lived worker process.
+
+    OpenSim static optimization can retain native memory in long-lived Python
+    processes. Uses ``spawn`` so the child does not inherit the parent's loaded
+    OpenSim / Nimble / Torch heap from ``fork``.
+    """
+    ctx = get_context("spawn")
+    with ProcessPoolExecutor(
+        max_workers=1,
+        mp_context=ctx,
+        initializer=_preprocess_worker_init,
+        initargs=(log_level, moco_threads),
+    ) as ex:
+        return ex.submit(_process_one, work_item).result()
+
+
+def _run_motion(
+    work_item: WorkItem,
+    *,
+    isolate_motion_process: bool,
+    log_level: str,
+    moco_threads: int,
+) -> dict:
+    if isolate_motion_process:
+        return _process_one_in_fresh_process(
+            work_item,
+            log_level=log_level,
+            moco_threads=moco_threads,
+        )
+    return _process_one(work_item)
 
 
 def _ik_fit_loss(ik_stats: dict) -> float | None:
@@ -502,6 +545,7 @@ def run_preprocess(args: argparse.Namespace, logger: RunLogger | None = None) ->
 
     manifest_path = _manifest_path(out_root, shard_index, num_shards)
     skip_normalization = bool(getattr(args, "skip_normalization", False)) or num_shards > 1
+    isolate_motion_process = bool(activation_method == "static_optimization")
     pending = list(work)
     with manifest_path.open("w", encoding="utf-8") as mf:
         while pending:
@@ -516,7 +560,12 @@ def run_preprocess(args: argparse.Namespace, logger: RunLogger | None = None) ->
                 )
                 try:
                     for w in batch:
-                        row = _process_one(w)
+                        row = _run_motion(
+                            w,
+                            isolate_motion_process=isolate_motion_process,
+                            log_level=log_level,
+                            moco_threads=1 if isolate_motion_process else moco_threads,
+                        )
                         mf.write(json.dumps(row, default=str) + "\n")
                         _record(row, pbar=pbar)
                 finally:
@@ -541,7 +590,16 @@ def run_preprocess(args: argparse.Namespace, logger: RunLogger | None = None) ->
                 )
                 try:
                     with ProcessPoolExecutor(**pool_kwargs) as ex:
-                        futs = {ex.submit(_process_one, w): w for w in batch}
+                        futs = {
+                            ex.submit(
+                                _run_motion,
+                                w,
+                                isolate_motion_process=isolate_motion_process,
+                                log_level=log_level,
+                                moco_threads=1 if isolate_motion_process else moco_threads,
+                            ): w
+                            for w in batch
+                        }
                         for fut in as_completed(futs):
                             w = futs[fut]
                             try:
@@ -597,6 +655,7 @@ def run_preprocess(args: argparse.Namespace, logger: RunLogger | None = None) ->
         ),
         "num_shards": num_shards if num_shards > 1 else None,
         "shard_index": shard_index if num_shards > 1 else None,
+        "isolate_motion_process": isolate_motion_process,
         "manifest_path": str(manifest_path),
         "use_all_frames_per_motion": True,
     }
@@ -627,9 +686,9 @@ def run_preprocess(args: argparse.Namespace, logger: RunLogger | None = None) ->
     if not skip_normalization:
         compute_nimble_normalization_stats(out_root)
 
-    from nimble.physics import clear_cache
+    from nimble.export import clear_export_caches
 
-    clear_cache()
+    clear_export_caches()
 
 
 def main() -> None:

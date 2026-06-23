@@ -44,11 +44,10 @@ def build_activation_model_processor(
         for joint_name in _MOCO_TOE_JOINTS:
             joints_to_weld.append(joint_name)
         mp.append(osim.ModOpReplaceJointsWithWelds(joints_to_weld))
-    if cfg.use_degroote_muscles:
-        mp.append(osim.ModOpIgnoreTendonCompliance())
-        mp.append(osim.ModOpReplaceMusclesWithDeGrooteFregly2016())
-        mp.append(osim.ModOpIgnorePassiveFiberForcesDGF())
-        mp.append(osim.ModOpScaleActiveFiberForceCurveWidthDGF(1.5))
+    mp.append(osim.ModOpIgnoreTendonCompliance())
+    mp.append(osim.ModOpReplaceMusclesWithDeGrooteFregly2016())
+    mp.append(osim.ModOpIgnorePassiveFiberForcesDGF())
+    mp.append(osim.ModOpScaleActiveFiberForceCurveWidthDGF(1.5))
     mp.append(
         osim.ModOpAddResiduals(
             float(cfg.moco_residual_force),
@@ -80,7 +79,10 @@ def prepare_rajagopal_activation_model(
     out = work_dir / f"rajagopal_activation_{tag}.osim"
     base = prepare_unlocked_rajagopal_base(work_dir)
     mp = build_activation_model_processor(base, cfg, weld_toe_joints=weld_toe_joints)
-    names = muscle_names_from_processor(mp)
+    processed = mp.process()
+    processed.initSystem()
+    muscles = processed.getMuscles()
+    names = tuple(muscles.get(i).getName() for i in range(muscles.getSize()))
     if not out.is_file():
-        mp.process().printToXML(str(out))
+        processed.printToXML(str(out))
     return out, names

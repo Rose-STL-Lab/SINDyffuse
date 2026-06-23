@@ -48,6 +48,19 @@ DEFAULT_SMOOTH_BUTTERWORTH_ORDER = 2
 _SKELETON_CACHE: Dict[str, Any] = {}
 
 
+def clear_export_caches() -> None:
+    """Release cached skeleton / FK state after a motion export."""
+    import gc
+
+    _SKELETON_CACHE.clear()
+    from nimble.b3d_schema import clear_b3d_schema_caches
+    from nimble.physics import clear_cache
+
+    clear_b3d_schema_caches()
+    clear_cache()
+    gc.collect()
+
+
 def _get_skeleton(*, opensim_log_level: str = "Off") -> Tuple[Any, Any]:
     sk = _SKELETON_CACHE.get("rajagopal")
     if sk is None:
@@ -120,6 +133,9 @@ def export_motion_to_b3d(
     num_input_frames = int(poses.shape[0])
     append_verbose_log(f"{trial_name}: IK fitting start ({num_input_frames} frames)")
     poses_q, ik_stats = fit_q(poses, sk, ik_mapping=spec.ik_mapping)
+    del poses
+    ik_stats.pop("per_frame_loss", None)
+    ik_stats.pop("per_frame_fk_loss", None)
     append_verbose_log(
         f"{trial_name}: IK fitting done "
         f"mean_fk_loss={ik_stats.get('mean_fk_loss', float('nan')):.6f} "
@@ -144,56 +160,19 @@ def export_motion_to_b3d(
         smooth_butterworth_order=DEFAULT_SMOOTH_BUTTERWORTH_ORDER,
     )
     poses_q = np.ascontiguousarray(q_sm.T, dtype=np.float64)
+    del q_time_dof, q_sm
     ik_stats["pose_smoothing_enabled"] = float(bool(smooth_meta.get("enabled", False)))
     eff_hz = smooth_meta.get("cutoff_hz_effective")
     if eff_hz is not None:
         ik_stats["pose_smooth_cutoff_hz"] = float(eff_hz)
 
     poses_q_f32 = np.ascontiguousarray(poses_q, dtype=np.float32)
+    del poses_q
     dt = 1.0 / max(float(fps), 1e-6)
     num_dofs = int(sk.getNumDofs())
-
-    b3d_subject = nimble.biomechanics.SubjectOnDiskHeader()
-    b3d_subject_pass = b3d_subject.addProcessingPass()
-    b3d_subject_pass.setProcessingPassType(nimble.biomechanics.ProcessingPassType.KINEMATICS)
-    b3d_subject.setHeightM(float(height_m))
-    b3d_subject.setMassKg(float(mass_kg))
-    b3d_subject.setNumDofs(num_dofs)
-    b3d_subject.setNumJoints(int(sk.getNumJoints()))
-    b3d_subject.setGroundForceBodies(list(foot_body_names))
-    b3d_subject.setNotes(f"Converted from HumanML3D motion: {trial_name}")
-
-    b3d_trial = b3d_subject.addTrial()
-    b3d_trial.setName(str(trial_name))
-    b3d_trial.setTrialLength(int(poses_q_f32.shape[1]))
-    b3d_trial.setTimestep(float(dt))
-    b3d_trial.setForcePlates([])
-
-    kin_pass = b3d_trial.addPass()
-    kin_pass.setType(nimble.biomechanics.ProcessingPassType.KINEMATICS)
-    kin_pass.setPoses(poses_q_f32)
-    # nimblephysics' writeB3D uses len(MarkerObservations) as the per-trial frame
-    # count; passing [] writes a 0-byte file even when poses are set. Provide one
-    # empty per-frame dict so the writer emits all T frames.
     num_frames = int(poses_q_f32.shape[1])
-    b3d_trial.setMarkerObservations([{} for _ in range(num_frames)])
-
-    _populate_pass_derived_values(
-        kin_pass,
-        sk,
-        poses_q_f32,
-        dt,
-        foot_body_names,
-        root_history_len=10,
-        root_history_stride=3,
-    )
-
     q_traj = np.ascontiguousarray(poses_q_f32.T, dtype=np.float64)
-    bio_cfg = default_physics_cfg(fps=float(fps), max_frames=int(q_traj.shape[0]))
-    bio = bio_matrix(q_traj, fps=float(fps), guidance_cfg=bio_cfg)
-    u, c, _, _ = features_from_q(q_traj, sk, fps=float(fps))
 
-    num_frames = int(q_traj.shape[0])
     act_cfg = muscle_activation_cfg or MuscleActivationConfig(
         fps=float(fps), mass_kg=float(mass_kg)
     )
@@ -212,7 +191,7 @@ def export_motion_to_b3d(
     if method == "none":
         ik_stats["muscle_activation_skipped"] = 1.0
         ik_stats["muscle_activation_computed"] = 0.0
-        muscle_act = np.zeros((num_frames, MUSCLE_ACTIVATION_ROWS), dtype=np.float64)
+        muscle_act = np.zeros((num_frames, MUSCLE_ACTIVATION_ROWS), dtype=np.float32)
     else:
         ik_stats["pelvis_ty_range_m"] = pelvis_ty_range_m(q_traj)
         gate_ok, gate_reason = evaluate_activation_gate(
@@ -264,7 +243,47 @@ def export_motion_to_b3d(
         for key, val in summarize_moco_metadata(act_result.metadata).items():
             if isinstance(val, (int, float)):
                 ik_stats[f"moco_{key}"] = float(val)
-        muscle_act = act_result.activations
+        muscle_act = np.asarray(act_result.activations, dtype=np.float32)
+        del act_result
+
+    b3d_subject = nimble.biomechanics.SubjectOnDiskHeader()
+    b3d_subject_pass = b3d_subject.addProcessingPass()
+    b3d_subject_pass.setProcessingPassType(nimble.biomechanics.ProcessingPassType.KINEMATICS)
+    b3d_subject.setHeightM(float(height_m))
+    b3d_subject.setMassKg(float(mass_kg))
+    b3d_subject.setNumDofs(num_dofs)
+    b3d_subject.setNumJoints(int(sk.getNumJoints()))
+    b3d_subject.setGroundForceBodies(list(foot_body_names))
+    b3d_subject.setNotes(f"Converted from HumanML3D motion: {trial_name}")
+
+    b3d_trial = b3d_subject.addTrial()
+    b3d_trial.setName(str(trial_name))
+    b3d_trial.setTrialLength(int(poses_q_f32.shape[1]))
+    b3d_trial.setTimestep(float(dt))
+    b3d_trial.setForcePlates([])
+
+    kin_pass = b3d_trial.addPass()
+    kin_pass.setType(nimble.biomechanics.ProcessingPassType.KINEMATICS)
+    kin_pass.setPoses(poses_q_f32)
+    # nimblephysics' writeB3D uses len(MarkerObservations) as the per-trial frame
+    # count; passing [] writes a 0-byte file even when poses are set. Provide one
+    # empty per-frame dict so the writer emits all T frames.
+    b3d_trial.setMarkerObservations([{} for _ in range(num_frames)])
+
+    _populate_pass_derived_values(
+        kin_pass,
+        sk,
+        poses_q_f32,
+        dt,
+        foot_body_names,
+        root_history_len=10,
+        root_history_stride=3,
+    )
+
+    bio_cfg = default_physics_cfg(fps=float(fps), max_frames=num_frames)
+    bio = bio_matrix(q_traj, fps=float(fps), guidance_cfg=bio_cfg)
+    u, c, _, _ = features_from_q(q_traj, sk, fps=float(fps))
+    del q_traj
 
     b3d_subject.setCustomValueNames(list(B3D_CUSTOM_VALUE_NAMES))
     b3d_trial.setCustomValues(
@@ -274,12 +293,16 @@ def export_motion_to_b3d(
             pack_muscle_activations(muscle_act),
         ]
     )
+    del bio, u, c, muscle_act
     ik_stats["guidance_features_computed"] = 1.0
     ik_stats["sindy_features_computed"] = 1.0
 
     out_path = Path(output_b3d_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     nimble.biomechanics.SubjectOnDisk.writeB3D(str(out_path), b3d_subject)
+    del b3d_subject
+
+    clear_export_caches()
 
     stats: Dict[str, float] = {}
     meta_strings: Dict[str, str] = {}

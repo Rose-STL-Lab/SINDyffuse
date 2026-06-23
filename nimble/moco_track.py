@@ -593,7 +593,6 @@ def run_moco_track(
         "moco_reserve_control_weight": float(cfg.moco_reserve_control_weight),
         "moco_max_reserve_fraction": float(cfg.moco_max_reserve_fraction),
         "moco_fail_on_high_reserve": bool(cfg.moco_fail_on_high_reserve),
-        "use_degroote_muscles": bool(cfg.use_degroote_muscles),
         "moco_residual_force": float(cfg.moco_residual_force),
         "moco_reserve_optimal_force": float(cfg.moco_reserve_optimal_force),
         "moco_reserve_scale": float(cfg.moco_reserve_scale),

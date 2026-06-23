@@ -119,7 +119,7 @@ def resolve_preprocess_parallelism(
 
     ``none``: parallel IK-only workers (no OpenSim).
 
-    ``static_optimization``: parallel motion workers, 1 thread each.
+    ``static_optimization``: one motion at a time, 1 OpenSim thread (memory-heavy).
 
     ``moco_track``: concurrent Moco solves; threads per solve from ``num_workers``.
 
@@ -135,8 +135,7 @@ def resolve_preprocess_parallelism(
         pool = max(1, int(num_workers)) if int(num_workers) > 0 else auto
         return pool, 1
     if method == "static_optimization":
-        pool = max(1, int(num_workers)) if int(num_workers) > 0 else auto
-        return pool, 1
+        return 1, 1
     parallel = max(1, int(moco_parallel_motions))
     total = max(1, int(num_workers)) if int(num_workers) > 0 else auto
     threads = max(1, total // parallel)

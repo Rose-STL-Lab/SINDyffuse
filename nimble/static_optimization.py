@@ -34,15 +34,16 @@ def _parse_activation_sto(
     """Parse static-opt activation ``.sto`` onto uniform ``frame_times``."""
     storage = osim.Storage(str(sto_path))
     data, labels = _storage_to_array(storage)
+    del storage
     if not labels or data.size == 0:
         raise RuntimeError(f"Empty static optimization activation storage: {sto_path}")
 
-    times = np.array(
-        [float(storage.getStateVector(i).getTime()) for i in range(storage.getSize())],
-        dtype=np.float64,
-    )
-    label_to_col: Dict[str, int] = {}
     col_offset = 1 if labels and str(labels[0]).strip().lower() == "time" else 0
+    if col_offset:
+        times = np.asarray(data[:, 0], dtype=np.float64)
+    else:
+        times = np.arange(int(data.shape[0]), dtype=np.float64)
+    label_to_col: Dict[str, int] = {}
     for i, lab in enumerate(labels):
         if str(lab).strip().lower() == "time":
             continue
@@ -135,7 +136,7 @@ def run_static_optimization(
         so = osim.StaticOptimization()
         so.setUseModelForceSet(True)
         so.setActivationExponent(float(cfg.static_activation_exponent))
-        so.setUseMusclePhysiology(bool(cfg.static_use_muscle_physiology))
+        so.setUseMusclePhysiology(True)
         so.setConvergenceCriterion(float(cfg.static_convergence_criterion))
         so.setMaxIterations(int(cfg.static_max_iterations))
         tool.getAnalysisSet().cloneAndAppend(so)
@@ -177,9 +178,7 @@ def run_static_optimization(
         "interpolated_frame_count": int(repair_meta.get("interpolated_frame_count", 0)),
         "extrapolated_frame_count": int(repair_meta.get("extrapolated_frame_count", 0)),
         "static_activation_exponent": float(cfg.static_activation_exponent),
-        "static_use_muscle_physiology": bool(cfg.static_use_muscle_physiology),
         "static_lowpass_cutoff_hz": float(cfg.static_lowpass_cutoff_hz),
-        "use_degroote_muscles": bool(cfg.use_degroote_muscles),
         "moco_max_reserve_fraction": float(cfg.moco_max_reserve_fraction),
         **{k: v for k, v in parse_meta.items() if k != "static_max_reserve_per_frame"},
     }

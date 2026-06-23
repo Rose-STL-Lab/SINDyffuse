@@ -84,6 +84,12 @@ def __getattr__(name: str):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
+def clear_b3d_schema_caches() -> None:
+    """Drop layout caches that retain skeleton / OpenSim state."""
+    _sindy_layout.cache_clear()
+    _muscle_names_quiet.cache_clear()
+
+
 def pack_guidance_features(bio: np.ndarray) -> np.ndarray:
     """``bio`` ``[T, C]`` → B3D matrix ``[C, T]`` float64."""
     arr = np.asarray(bio, dtype=np.float64)
