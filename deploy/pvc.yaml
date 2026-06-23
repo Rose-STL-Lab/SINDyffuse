@@ -5,7 +5,7 @@
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: biomech-ai
+  name: sindyffuse
 spec:
   storageClassName: rook-cephfs
   accessModes:

@@ -1,4 +1,4 @@
-# Apply: kubectl apply -k deploy/dev-pod
+# Apply: kubectl apply -k deploy/dev
 # Shell:  kubectl exec -it sindyffuse-dev -- bash -l
 apiVersion: v1
 kind: Pod
@@ -38,4 +38,4 @@ spec:
   volumes:
   - name: data
     persistentVolumeClaim:
-          claimName: biomech-ai
+          claimName: sindyffuse

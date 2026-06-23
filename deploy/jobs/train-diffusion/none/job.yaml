@@ -69,7 +69,7 @@ spec:
       volumes:
       - name: data
         persistentVolumeClaim:
-          claimName: biomech-ai
+          claimName: sindyffuse
       - name: dshm
         emptyDir:
           medium: Memory

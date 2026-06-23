@@ -1,7 +1,7 @@
 # Cluster template — edit image and PVC for your environment (all jobs + dev pod).
 #
 #   images.newName / newTag  → container registry (default: ncking/sindyffuse on Nautilus)
-#   pvc-patch*.yaml          → claimName on the biomech-ai PVC
+#   pvc-patch*.yaml          → claimName on the sindyffuse PVC
 apiVersion: kustomize.config.k8s.io/v1alpha1
 kind: Component
 

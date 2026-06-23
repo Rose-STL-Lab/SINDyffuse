@@ -22,7 +22,7 @@ deploy/
       none/
       nimble/
       sindy/
-  dev-pod/                    # long-running interactive pod
+  dev/                        # long-running interactive pod
 ```
 
 | Local | Kubernetes |
@@ -163,7 +163,7 @@ kubectl delete job sindyffuse-preprocess-static-optimization \
 Long-running pod for interactive work on the cluster (same image + PVC as jobs):
 
 ```bash
-kubectl apply -k deploy/dev-pod
+kubectl apply -k deploy/dev
 kubectl get pod sindyffuse-dev -w
 kubectl exec -it sindyffuse-dev -- bash -l
 ```
@@ -180,7 +180,7 @@ Delete when done:
 kubectl delete pod sindyffuse-dev
 ```
 
-Default resources: 8–32 CPU, 32–64Gi memory. Edit `deploy/dev-pod/pod.yaml` to add GPUs or change limits.
+Default resources: 8–32 CPU, 32–64Gi memory. Edit `deploy/dev/pod.yaml` to add GPUs or change limits.
 
 ## In-container layout
 
@@ -194,7 +194,7 @@ Each preprocess variant uses two Jobs: an Indexed worker Job (`parallelism=compl
 
 | Job | CPUs | Memory | GPUs |
 |-----|------|--------|------|
-| dev-pod | 8–32 | 32–64Gi | — (add in pod.yaml if needed) |
+| dev | 8–32 | 32–64Gi | — (add in pod.yaml if needed) |
 | preprocess-nimble/none (workers) | 64 × 1 | 64 × 2Gi | — |
 | preprocess-nimble/static-optimization (workers) | 64 × 1 | 64 × 2Gi | — |
 | preprocess-nimble/moco-track (workers) | 64 × 1 | 64 × 4Gi | — |

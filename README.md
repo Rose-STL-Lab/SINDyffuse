@@ -138,7 +138,7 @@ kubectl apply -k deploy/jobs/train-sindy
 kubectl apply -k deploy/jobs/train-diffusion/nimble
 
 # Interactive dev shell on the cluster
-kubectl apply -k deploy/dev-pod
+kubectl apply -k deploy/dev
 kubectl exec -it sindyffuse-dev -- bash -l
 ```
 
