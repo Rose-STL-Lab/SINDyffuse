@@ -8,8 +8,8 @@ metadata:
     app: sindyffuse-preprocess-static-optimization
     activation-method: static-optimization
 spec:
-  parallelism: 64
-  completions: 64
+  parallelism: 180
+  completions: 180
   completionMode: Indexed
   backoffLimit: 0
   template:
@@ -27,13 +27,15 @@ spec:
         workingDir: /mnt/SINDyffuse
         env:
         - name: PREPROCESS_NUM_SHARDS
-          value: "64"
+          value: "180"
         - name: ACTIVATION_METHOD
           value: "static_optimization"
         - name: MAX_MOTIONS
           value: "0"
         - name: SKIP_EXISTING
           value: "1"
+        - name: SINDYFFUSE_RUN_LOG_ID
+          value: "RUN_LOG_ID_PLACEHOLDER"
         command: ["/bin/bash", "-c"]
         args:
         - |
@@ -43,7 +45,7 @@ spec:
           export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
           export PYTHONPATH=/mnt/SINDyffuse
           HML=/mnt/SINDyffuse/datasets/HumanML3D
-          NUM_SHARDS="${PREPROCESS_NUM_SHARDS:-64}"
+          NUM_SHARDS="${PREPROCESS_NUM_SHARDS:-180}"
           ARGS=(
             scripts/preprocess_nimble.py
             --hml_root "${HML}"
@@ -62,10 +64,10 @@ spec:
           test -f "${HML}/preprocess_manifest.$(printf '%04d' "${JOB_COMPLETION_INDEX}").jsonl"
         resources:
           limits:
-            memory: 2Gi
+            memory: 12Gi
             cpu: "1"
           requests:
-            memory: 2Gi
+            memory: 8Gi
             cpu: "1"
         volumeMounts:
         - name: data

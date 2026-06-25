@@ -21,10 +21,14 @@ GUIDANCE_FEATURES = "guidance_features"
 SINDY_FEATURES = "sindy_features"
 MUSCLE_ACTIVATIONS = "muscle_activations"
 
+# nimblephysics assigns every customValues channel the same per-frame width as the
+# first entry. List muscle activations (80 rows) first; pad shorter channels to 80.
+B3D_CUSTOM_VALUE_STORAGE_ROWS = MUSCLE_ACTIVATION_ROWS
+
 B3D_CUSTOM_VALUE_NAMES: Tuple[str, ...] = (
+    MUSCLE_ACTIVATIONS,
     GUIDANCE_FEATURES,
     SINDY_FEATURES,
-    MUSCLE_ACTIVATIONS,
 )
 
 GUIDANCE_FEATURE_ROWS = len(BIOMECH_COMPONENT_KEYS)
@@ -90,6 +94,36 @@ def clear_b3d_schema_caches() -> None:
     _muscle_names_quiet.cache_clear()
 
 
+def pad_b3d_custom_matrix(matrix: np.ndarray) -> np.ndarray:
+    """Pad a ``[rows, T]`` matrix to ``B3D_CUSTOM_VALUE_STORAGE_ROWS`` for nimblephysics."""
+    arr = np.asarray(matrix, dtype=np.float64)
+    if arr.ndim != 2:
+        raise ValueError(f"Expected custom matrix [rows, T], got {arr.shape}")
+    rows = int(B3D_CUSTOM_VALUE_STORAGE_ROWS)
+    if arr.shape[0] == rows:
+        return np.ascontiguousarray(arr)
+    if arr.shape[0] > rows:
+        return np.ascontiguousarray(arr[:rows])
+    out = np.zeros((rows, arr.shape[1]), dtype=np.float64)
+    out[: arr.shape[0]] = arr
+    return out
+
+
+def pack_b3d_trial_custom_values(
+    *,
+    muscle_activations: np.ndarray,
+    guidance_bio: np.ndarray,
+    sindy_u: np.ndarray,
+    sindy_c: np.ndarray,
+) -> list[np.ndarray]:
+    """Pack all trial customValues (muscle first; guidance/sindy zero-padded to 80 rows)."""
+    return [
+        pack_muscle_activations(muscle_activations),
+        pad_b3d_custom_matrix(pack_guidance_features(guidance_bio)),
+        pad_b3d_custom_matrix(pack_sindy_features(sindy_u, sindy_c)),
+    ]
+
+
 def pack_guidance_features(bio: np.ndarray) -> np.ndarray:
     """``bio`` ``[T, C]`` → B3D matrix ``[C, T]`` float64."""
     arr = np.asarray(bio, dtype=np.float64)
@@ -105,6 +139,10 @@ def unpack_guidance_features(matrix: np.ndarray) -> np.ndarray:
         return arr.T
     if arr.ndim == 2 and arr.shape[1] == GUIDANCE_FEATURE_ROWS:
         return arr
+    if arr.ndim == 2 and arr.shape[0] >= GUIDANCE_FEATURE_ROWS:
+        return arr[:GUIDANCE_FEATURE_ROWS, :].T
+    if arr.ndim == 2 and arr.shape[1] >= GUIDANCE_FEATURE_ROWS:
+        return arr[:, :GUIDANCE_FEATURE_ROWS]
     raise ValueError(f"Expected guidance layout with {GUIDANCE_FEATURE_ROWS} channels, got {arr.shape}")
 
 
@@ -130,6 +168,9 @@ def unpack_sindy_features(matrix: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     arr = np.asarray(matrix, dtype=np.float32)
     if arr.ndim == 2 and arr.shape[0] == feature_rows:
         return arr[:u_rows, :].T, arr[u_rows:, :].T
+    if arr.ndim == 2 and arr.shape[0] >= feature_rows:
+        trimmed = arr[:feature_rows, :]
+        return trimmed[:u_rows, :].T, trimmed[u_rows:, :].T
     if arr.ndim == 2 and arr.shape[1] >= feature_rows:
         arr = arr[:, :feature_rows]
         return arr[:, :u_rows], arr[:, u_rows:]
@@ -138,6 +179,12 @@ def unpack_sindy_features(matrix: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
 
 def metadata_custom_values_block() -> dict:
     return {
+        "b3d_custom_value_storage_rows": int(B3D_CUSTOM_VALUE_STORAGE_ROWS),
+        "b3d_custom_value_order": list(B3D_CUSTOM_VALUE_NAMES),
+        MUSCLE_ACTIVATIONS: {
+            "rows": MUSCLE_ACTIVATION_ROWS,
+            "muscle_names": list(_muscle_names_quiet()),
+        },
         GUIDANCE_FEATURES: {
             "rows": GUIDANCE_FEATURE_ROWS,
             "channel_order": list(BIOMECH_COMPONENT_KEYS),
@@ -148,9 +195,5 @@ def metadata_custom_values_block() -> dict:
             "c_rows": _sindy_c_rows(),
             "u_names": list(_u_feature_names()),
             "c_names": list(_c_feature_names()),
-        },
-        MUSCLE_ACTIVATIONS: {
-            "rows": MUSCLE_ACTIVATION_ROWS,
-            "muscle_names": list(_muscle_names_quiet()),
         },
     }

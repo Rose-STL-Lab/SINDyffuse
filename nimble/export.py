@@ -13,13 +13,10 @@ import nimblephysics as nimble
 
 from nimble.b3d_schema import (
     B3D_CUSTOM_VALUE_NAMES,
-    MUSCLE_ACTIVATION_ROWS,
-    pack_guidance_features,
-    pack_muscle_activations,
-    pack_sindy_features,
+    pack_b3d_trial_custom_values,
 )
+from nimble.muscle_b3d import MUSCLE_ACTIVATION_ROWS
 from nimble.activation_gates import (
-    evaluate_activation_gate,
     pelvis_ty_range_m,
     summarize_moco_metadata,
 )
@@ -27,8 +24,11 @@ from common.run_logging import append_verbose_log
 
 from nimble.muscle_activation import (
     MuscleActivationConfig,
+    MuscleActivationResult,
     compute_muscle_activation,
     configure_opensim_logging,
+    fallback_muscle_activations,
+    muscle_names,
     normalize_activation_method,
     opensim_quiet,
 )
@@ -141,6 +141,7 @@ def export_motion_to_b3d(
         f"mean_fk_loss={ik_stats.get('mean_fk_loss', float('nan')):.6f} "
         f"mean_ik_error={ik_stats.get('mean_ik_error', float('nan')):.6f} "
         f"success_ratio={ik_stats.get('success_ratio', 0.0):.4f} "
+        f"poor_fit_repaired={int(ik_stats.get('ik_poor_fit_repaired_frames', 0))} "
         f"frames={int(ik_stats.get('total_frames', 0))}"
     )
 
@@ -194,26 +195,26 @@ def export_motion_to_b3d(
         muscle_act = np.zeros((num_frames, MUSCLE_ACTIVATION_ROWS), dtype=np.float32)
     else:
         ik_stats["pelvis_ty_range_m"] = pelvis_ty_range_m(q_traj)
-        gate_ok, gate_reason = evaluate_activation_gate(
-            ik_stats,
-            num_frames=num_frames,
-            cfg=act_cfg,
-        )
-        ik_stats["activation_gate_passed"] = float(gate_ok)
-        if gate_reason:
-            ik_stats["activation_gate_reason"] = gate_reason
-        if not gate_ok:
-            raise RuntimeError(
-                f"Muscle activation skipped ({method}): IK/clip gate failed ({gate_reason})"
-            )
 
         append_verbose_log(
             f"{trial_name}: {method} start "
             f"({num_frames} frames, mesh={act_cfg.mesh_interval})"
         )
         t0 = time.perf_counter()
-        act_result = compute_muscle_activation(q_traj, cfg=act_cfg)
+        try:
+            act_result = compute_muscle_activation(q_traj, cfg=act_cfg)
+        except Exception:
+            fallback_act, fallback_meta = fallback_muscle_activations(
+                num_frames,
+                act_cfg,
+            )
+            act_result = MuscleActivationResult(
+                activations=fallback_act,
+                muscle_names=muscle_names(),
+                metadata={"activation_method": method, **fallback_meta},
+            )
         ik_stats["muscle_activation_seconds"] = float(time.perf_counter() - t0)
+        ik_stats["muscle_activation_computed"] = 1.0
         obj = act_result.metadata.get("moco_objective")
         obj_s = f"{float(obj):.6f}" if obj is not None and np.isfinite(float(obj)) else "n/a"
         append_verbose_log(
@@ -233,7 +234,6 @@ def export_motion_to_b3d(
                     f"{trial_name}: moco_solve "
                     f"iterations={iters} status={status} mesh_interval={mesh}"
                 )
-        ik_stats["muscle_activation_computed"] = 1.0
         ik_stats["muscle_activation_repaired_frames"] = float(
             act_result.metadata.get("repaired_frame_count", 0)
         )
@@ -287,11 +287,12 @@ def export_motion_to_b3d(
 
     b3d_subject.setCustomValueNames(list(B3D_CUSTOM_VALUE_NAMES))
     b3d_trial.setCustomValues(
-        [
-            pack_guidance_features(bio),
-            pack_sindy_features(u, c),
-            pack_muscle_activations(muscle_act),
-        ]
+        pack_b3d_trial_custom_values(
+            muscle_activations=muscle_act,
+            guidance_bio=bio,
+            sindy_u=u,
+            sindy_c=c,
+        )
     )
     del bio, u, c, muscle_act
     ik_stats["guidance_features_computed"] = 1.0

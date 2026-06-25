@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import os
 import sys
 import traceback
@@ -15,6 +16,34 @@ from typing import Callable, Iterator, Optional, TextIO, TypeVar
 from tqdm import tqdm
 
 _T = TypeVar("_T")
+
+
+class _LockedAppendFile:
+    """Append-only log handle safe for concurrent writers on a shared filesystem."""
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._fp = path.open("a", encoding="utf-8", buffering=1)
+
+    def write(self, data: str) -> int:
+        if not data:
+            return 0
+        fcntl.flock(self._fp.fileno(), fcntl.LOCK_EX)
+        try:
+            self._fp.write(data)
+            self._fp.flush()
+        finally:
+            fcntl.flock(self._fp.fileno(), fcntl.LOCK_UN)
+        return len(data)
+
+    def flush(self) -> None:
+        self._fp.flush()
+
+    def close(self) -> None:
+        self._fp.close()
+
+    def fileno(self) -> int:
+        return self._fp.fileno()
 
 
 class _TeeStream:
@@ -61,10 +90,14 @@ class RunLogger:
         terminal: TextIO,
         log_file: TextIO | None,
         progress_enabled: bool = True,
+        shared_log: bool = False,
+        line_prefix: str = "",
     ) -> None:
         self._terminal = terminal
         self._log_file = log_file
         self._progress_enabled = progress_enabled
+        self._shared_log = shared_log
+        self._line_prefix = line_prefix
 
     @property
     def enabled(self) -> bool:
@@ -78,11 +111,22 @@ class RunLogger:
     def log_file_stream(self) -> TextIO | None:
         return self._log_file
 
+    @property
+    def shared_log(self) -> bool:
+        return self._shared_log
+
+    def _format(self, msg: str) -> str:
+        if self._line_prefix and msg:
+            return f"{self._line_prefix}{msg}"
+        return msg
+
     def _emit(self, msg: str) -> None:
+        terminal_msg = msg
+        file_msg = self._format(msg)
         if self._progress_enabled:
-            print(msg, file=self._terminal, flush=True)
+            print(terminal_msg, file=self._terminal, flush=True)
         if self._log_file is not None:
-            print(msg, file=self._log_file, flush=True)
+            print(file_msg, file=self._log_file, flush=True)
 
     def progress(self, msg: str) -> None:
         self._emit(msg)
@@ -165,12 +209,13 @@ def dual_tqdm(
 ) -> DualTqdm:
     """Create a progress bar on the active logger's terminal and log file."""
     log = logger if logger is not None else get_run_logger()
+    log_file = None if log.shared_log else log.log_file_stream
     return DualTqdm(
         total=total,
         desc=desc,
         unit=unit,
         terminal=log.terminal,
-        log_file=log.log_file_stream,
+        log_file=log_file,
     )
 
 
@@ -194,6 +239,9 @@ def get_run_logger() -> RunLogger:
 
 def append_verbose_log(msg: str) -> None:
     """Write a line to the active run log or ``SINDYFFUSE_VERBOSE_LOG`` (worker processes)."""
+    prefix = os.environ.get("SINDYFFUSE_VERBOSE_LOG_PREFIX", "").strip()
+    if prefix:
+        msg = f"{prefix} {msg}" if not prefix.endswith(" ") else f"{prefix}{msg}"
     active = _ACTIVE_LOGGER
     if active is not None and active.enabled:
         active.verbose(msg)
@@ -203,7 +251,11 @@ def append_verbose_log(msg: str) -> None:
         return
     try:
         with open(path, "a", encoding="utf-8") as fp:
-            print(msg, file=fp, flush=True)
+            fcntl.flock(fp.fileno(), fcntl.LOCK_EX)
+            try:
+                print(msg, file=fp, flush=True)
+            finally:
+                fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
     except OSError:
         pass
 
@@ -218,20 +270,35 @@ def default_log_dir(repo_root: Path | None = None) -> Path:
     return root / "logs"
 
 
+def resolve_run_log_id(explicit: str | None = None) -> str | None:
+    """Shared run id for distributed jobs (``SINDYFFUSE_RUN_LOG_ID`` env or CLI)."""
+    if explicit is not None and str(explicit).strip():
+        return str(explicit).strip()
+    env = os.environ.get("SINDYFFUSE_RUN_LOG_ID", "").strip()
+    return env or None
+
+
 def build_run_log_paths(
     log_dir: str | Path,
     *,
     script_name: str,
     rank: int | None = None,
+    run_id: str | None = None,
 ) -> RunLogPaths:
-    """Return paths for ``{script_name}_{timestamp}.log`` and ``{script_name}.log``."""
+    """Return paths for per-run logs and the ``{script_name}.log`` latest symlink."""
     directory = Path(log_dir).expanduser().resolve()
     directory.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     safe_name = Path(script_name).stem.strip().replace("/", "_") or "run"
     if rank is not None and rank > 0:
         safe_name = f"{safe_name}_rank{rank}"
-    log_file = directory / f"{safe_name}_{stamp}.log"
+
+    resolved_run_id = resolve_run_log_id(run_id)
+    if resolved_run_id:
+        log_file = directory / f"{safe_name}_{resolved_run_id}.log"
+    else:
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        log_file = directory / f"{safe_name}_{stamp}.log"
+
     latest_stem = safe_name if rank is None or rank == 0 else Path(script_name).stem
     return RunLogPaths(
         log_dir=directory,
@@ -253,6 +320,12 @@ def add_run_log_cli_args(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Disable verbose file logging under logs/.",
     )
+    parser.add_argument(
+        "--run_log_id",
+        type=str,
+        default="",
+        help="Shared run id for distributed shards (default: SINDYFFUSE_RUN_LOG_ID env).",
+    )
 
 
 def _update_latest_link(target: Path, latest: Path) -> None:
@@ -272,20 +345,37 @@ def run_log_session(
     argv: Optional[list[str]] = None,
     progress_enabled: bool = True,
     rank: int | None = None,
+    run_id: str | None = None,
+    line_prefix: str = "",
 ) -> Iterator[tuple[RunLogPaths, RunLogger]]:
     """Mirror stderr to log file; use ``RunLogger`` for stdout channels."""
-    paths = build_run_log_paths(log_dir, script_name=script_name, rank=rank)
-    log_fp = paths.log_file.open("a", encoding="utf-8", buffering=1)
+    resolved_run_id = resolve_run_log_id(run_id)
+    paths = build_run_log_paths(
+        log_dir,
+        script_name=script_name,
+        rank=rank,
+        run_id=resolved_run_id,
+    )
+    shared_log = resolved_run_id is not None
+    log_fp: TextIO
+    if shared_log:
+        log_fp = _LockedAppendFile(paths.log_file)  # type: ignore[assignment]
+    else:
+        log_fp = paths.log_file.open("a", encoding="utf-8", buffering=1)
     prev_stderr = sys.stderr
     logger = RunLogger(
         terminal=sys.stdout,
         log_file=log_fp,
         progress_enabled=progress_enabled,
+        shared_log=shared_log,
+        line_prefix=line_prefix,
     )
     sys.stderr = _TeeStream(prev_stderr, log_fp)  # type: ignore[assignment]
 
     logger.verbose(f"=== run log start {datetime.now(timezone.utc).isoformat()} ===")
     logger.verbose(f"log_file={paths.log_file}")
+    if resolved_run_id:
+        logger.verbose(f"run_log_id={resolved_run_id}")
     if argv is not None:
         logger.verbose(f"argv={' '.join(argv)}")
 
@@ -312,7 +402,9 @@ def run_log_session(
             print(f"=== run log end exit_code={exit_code} ===", file=log_fp, flush=True)
         finally:
             log_fp.close()
-        if rank is None or rank == 0:
+        if resolved_run_id:
+            _update_latest_link(paths.log_file, paths.latest_log)
+        elif rank is None or rank == 0:
             _update_latest_link(paths.log_file, paths.latest_log)
             paths.latest_exit_code.write_text(f"{exit_code}\n", encoding="utf-8")
 
@@ -326,6 +418,8 @@ def run_logged_main(
     no_run_log: bool = False,
     progress_enabled: bool = True,
     rank: int | None = None,
+    run_id: str | None = None,
+    line_prefix: str = "",
 ) -> _T:
     """Run ``fn(logger)`` inside a file log session unless ``no_run_log``."""
     if no_run_log:
@@ -336,6 +430,8 @@ def run_logged_main(
         argv=argv,
         progress_enabled=progress_enabled,
         rank=rank,
+        run_id=run_id,
+        line_prefix=line_prefix,
     ) as (paths, logger):
         logger.progress(f"log: {paths.latest_log}")
         return fn(logger)

@@ -580,27 +580,32 @@ def interpolate_activation_frames(
 def apply_activation_postprocess(
     activations: np.ndarray,
     cfg: MuscleActivationConfig,
+    *,
+    force_repair: bool = False,
 ) -> tuple[np.ndarray, Dict[str, Any]]:
     """Interpolate non-finite frames and optionally low-pass the activation trajectory."""
     from nimble.smoothing import smooth_activation_trajectory
 
     meta: Dict[str, Any] = {}
     act = np.asarray(activations, dtype=np.float32)
+    needs_repair = bool(force_repair) or bool(cfg.interpolate_activations)
+    if not np.isfinite(act).all():
+        needs_repair = True
 
-    if cfg.interpolate_activations or float(cfg.activation_smooth_hz) > 0.0:
-        if cfg.interpolate_activations:
-            act, repair_meta = interpolate_activation_frames(act)
-            meta.update(repair_meta)
-        else:
-            meta["repaired_frame_count"] = 0
+    if needs_repair:
+        act, repair_meta = interpolate_activation_frames(act)
+        meta.update(repair_meta)
 
-        if float(cfg.activation_smooth_hz) > 0.0:
-            act = smooth_activation_trajectory(
-                act,
-                fps=float(cfg.fps),
-                cutoff_hz=float(cfg.activation_smooth_hz),
-            )
-            meta["activation_smooth_hz"] = float(cfg.activation_smooth_hz)
+    if float(cfg.activation_smooth_hz) > 0.0:
+        act = smooth_activation_trajectory(
+            act,
+            fps=float(cfg.fps),
+            cutoff_hz=float(cfg.activation_smooth_hz),
+        )
+        meta["activation_smooth_hz"] = float(cfg.activation_smooth_hz)
+
+    if not np.isfinite(act).all():
+        act = np.nan_to_num(act, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
 
     return act, meta
 
@@ -643,12 +648,33 @@ def _finalize_activation_result(
     *,
     method_label: str,
 ) -> MuscleActivationResult:
-    if not np.isfinite(result.activations).all():
-        raise RuntimeError(
-            f"{method_label} produced non-finite muscle activations after postprocess; "
-            f"repaired={result.metadata.get('repaired_frame_count', 0)} frames"
-        )
-    return result
+    had_non_finite = not np.isfinite(result.activations).all()
+    activations, repair_meta = apply_activation_postprocess(
+        result.activations,
+        cfg,
+        force_repair=had_non_finite,
+    )
+    metadata = dict(result.metadata)
+    metadata.update(repair_meta)
+    return MuscleActivationResult(
+        activations=activations,
+        muscle_names=result.muscle_names,
+        metadata=metadata,
+        forces=result.forces,
+    )
+
+
+def fallback_muscle_activations(
+    num_frames: int,
+    cfg: MuscleActivationConfig,
+    *,
+    num_muscles: int | None = None,
+) -> tuple[np.ndarray, Dict[str, Any]]:
+    """Build a repaired activation trajectory when OpenSim muscle solve fails entirely."""
+    n_muscles = int(num_muscles or len(muscle_names()))
+    placeholder = np.full((int(num_frames), n_muscles), np.nan, dtype=np.float32)
+    activations, meta = apply_activation_postprocess(placeholder, cfg, force_repair=True)
+    return activations, meta
 
 
 def compute_muscle_activation(

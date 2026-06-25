@@ -55,7 +55,12 @@ from common.cpu import (
     resolve_k8s_shard,
     resolve_preprocess_parallelism,
 )
-from common.paths import NIMBLE_B3D_SUBDIR, default_humanml3d_root, nimble_b3d_dir
+from common.paths import (
+    NIMBLE_B3D_SUBDIR,
+    cleanup_preprocess_manifests,
+    default_humanml3d_root,
+    nimble_b3d_dir,
+)
 from common.run_logging import (
     DualTqdm,
     RunLogger,
@@ -685,6 +690,9 @@ def run_preprocess(args: argparse.Namespace, logger: RunLogger | None = None) ->
 
     if not skip_normalization:
         compute_nimble_normalization_stats(out_root)
+        removed = cleanup_preprocess_manifests(out_root)
+        if removed:
+            log.verbose(f"Removed {len(removed)} temporary preprocess manifest file(s)")
 
     from nimble.export import clear_export_caches
 
@@ -784,8 +792,22 @@ def main() -> None:
         run_preprocess(args, null_logger())
         return
 
+    num_shards = int(getattr(args, "num_shards", 1) or 1)
+    shard_index = getattr(args, "shard_index", None)
+    line_prefix = ""
+    if num_shards > 1 and shard_index is not None and int(shard_index) >= 0:
+        line_prefix = f"[shard={int(shard_index):04d}] "
+        os.environ["SINDYFFUSE_VERBOSE_LOG_PREFIX"] = line_prefix.strip()
+
+    run_log_id = str(getattr(args, "run_log_id", "") or "").strip() or None
     script_name = Path(__file__).stem
-    with run_log_session(args.log_dir, script_name=script_name, argv=sys.argv) as (
+    with run_log_session(
+        args.log_dir,
+        script_name=script_name,
+        argv=sys.argv,
+        run_id=run_log_id,
+        line_prefix=line_prefix,
+    ) as (
         paths,
         logger,
     ):

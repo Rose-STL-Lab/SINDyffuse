@@ -15,6 +15,7 @@ from nimble.b3d_schema import (
     unpack_muscle_activations,
     unpack_sindy_features,
 )
+from nimble.muscle_b3d import MUSCLE_ACTIVATION_ROWS
 
 _WARNED_MISSING: set[str] = set()
 
@@ -109,12 +110,11 @@ def warn_missing_custom_once(b3d_path: str, name: str) -> None:
     )
 
 
-def b3d_has_sindyffuse_custom_values(subj: Any, trial: int = 0) -> bool:
-    """True when guidance/sindy custom channels are readable on disk (not just named)."""
+def b3d_has_cached_sindy_features(subj: Any, trial: int = 0) -> bool:
+    """True when guidance + sindy custom channels are readable on disk."""
     if not (
         subject_has_custom_value(subj, GUIDANCE_FEATURES)
         and subject_has_custom_value(subj, SINDY_FEATURES)
-        and subject_has_custom_value(subj, MUSCLE_ACTIVATIONS)
     ):
         return False
     try:
@@ -130,8 +130,36 @@ def b3d_has_sindyffuse_custom_values(subj: Any, trial: int = 0) -> bool:
     if not frames:
         return False
     fr = frames[0]
-    return (
-        _frame_has_custom(fr, GUIDANCE_FEATURES)
-        and _frame_has_custom(fr, SINDY_FEATURES)
-        and _frame_has_custom(fr, MUSCLE_ACTIVATIONS)
+    return _frame_has_custom(fr, GUIDANCE_FEATURES) and _frame_has_custom(fr, SINDY_FEATURES)
+
+
+def b3d_has_muscle_activations(subj: Any, trial: int = 0) -> bool:
+    """True when ``muscle_activations`` is readable with the full 80-muscle width."""
+    if not subject_has_custom_value(subj, MUSCLE_ACTIVATIONS):
+        return False
+    try:
+        dim = int(subj.getCustomValueDim(MUSCLE_ACTIVATIONS))
+    except Exception:
+        dim = 0
+    if dim != int(MUSCLE_ACTIVATION_ROWS):
+        return False
+    try:
+        frames = subj.readFrames(
+            trial=int(trial),
+            startFrame=0,
+            numFramesToRead=1,
+            includeSensorData=True,
+            includeProcessingPasses=False,
+        )
+    except Exception:
+        return False
+    if not frames:
+        return False
+    return _frame_has_custom(frames[0], MUSCLE_ACTIVATIONS)
+
+
+def b3d_has_sindyffuse_custom_values(subj: Any, trial: int = 0) -> bool:
+    """True when muscle (80), guidance, and sindy custom channels are all readable."""
+    return b3d_has_muscle_activations(subj, trial=trial) and b3d_has_cached_sindy_features(
+        subj, trial=trial
     )

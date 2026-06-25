@@ -20,6 +20,7 @@ NIMBLE_B3D_SUBDIR = "nimble_b3d"
 
 __all__ = [
     "NIMBLE_B3D_SUBDIR",
+    "cleanup_preprocess_manifests",
     "default_datasets_dir",
     "default_humanml3d_root",
     "nimble_b3d_dir",
@@ -62,3 +63,17 @@ def resolve_repo_path(path: str | Path) -> Path:
     if p.is_absolute():
         return p.resolve()
     return (repo_root() / p).resolve()
+
+
+def cleanup_preprocess_manifests(out_root: str | Path) -> list[str]:
+    """Remove temporary preprocess manifest files from the dataset root."""
+    root = Path(out_root).expanduser().resolve()
+    removed: list[str] = []
+    for path in sorted(root.glob("preprocess_manifest*.jsonl")):
+        path.unlink()
+        removed.append(str(path))
+    meta = root / "preprocess_meta.json"
+    if meta.is_file():
+        meta.unlink()
+        removed.append(str(meta))
+    return removed

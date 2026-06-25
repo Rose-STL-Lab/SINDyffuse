@@ -24,6 +24,8 @@ spec:
         env:
         - name: PREPROCESS_NUM_SHARDS
           value: "64"
+        - name: SINDYFFUSE_RUN_LOG_ID
+          value: "RUN_LOG_ID_PLACEHOLDER"
         command: ["/bin/bash", "-c"]
         args:
         - |
@@ -38,8 +40,6 @@ spec:
             --out_root "${HML}" \
             --num_shards "${NUM_SHARDS}" \
             --log_dir /mnt/SINDyffuse/logs
-          test -f "${HML}/preprocess_manifest.jsonl"
-          test -f "${HML}/preprocess_meta.json"
           test -f "${HML}/nimble_b3d/Mean.npy"
           test -f "${HML}/nimble_b3d/Std.npy"
         resources:

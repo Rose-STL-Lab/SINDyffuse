@@ -23,7 +23,8 @@ moco_track_segment_*_tracked_states.sto
 sindyffuse_so_*/
 sindyffuse_moco_*/
 *.npz
-preprocess_manifest.jsonl
+preprocess_manifest*.jsonl
+preprocess_meta.json
 
 # Editor / OS
 .DS_Store

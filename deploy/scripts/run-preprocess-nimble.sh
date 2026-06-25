@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Run distributed preprocess on Kubernetes: 64 worker pods, then compute normalization.
+# Run distributed preprocess on Kubernetes: 180 worker pods, then compute normalization.
 #
 # Usage:
 #   ./deploy/scripts/run-preprocess-nimble.sh [none|static-optimization|moco-track]
 #   ACTIVATION_METHOD=static_optimization ./deploy/scripts/run-preprocess-nimble.sh
 #
 # Environment overrides:
-#   PREPROCESS_NUM_SHARDS    shard count (default: 64)
+#   PREPROCESS_NUM_SHARDS    shard count (default: 180)
 #   WORKER_TIMEOUT           kubectl wait timeout for worker Job (default: 48h)
 #   NORMALIZATION_TIMEOUT    kubectl wait timeout for normalization Job (default: 1h)
 #   KUSTOMIZE_DIR            override worker job kustomization path
@@ -56,11 +56,14 @@ NORMALIZATION_JOB="${NORMALIZATION_JOB:-${KUSTOMIZE_DIR}/normalization-job.yaml}
 
 WORKER_TIMEOUT="${WORKER_TIMEOUT:-48h}"
 NORMALIZATION_TIMEOUT="${NORMALIZATION_TIMEOUT:-${FINALIZE_TIMEOUT:-1h}}"
-export PREPROCESS_NUM_SHARDS="${PREPROCESS_NUM_SHARDS:-64}"
+export PREPROCESS_NUM_SHARDS="${PREPROCESS_NUM_SHARDS:-180}"
+RUN_LOG_ID="${RUN_LOG_ID:-preprocess_${METHOD_FOLDER}_$(date -u +%Y%m%dT%H%M%SZ)}"
+export RUN_LOG_ID
 
 echo "=== preprocess nimble (distributed) ==="
 echo "method=${METHOD_FOLDER} activation_method=${ACTIVATION_METHOD}"
 echo "num_shards=${PREPROCESS_NUM_SHARDS}"
+echo "run_log_id=${RUN_LOG_ID}"
 echo "worker kustomize:    ${KUSTOMIZE_DIR}"
 echo "normalization job:   ${NORMALIZATION_JOB}"
 
@@ -72,7 +75,8 @@ fi
 echo "Applying worker Indexed Job..."
 manifest="$(kubectl kustomize "${KUSTOMIZE_DIR}")"
 manifest="$(printf '%s\n' "${manifest}" | sed \
-  "/name: PREPROCESS_NUM_SHARDS/{n;s/value: .*/value: \"${PREPROCESS_NUM_SHARDS}\"/;}")"
+  "s|RUN_LOG_ID_PLACEHOLDER|${RUN_LOG_ID}|g; \
+  /name: PREPROCESS_NUM_SHARDS/{n;s/value: .*/value: \"${PREPROCESS_NUM_SHARDS}\"/;}")"
 printf '%s\n' "${manifest}" | kubectl apply -f -
 
 echo "Waiting for worker Job to complete (timeout=${WORKER_TIMEOUT})..."
@@ -81,11 +85,13 @@ kubectl wait --for=condition=complete "job/${WORKER_JOB_NAME}" --timeout="${WORK
 echo "Applying normalization Job..."
 normalization_manifest="$(cat "${NORMALIZATION_JOB}")"
 normalization_manifest="$(printf '%s\n' "${normalization_manifest}" | sed \
-  "/name: PREPROCESS_NUM_SHARDS/{n;s/value: .*/value: \"${PREPROCESS_NUM_SHARDS}\"/;}")"
+  "s|RUN_LOG_ID_PLACEHOLDER|${RUN_LOG_ID}|g; \
+  /name: PREPROCESS_NUM_SHARDS/{n;s/value: .*/value: \"${PREPROCESS_NUM_SHARDS}\"/;}")"
 printf '%s\n' "${normalization_manifest}" | kubectl apply -f -
 
 echo "Waiting for normalization Job to complete (timeout=${NORMALIZATION_TIMEOUT})..."
 kubectl wait --for=condition=complete "job/${NORMALIZATION_JOB_NAME}" --timeout="${NORMALIZATION_TIMEOUT}"
 
 echo "=== preprocess complete ==="
+echo "shared log: ${REPO_ROOT}/logs/preprocess_nimble.log"
 kubectl get job "${WORKER_JOB_NAME}" "${NORMALIZATION_JOB_NAME}"

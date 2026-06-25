@@ -26,7 +26,12 @@ _REPO = Path(__file__).resolve().parent.parent
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
-from common.paths import NIMBLE_B3D_SUBDIR, default_humanml3d_root, nimble_b3d_dir
+from common.paths import (
+    NIMBLE_B3D_SUBDIR,
+    cleanup_preprocess_manifests,
+    default_humanml3d_root,
+    nimble_b3d_dir,
+)
 from common.run_logging import RunLogger, add_run_log_cli_args, null_logger, run_log_session
 from datasets.nimble_dataset import compute_nimble_normalization_stats
 
@@ -172,6 +177,11 @@ def compute_normalization(
 
     stats = compute_nimble_normalization_stats(out_root)
     log.progress(f"Wrote normalization stats: {stats['mean_path']}")
+
+    removed = cleanup_preprocess_manifests(out_root)
+    if removed:
+        log.verbose(f"Removed {len(removed)} temporary preprocess manifest file(s)")
+
     return meta
 
 

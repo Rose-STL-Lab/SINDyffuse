@@ -1,4 +1,8 @@
-"""Pre-activation quality gates (IK, clip length) for MocoTrack."""
+"""Pre-activation quality metrics (IK, clip length).
+
+Gating is no longer enforced before muscle activation; motions always attempt
+``moco_track`` / ``static_optimization`` and repair missing activations later.
+"""
 
 from __future__ import annotations
 
@@ -35,7 +39,7 @@ def evaluate_activation_gate(
     num_frames: int,
     cfg: MuscleActivationConfig,
 ) -> Tuple[bool, str]:
-    """Return whether MocoTrack should run on this clip."""
+    """Advisory gate metrics only (not enforced during export)."""
     if int(num_frames) < int(cfg.moco_min_frames):
         return False, f"frame_count {num_frames} < min_frames {cfg.moco_min_frames}"
 

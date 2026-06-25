@@ -107,6 +107,63 @@ def fill_invalid_pose_frames(
     return out, filled
 
 
+def repair_poor_ik_pose_frames(
+    poses_q: np.ndarray,
+    fk_loss: np.ndarray,
+    *,
+    max_fk_loss: float,
+) -> Tuple[np.ndarray, int, float]:
+    """Replace frames whose FK loss exceeds ``max_fk_loss`` by interpolating ``q``.
+
+    Good frames have finite FK loss at or below the threshold. Poor frames are
+    re-filled from the nearest good frames on each side; one-sided gaps copy
+    the nearest good pose. ``max_fk_loss <= 0`` disables repair.
+    """
+    out = np.asarray(poses_q, dtype=np.float64).copy()
+    losses = np.asarray(fk_loss, dtype=np.float64).reshape(-1)
+    if out.ndim != 2:
+        raise ValueError(f"Expected poses_q [num_dofs, T], got {out.shape}")
+    t_frames = int(out.shape[1])
+    if losses.shape[0] != t_frames:
+        raise ValueError(
+            f"fk_loss length {losses.shape[0]} != poses_q frames {t_frames}"
+        )
+    thresh = float(max_fk_loss)
+    if t_frames < 2 or thresh <= 0.0:
+        return out, 0, thresh
+
+    valid_pose = np.array(
+        [not pose_is_invalid(out[:, t]) for t in range(t_frames)], dtype=bool
+    )
+    finite = np.isfinite(losses) & valid_pose
+
+    is_good = finite & (losses <= thresh)
+    need_repair = finite & (losses > thresh)
+    repaired = 0
+    for t in np.flatnonzero(need_repair):
+        left = right = None
+        for i in range(int(t) - 1, -1, -1):
+            if is_good[i]:
+                left = i
+                break
+        for i in range(int(t) + 1, t_frames):
+            if is_good[i]:
+                right = i
+                break
+        if left is not None and right is not None:
+            w = float(t - left) / float(right - left)
+            out[:, t] = (1.0 - w) * out[:, left] + w * out[:, right]
+            repaired += 1
+        elif left is not None:
+            out[:, t] = out[:, left]
+            repaired += 1
+        elif right is not None:
+            out[:, t] = out[:, right]
+            repaired += 1
+
+    return out, repaired, thresh
+
+
 def _get_joint_ik_cache(
     skeleton: Any,
     ik_mapping: Tuple[Tuple[str, int], ...] | None = None,
@@ -302,6 +359,8 @@ def fit_q(
     ik_mapping: Tuple[Tuple[str, int], ...] | None = None,
     bidirectional: bool = True,
     scale_first_frame: bool = True,
+    repair_poor_fk_frames: bool = True,
+    fk_loss_repair_threshold: float = 0.01,
 ) -> Tuple[np.ndarray, Dict[str, Any]]:
     """Fit a Nimble skeleton's ``q`` to HumanML3D positions with per-frame IK.
 
@@ -321,6 +380,13 @@ def fit_q(
             body proportions (e.g. hip width 11.9 cm for SMPL-H vs 15.5 cm
             default). Without it the IK rolls the pelvis ~20 deg sideways
             every frame to compensate.
+        repair_poor_fk_frames: when ``True`` (default), replace frames whose
+            per-frame FK task-space loss exceeds ``fk_loss_repair_threshold``
+            by linearly interpolating ``q`` from neighboring good frames. Runs
+            after invalid-frame fill and before any downstream pose smoothing.
+        fk_loss_repair_threshold: max acceptable per-frame FK loss (sum of
+            squared joint position errors in m^2 over IK targets). Set ``<= 0``
+            to disable poor-fit repair.
 
     Returns:
         ``poses_q``: ``(num_dofs, T)`` generalized coordinates.
@@ -389,6 +455,15 @@ def fit_q(
     poses_q, filled_frames = fill_invalid_pose_frames(final_q)
     held_frames = fwd_held + filled_frames
 
+    repaired_poor = 0
+    fk_repair_thresh = float("inf")
+    if repair_poor_fk_frames:
+        poses_q, repaired_poor, fk_repair_thresh = repair_poor_ik_pose_frames(
+            poses_q,
+            final_fk,
+            max_fk_loss=fk_loss_repair_threshold,
+        )
+
     finite_solver = final_solver[np.isfinite(final_solver)]
     success = int(finite_solver.size)
 
@@ -399,6 +474,8 @@ def fit_q(
         "success_ratio": float(success / max(t_frames, 1)),
         "held_frames": float(held_frames),
         "filled_invalid_frames": float(filled_frames),
+        "ik_poor_fit_repaired_frames": float(repaired_poor),
+        "ik_fk_loss_repair_threshold": float(fk_repair_thresh),
         "bidirectional": float(bool(bidirectional)),
         "bidi_chose_backward": float(chose_bwd),
         "per_frame_loss": final_solver.tolist(),
