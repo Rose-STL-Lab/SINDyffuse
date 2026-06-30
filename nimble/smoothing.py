@@ -82,6 +82,13 @@ def apply_pose_smoothing_torch(
     meta["method"] = "fir_firwin_conv1d"
 
     num_taps = _fir_num_taps(sr, eff_fc, smooth_butterworth_order)
+    pad = (num_taps - 1) // 2
+    t_frames = int(poses.shape[0])
+    if t_frames <= 2 * pad:
+        meta["enabled"] = False
+        meta["method"] = "skipped_short_clip"
+        return poses, meta
+
     w_np = sp_signal.firwin(num_taps, eff_fc, fs=sr)
     w_t = torch.as_tensor(w_np, dtype=poses.dtype, device=poses.device).view(1, 1, -1)
 
@@ -94,7 +101,6 @@ def apply_pose_smoothing_torch(
     # implementation) interleaves channels into the time axis and silently
     # corrupts the signal (it scrambled pelvis q in every produced B3D file).
     orig_shape = tuple(poses.shape)
-    t_frames = int(orig_shape[0])
     # Flatten everything except time into a single channel dimension.
     x_flat = poses.reshape(t_frames, -1)
     n_channels = int(x_flat.shape[1])

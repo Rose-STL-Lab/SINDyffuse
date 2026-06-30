@@ -23,7 +23,7 @@ spec:
         workingDir: /mnt/SINDyffuse
         env:
         - name: PREPROCESS_NUM_SHARDS
-          value: "180"
+          value: "64"
         - name: SINDYFFUSE_RUN_LOG_ID
           value: "RUN_LOG_ID_PLACEHOLDER"
         command: ["/bin/bash", "-c"]
@@ -35,7 +35,7 @@ spec:
           export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
           export PYTHONPATH=/mnt/SINDyffuse
           HML=/mnt/SINDyffuse/datasets/HumanML3D
-          NUM_SHARDS="${PREPROCESS_NUM_SHARDS:-180}"
+          NUM_SHARDS="${PREPROCESS_NUM_SHARDS:-64}"
           python scripts/compute_normalization.py \
             --out_root "${HML}" \
             --num_shards "${NUM_SHARDS}" \

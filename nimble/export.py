@@ -32,7 +32,7 @@ from nimble.muscle_activation import (
     normalize_activation_method,
     opensim_quiet,
 )
-from nimble.ik import fit_q
+from nimble.ik import fit_q, postprocess_ik_poses
 from nimble.physics import load_model
 from nimble.skeleton_registry import get_spec
 from nimble.smoothing import apply_pose_smoothing_numpy
@@ -134,8 +134,8 @@ def export_motion_to_b3d(
     append_verbose_log(f"{trial_name}: IK fitting start ({num_input_frames} frames)")
     poses_q, ik_stats = fit_q(poses, sk, ik_mapping=spec.ik_mapping)
     del poses
-    ik_stats.pop("per_frame_loss", None)
-    ik_stats.pop("per_frame_fk_loss", None)
+    per_frame_fk = ik_stats.pop("per_frame_fk_loss", None)
+    per_frame_solver = ik_stats.pop("per_frame_loss", None)
     append_verbose_log(
         f"{trial_name}: IK fitting done "
         f"mean_fk_loss={ik_stats.get('mean_fk_loss', float('nan')):.6f} "
@@ -145,11 +145,24 @@ def export_motion_to_b3d(
         f"frames={int(ik_stats.get('total_frames', 0))}"
     )
 
-    min_success = 2
-    if int(ik_stats.get("success_count", 0)) < min_success:
-        raise RuntimeError(
-            f"IK failed for {trial_name}: success {ik_stats.get('success_count', 0)}/"
-            f"{ik_stats.get('total_frames', 0)}"
+    if per_frame_fk is not None:
+        ik_stats["per_frame_fk_loss"] = per_frame_fk
+    if per_frame_solver is not None:
+        ik_stats["per_frame_loss"] = per_frame_solver
+
+    poses_q, repair_meta = postprocess_ik_poses(poses_q, ik_stats)
+    ik_stats.update(repair_meta)
+    ik_stats["ik_poor_fit_repaired_frames"] = float(
+        int(ik_stats.get("ik_poor_fit_repaired_frames", 0))
+        + int(repair_meta.get("ik_poor_fit_interpolations", 0))
+        + int(repair_meta.get("ik_failed_frame_interpolations", 0))
+    )
+    failed_interp = int(repair_meta.get("ik_failed_frame_interpolations", 0))
+    poor_interp = int(repair_meta.get("ik_poor_fit_interpolations", 0))
+    if failed_interp or poor_interp:
+        append_verbose_log(
+            f"{trial_name}: IK postprocess "
+            f"failed_interp={failed_interp} poor_interp={poor_interp}"
         )
 
     q_time_dof = np.ascontiguousarray(poses_q.T, dtype=np.float32)

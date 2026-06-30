@@ -2,7 +2,7 @@
 
 Supports three methods: skip (``none``), ``moco_track``, and
 ``static_optimization``. Results are cached in B3D as ``muscle_activations``
-``[M, T]``. Non-finite frames are linearly interpolated before optional
+``[M, T]``. Non-finite frames are always linearly interpolated before optional
 temporal smoothing.
 
 OpenSim solves are **not differentiable**; use cached labels for training.
@@ -41,7 +41,6 @@ class MuscleActivationConfig:
     activation_method: str = "moco_track"
     fps: float = 20.0
     mass_kg: float = 70.0
-    interpolate_activations: bool = True
     activation_smooth_hz: float = 6.0
     opensim_log_level: str = "Off"
     temp_dir: Optional[str] = None
@@ -287,11 +286,6 @@ def add_muscle_activation_cli_args(parser: argparse.ArgumentParser) -> None:
         help="Reject clip when pelvis vertical range exceeds this (m); default 0.8.",
     )
     grp.add_argument(
-        "--moco_no_repair",
-        action="store_true",
-        help="Disable temporal interpolation of non-finite activation frames.",
-    )
-    grp.add_argument(
         "--activation_smooth_hz",
         type=float,
         default=None,
@@ -411,7 +405,6 @@ def muscle_activation_config_from_args(
         moco_max_pelvis_ty_range_m=_pick(
             "moco_max_pelvis_ty_range_m", "moco_max_pelvis_ty_range_m"
         ),
-        interpolate_activations=not bool(getattr(args, "moco_no_repair", False)),
         activation_smooth_hz=float(
             getattr(args, "activation_smooth_hz", None)
             if getattr(args, "activation_smooth_hz", None) is not None
@@ -580,21 +573,14 @@ def interpolate_activation_frames(
 def apply_activation_postprocess(
     activations: np.ndarray,
     cfg: MuscleActivationConfig,
-    *,
-    force_repair: bool = False,
 ) -> tuple[np.ndarray, Dict[str, Any]]:
     """Interpolate non-finite frames and optionally low-pass the activation trajectory."""
     from nimble.smoothing import smooth_activation_trajectory
 
     meta: Dict[str, Any] = {}
     act = np.asarray(activations, dtype=np.float32)
-    needs_repair = bool(force_repair) or bool(cfg.interpolate_activations)
-    if not np.isfinite(act).all():
-        needs_repair = True
-
-    if needs_repair:
-        act, repair_meta = interpolate_activation_frames(act)
-        meta.update(repair_meta)
+    act, repair_meta = interpolate_activation_frames(act)
+    meta.update(repair_meta)
 
     if float(cfg.activation_smooth_hz) > 0.0:
         act = smooth_activation_trajectory(
@@ -648,12 +634,7 @@ def _finalize_activation_result(
     *,
     method_label: str,
 ) -> MuscleActivationResult:
-    had_non_finite = not np.isfinite(result.activations).all()
-    activations, repair_meta = apply_activation_postprocess(
-        result.activations,
-        cfg,
-        force_repair=had_non_finite,
-    )
+    activations, repair_meta = apply_activation_postprocess(result.activations, cfg)
     metadata = dict(result.metadata)
     metadata.update(repair_meta)
     return MuscleActivationResult(
@@ -673,7 +654,7 @@ def fallback_muscle_activations(
     """Build a repaired activation trajectory when OpenSim muscle solve fails entirely."""
     n_muscles = int(num_muscles or len(muscle_names()))
     placeholder = np.full((int(num_frames), n_muscles), np.nan, dtype=np.float32)
-    activations, meta = apply_activation_postprocess(placeholder, cfg, force_repair=True)
+    activations, meta = apply_activation_postprocess(placeholder, cfg)
     return activations, meta
 
 

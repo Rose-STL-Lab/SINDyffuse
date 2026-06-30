@@ -11,7 +11,6 @@ import opensim as osim
 from nimble.muscle_activation import (
     MuscleActivationConfig,
     MuscleActivationResult,
-    apply_activation_postprocess,
     _storage_to_array,
     opensim_quiet,
 )
@@ -167,22 +166,16 @@ def run_static_optimization(
             act_sto, muscle_name_list, frame_times
         )
 
-    repair_meta: Dict[str, Any] = {}
-    if cfg.interpolate_activations or float(cfg.activation_smooth_hz) > 0.0:
-        activations, repair_meta = apply_activation_postprocess(activations, cfg)
-    repaired_count = int(repair_meta.get("repaired_frame_count", 0))
-
     meta: Dict[str, Any] = {
         "activation_method": "static_optimization",
-        "repaired_frame_count": repaired_count,
-        "interpolated_frame_count": int(repair_meta.get("interpolated_frame_count", 0)),
-        "extrapolated_frame_count": int(repair_meta.get("extrapolated_frame_count", 0)),
+        "repaired_frame_count": 0,
+        "interpolated_frame_count": 0,
+        "extrapolated_frame_count": 0,
         "static_activation_exponent": float(cfg.static_activation_exponent),
         "static_lowpass_cutoff_hz": float(cfg.static_lowpass_cutoff_hz),
         "moco_max_reserve_fraction": float(cfg.moco_max_reserve_fraction),
         **{k: v for k, v in parse_meta.items() if k != "static_max_reserve_per_frame"},
     }
-    meta.update(repair_meta)
     return MuscleActivationResult(
         activations=activations,
         muscle_names=tuple(muscle_name_list),

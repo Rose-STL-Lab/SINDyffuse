@@ -164,6 +164,81 @@ def repair_poor_ik_pose_frames(
     return out, repaired, thresh
 
 
+def interpolate_failed_ik_frames(
+    poses_q: np.ndarray,
+    solver_err: np.ndarray,
+) -> Tuple[np.ndarray, int]:
+    """Linearly interpolate frames that IK did not solve from neighboring good frames."""
+    out = np.asarray(poses_q, dtype=np.float64).copy()
+    t_frames = int(out.shape[1])
+    solver = np.asarray(solver_err, dtype=np.float64).reshape(-1)
+    if solver.size != t_frames:
+        solver = np.full(t_frames, np.nan, dtype=np.float64)
+
+    is_good = np.array(
+        [
+            np.isfinite(solver[t]) and not pose_is_invalid(out[:, t])
+            for t in range(t_frames)
+        ],
+        dtype=bool,
+    )
+    if not is_good.any():
+        return out, 0
+
+    repaired = 0
+    for t in range(t_frames):
+        if is_good[t]:
+            continue
+        left = right = None
+        for i in range(t - 1, -1, -1):
+            if is_good[i]:
+                left = i
+                break
+        for i in range(t + 1, t_frames):
+            if is_good[i]:
+                right = i
+                break
+        if left is not None and right is not None:
+            w = float(t - left) / float(right - left)
+            out[:, t] = (1.0 - w) * out[:, left] + w * out[:, right]
+            repaired += 1
+        elif left is not None:
+            out[:, t] = out[:, left].copy()
+            repaired += 1
+        elif right is not None:
+            out[:, t] = out[:, right].copy()
+            repaired += 1
+    return out, repaired
+
+
+def postprocess_ik_poses(
+    poses_q: np.ndarray,
+    ik_stats: Dict[str, Any],
+    *,
+    fk_loss_repair_threshold: float = 0.01,
+) -> Tuple[np.ndarray, Dict[str, float]]:
+    """After IK, interpolate failed frames from good ones and repair poor FK fits."""
+    fk = np.asarray(ik_stats.get("per_frame_fk_loss", []), dtype=np.float64).reshape(-1)
+    solver = np.asarray(ik_stats.get("per_frame_loss", []), dtype=np.float64).reshape(-1)
+    t_frames = int(poses_q.shape[1])
+    if fk.size != t_frames:
+        fk = np.full(t_frames, np.nan, dtype=np.float64)
+    if solver.size != t_frames:
+        solver = np.full(t_frames, np.nan, dtype=np.float64)
+
+    out, failed_repairs = interpolate_failed_ik_frames(poses_q, solver)
+    out, poor_repairs, _ = repair_poor_ik_pose_frames(
+        out,
+        fk,
+        max_fk_loss=fk_loss_repair_threshold,
+    )
+
+    return out, {
+        "ik_failed_frame_interpolations": float(failed_repairs),
+        "ik_poor_fit_interpolations": float(poor_repairs),
+    }
+
+
 def _get_joint_ik_cache(
     skeleton: Any,
     ik_mapping: Tuple[Tuple[str, int], ...] | None = None,

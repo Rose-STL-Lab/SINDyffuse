@@ -20,7 +20,6 @@ from common.working_directory import working_directory
 from nimble.muscle_activation import (
     MuscleActivationConfig,
     MuscleActivationResult,
-    apply_activation_postprocess,
     _storage_to_array,
     muscle_names,
     opensim_quiet,
@@ -554,11 +553,6 @@ def run_moco_track(
             f"Moco muscle count {activations.shape[1]} != expected {len(names_ref)}"
         )
 
-    repair_meta: Dict[str, Any] = {}
-    if cfg.interpolate_activations or float(cfg.activation_smooth_hz) > 0.0:
-        activations, repair_meta = apply_activation_postprocess(activations, cfg)
-    repaired_frame_count = int(repair_meta.get("repaired_frame_count", 0))
-
     obj = solve_meta.get("objective")
     moco_objective = float(obj) if obj is not None and np.isfinite(float(obj)) else float("nan")
 
@@ -576,7 +570,7 @@ def run_moco_track(
         "mesh_interval": mesh_interval,
         "moco_solver_success": bool(solve_meta.get("solver_success", solve_ok)),
         "moco_objective": moco_objective,
-        "repaired_frame_count": repaired_frame_count,
+        "repaired_frame_count": 0,
         "moco_contact": True,
         "moco_multi_contact": bool(track_cfg.multi_contact),
         "moco_contact_bodies": [s.body_name for s in track_cfg.contact_spheres],
@@ -599,7 +593,6 @@ def run_moco_track(
         "moco_mod_ops": list(_MOCO_MOD_OPS),
         "moco_solve_details": solve_meta,
     }
-    meta.update(repair_meta)
     if solve_meta.get("solver_status"):
         meta["moco_solver_status"] = str(solve_meta["solver_status"])
     if solve_meta.get("solver_iterations") is not None:
