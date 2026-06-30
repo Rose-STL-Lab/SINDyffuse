@@ -36,32 +36,7 @@ spec:
           value: "0"
         - name: SINDYFFUSE_RUN_LOG_ID
           value: "RUN_LOG_ID_PLACEHOLDER"
-        command: ["/bin/bash", "-c"]
-        args:
-        - |
-          set -eo pipefail
-          eval "$(conda shell.bash hook)"
-          conda activate sindyffuse
-          export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
-          export PYTHONPATH=/mnt/SINDyffuse
-          HML=/mnt/SINDyffuse/datasets/HumanML3D
-          NUM_SHARDS="${PREPROCESS_NUM_SHARDS:-64}"
-          ARGS=(
-            scripts/preprocess_nimble.py
-            --hml_root "${HML}"
-            --out_root "${HML}"
-            --log_dir /mnt/SINDyffuse/logs
-            --num_shards "${NUM_SHARDS}"
-            --shard_index "${JOB_COMPLETION_INDEX}"
-            --num_workers 1
-            --activation_method "${ACTIVATION_METHOD:-static_optimization}"
-            --skip_normalization
-            --opensim_log_level Off
-          )
-          [ "${MAX_MOTIONS:-0}" != "0" ] && ARGS+=(--max_motions "${MAX_MOTIONS}")
-          [ "${SKIP_EXISTING:-1}" = "1" ] && ARGS+=(--skip_existing)
-          python "${ARGS[@]}"
-          test -f "${HML}/preprocess_manifest.$(printf '%04d' "${JOB_COMPLETION_INDEX}").jsonl"
+        command: ["/bin/bash", "deploy/scripts/preprocess-k8s-worker.sh"]
         resources:
           limits:
             memory: 6Gi

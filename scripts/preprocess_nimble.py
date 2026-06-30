@@ -572,6 +572,8 @@ def run_preprocess(args: argparse.Namespace, logger: RunLogger | None = None) ->
                             moco_threads=1 if isolate_motion_process else moco_threads,
                         )
                         mf.write(json.dumps(row, default=str) + "\n")
+                        mf.flush()
+                        os.fsync(mf.fileno())
                         _record(row, pbar=pbar)
                 finally:
                     pbar.close()
@@ -620,6 +622,8 @@ def run_preprocess(args: argparse.Namespace, logger: RunLogger | None = None) ->
                                     ),
                                 }
                             mf.write(json.dumps(row, default=str) + "\n")
+                            mf.flush()
+                            os.fsync(mf.fileno())
                             _record(row, pbar=pbar)
                             finished_in_batch.add(w[0])
                             if pool_broken:

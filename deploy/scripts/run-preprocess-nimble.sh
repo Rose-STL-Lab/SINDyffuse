@@ -60,6 +60,25 @@ export PREPROCESS_NUM_SHARDS="${PREPROCESS_NUM_SHARDS:-180}"
 RUN_LOG_ID="${RUN_LOG_ID:-preprocess_${METHOD_FOLDER}_$(date -u +%Y%m%dT%H%M%SZ)}"
 export RUN_LOG_ID
 
+capture_worker_diagnostics() {
+  local reason="${1:-worker job did not complete}"
+  local out="${REPO_ROOT}/logs/k8s_diagnostics/${RUN_LOG_ID}/kubectl"
+  mkdir -p "${out}"
+  echo "Capturing Kubernetes diagnostics (${reason}) -> ${out}"
+  kubectl get job "${WORKER_JOB_NAME}" -o yaml > "${out}/job.yaml" 2>&1 || true
+  kubectl describe job "${WORKER_JOB_NAME}" > "${out}/job.describe.txt" 2>&1 || true
+  kubectl get events --sort-by='.lastTimestamp' > "${out}/events.txt" 2>&1 || true
+  kubectl get pods -l "app=${WORKER_JOB_NAME}" -o wide > "${out}/pods.txt" 2>&1 || true
+  while read -r pod; do
+    [[ -z "${pod}" ]] && continue
+    local name="${pod#pod/}"
+    kubectl describe pod "${name}" > "${out}/${name}.describe.txt" 2>&1 || true
+    kubectl logs "${name}" --tail=500 > "${out}/${name}.log" 2>&1 || true
+    kubectl logs "${name}" --previous --tail=500 > "${out}/${name}.previous.log" 2>&1 || true
+  done < <(kubectl get pods -l "app=${WORKER_JOB_NAME}" -o name 2>/dev/null || true)
+  echo "PVC diagnostics (survive pod deletion): ${REPO_ROOT}/logs/k8s_diagnostics/${RUN_LOG_ID}/"
+}
+
 echo "=== preprocess nimble (distributed) ==="
 echo "method=${METHOD_FOLDER} activation_method=${ACTIVATION_METHOD}"
 echo "num_shards=${PREPROCESS_NUM_SHARDS}"
@@ -80,7 +99,10 @@ manifest="$(printf '%s\n' "${manifest}" | sed \
 printf '%s\n' "${manifest}" | kubectl apply -f -
 
 echo "Waiting for worker Job to complete (timeout=${WORKER_TIMEOUT})..."
-kubectl wait --for=condition=complete "job/${WORKER_JOB_NAME}" --timeout="${WORKER_TIMEOUT}"
+if ! kubectl wait --for=condition=complete "job/${WORKER_JOB_NAME}" --timeout="${WORKER_TIMEOUT}"; then
+  capture_worker_diagnostics "kubectl wait timed out or job failed"
+  exit 1
+fi
 
 echo "Applying normalization Job..."
 normalization_manifest="$(cat "${NORMALIZATION_JOB}")"
