@@ -21,6 +21,7 @@ from nimble.muscle_activation import (
     MuscleActivationConfig,
     MuscleActivationResult,
     _storage_to_array,
+    activation_column_for_muscle,
     muscle_names,
     opensim_quiet,
     rajagopal_model_path,
@@ -243,12 +244,6 @@ def _build_model_processor_track(
 _muscle_names_from_processor = muscle_names_from_processor
 
 
-def _activation_column_for_muscle(label: str, muscle: str) -> bool:
-    """Match OpenSim state paths like ``/forceset/gastroc_r/activation``."""
-    needle = f"/{muscle}/activation"
-    return label.endswith(needle) or needle in label
-
-
 def _parse_moco_activation_storage(
     storage_path: Path,
     muscle_name_list: Sequence[str],
@@ -273,7 +268,7 @@ def _parse_moco_activation_storage(
     for mi, name in enumerate(muscle_name_list):
         col_idx: int | None = None
         for lab, idx in label_to_col.items():
-            if _activation_column_for_muscle(lab, name):
+            if activation_column_for_muscle(lab, name):
                 col_idx = idx
                 break
         if col_idx is None:

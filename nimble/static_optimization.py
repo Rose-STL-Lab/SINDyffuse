@@ -12,6 +12,7 @@ from nimble.muscle_activation import (
     MuscleActivationConfig,
     MuscleActivationResult,
     _storage_to_array,
+    activation_column_for_muscle,
     opensim_quiet,
 )
 from nimble.rajagopal_coord_map import build_rajagopal_coord_mapping, write_coordinates_mot
@@ -53,7 +54,13 @@ def _parse_activation_sto(
     activations = np.full((n_frames, n_muscles), np.nan, dtype=np.float64)
 
     for mi, name in enumerate(muscle_name_list):
-        col_idx = label_to_col.get(name)
+        col_idx: int | None = None
+        for i, lab in enumerate(labels):
+            if str(lab).strip().lower() == "time":
+                continue
+            if activation_column_for_muscle(str(lab), name):
+                col_idx = int(i)
+                break
         if col_idx is None:
             continue
         col = data[:, col_idx]

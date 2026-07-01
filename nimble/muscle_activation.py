@@ -526,6 +526,15 @@ def muscle_names(model: Any | None = None) -> Tuple[str, ...]:
     return tuple(muscles.get(i).getName() for i in range(muscles.getSize()))
 
 
+def activation_column_for_muscle(label: str, muscle: str) -> bool:
+    """Match OpenSim activation columns (bare name or ``/forceset/<muscle>/activation``)."""
+    lab = str(label).strip()
+    if lab == muscle:
+        return True
+    needle = f"/{muscle}/activation"
+    return lab.endswith(needle) or needle in lab
+
+
 def interpolate_activation_frames(
     activations: np.ndarray,
 ) -> tuple[np.ndarray, Dict[str, int]]:
