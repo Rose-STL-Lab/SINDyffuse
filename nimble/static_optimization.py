@@ -47,7 +47,7 @@ def _parse_activation_sto(
     for i, lab in enumerate(labels):
         if str(lab).strip().lower() == "time":
             continue
-        label_to_col[str(lab)] = int(i - col_offset)
+        label_to_col[str(lab)] = int(i)
 
     n_frames = int(frame_times.shape[0])
     n_muscles = len(muscle_name_list)
@@ -70,18 +70,20 @@ def _parse_activation_sto(
         if finite.sum() == 1:
             activations[:, mi] = float(col[finite][0])
         else:
+            t_good = times[finite]
+            v_good = col[finite]
             activations[:, mi] = np.interp(
                 frame_times,
-                times[finite],
-                col[finite],
-                left=np.nan,
-                right=np.nan,
+                t_good,
+                v_good,
+                left=float(v_good[0]),
+                right=float(v_good[-1]),
             )
 
     reserve_peaks: Dict[str, float] = {}
     reserve_series: List[np.ndarray] = []
     for lab, idx in label_to_col.items():
-        if lab == "time" or not _is_reserve_column(lab):
+        if not _is_reserve_column(lab):
             continue
         col = np.abs(np.asarray(data[:, idx], dtype=np.float64))
         reserve_peaks[str(lab)] = float(np.nanmax(col)) if col.size else 0.0
@@ -118,7 +120,7 @@ def run_static_optimization(
     fps = float(cfg.fps)
     dt = 1.0 / max(fps, 1e-8)
     frame_times = np.arange(t_len, dtype=np.float64) * dt
-    t0, t1 = 0.0, max(0.0, (t_len - 1) * dt - 1e-6)
+    t0, t1 = 0.0, (t_len - 1) * dt
 
     model_path, muscle_name_list = prepare_rajagopal_activation_model(
         work_dir, cfg, weld_toe_joints=False

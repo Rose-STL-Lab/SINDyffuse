@@ -606,15 +606,28 @@ def apply_activation_postprocess(
 
 
 def _storage_to_array(storage: Any) -> Tuple[np.ndarray, List[str]]:
+    """Read OpenSim ``Storage`` into ``[n_rows, n_cols]`` aligned with column labels."""
     labels: List[str] = []
     for i in range(storage.getColumnLabels().size()):
         labels.append(storage.getColumnLabels().get(i))
     rows: List[List[float]] = []
+    times: List[float] = []
     for i in range(storage.getSize()):
         sv = storage.getStateVector(i)
         d = sv.getData()
+        times.append(float(sv.getTime()))
         rows.append([float(d.get(j)) for j in range(d.size())])
-    return np.asarray(rows, dtype=np.float64), labels
+    data = np.asarray(rows, dtype=np.float64)
+    if not labels:
+        return data, labels
+    # OpenSim stores time on the StateVector, not in getData(), but labels still
+    # include a leading ``time`` column.
+    if str(labels[0]).strip().lower() == "time" and data.ndim == 2:
+        if data.shape[1] == len(labels) - 1:
+            data = np.column_stack([np.asarray(times, dtype=np.float64), data])
+        elif data.shape[1] == len(labels):
+            data[:, 0] = np.asarray(times, dtype=np.float64)
+    return data, labels
 
 
 def _validate_q_input(q: np.ndarray) -> np.ndarray:
