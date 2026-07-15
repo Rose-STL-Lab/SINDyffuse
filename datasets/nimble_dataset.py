@@ -12,7 +12,7 @@ from torch.utils.data import Dataset
 
 import nimblephysics as nimble
 
-from common.paths import nimble_b3d_dir
+from common.paths import humanml3d_text_dir, nimble_b3d_dir
 from nimble.b3d_schema import metadata_custom_values_block
 from datasets.splits import kinematics_pass_index, load_split_ids
 
@@ -222,7 +222,7 @@ class NimbleDataset(Dataset):
             "val.txt" if self.split in {"val", "validation"} else f"{self.split}.txt"
         )
         self.b3d_dir = nimble_b3d_dir(self.data_root)
-        self.text_dir = self.data_root / "texts"
+        self.text_dir = humanml3d_text_dir(self.data_root)
         if not split_file.exists():
             raise FileNotFoundError(f"Missing split file: {split_file}")
         if not self.b3d_dir.is_dir():

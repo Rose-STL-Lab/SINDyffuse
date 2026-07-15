@@ -33,7 +33,7 @@ spec:
         - name: MAX_MOTIONS
           value: "0"
         - name: SKIP_EXISTING
-          value: "0"
+          value: "1"
         - name: SINDYFFUSE_RUN_LOG_ID
           value: "RUN_LOG_ID_PLACEHOLDER"
         command: ["/bin/bash", "-c"]

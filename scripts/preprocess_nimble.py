@@ -59,6 +59,7 @@ from common.paths import (
     NIMBLE_B3D_SUBDIR,
     cleanup_preprocess_manifests,
     default_humanml3d_root,
+    humanml3d_text_dir,
     nimble_b3d_dir,
 )
 from common.run_logging import (
@@ -379,8 +380,8 @@ def _motion_loss(row: dict) -> float | None:
 def _symlink_metadata(hml_root: Path, out_root: Path) -> None:
     if hml_root.resolve() == out_root.resolve():
         return
-    src_texts = hml_root / "texts"
-    if src_texts.is_dir():
+    src_texts = humanml3d_text_dir(hml_root)
+    if src_texts.is_dir() and src_texts != hml_root.resolve():
         _link_or_copy_tree(src_texts, out_root / "texts")
     for name in ("train.txt", "val.txt", "test.txt"):
         src = hml_root / name

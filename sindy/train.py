@@ -35,7 +35,7 @@ from common.distributed import (
     unwrap_module as unwrap_train_module,
     wrap_ddp,
 )
-from common.paths import default_humanml3d_root, nimble_b3d_dir
+from common.paths import default_humanml3d_root, humanml3d_text_dir, nimble_b3d_dir
 from common.run_logging import RunLogger, add_run_log_cli_args, get_run_logger, run_logged_main
 from nimble.channels import BIOMECH_COMPONENT_KEYS
 
@@ -318,7 +318,7 @@ def train(
         theta_s = None
         y_s = None
 
-    text_dir = Path(data_root) / "texts"
+    text_dir = humanml3d_text_dir(data_root)
     caption_cache: Dict[str, List[Tuple[str, int, int]]] = {}
     captions = [
         _caption_for_window(str(sid), text_dir, fps, window_size, caption_cache) for sid in sample_ids.tolist()

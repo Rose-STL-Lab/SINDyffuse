@@ -6,7 +6,8 @@
 #   ACTIVATION_METHOD=static_optimization ./deploy/scripts/run-preprocess-nimble.sh
 #
 # Environment overrides:
-#   PREPROCESS_NUM_SHARDS    shard count (default: 180)
+#   PREPROCESS_NUM_SHARDS    shard count / Job parallelism+completions (default: 64)
+#   SKIP_EXISTING            1 to skip motions that already have .b3d (default: leave yaml)
 #   WORKER_TIMEOUT           kubectl wait timeout for worker Job (default: 48h)
 #   NORMALIZATION_TIMEOUT    kubectl wait timeout for normalization Job (default: 1h)
 #   KUSTOMIZE_DIR            override worker job kustomization path
@@ -56,16 +57,20 @@ NORMALIZATION_JOB="${NORMALIZATION_JOB:-${KUSTOMIZE_DIR}/normalization-job.yaml}
 
 WORKER_TIMEOUT="${WORKER_TIMEOUT:-48h}"
 NORMALIZATION_TIMEOUT="${NORMALIZATION_TIMEOUT:-${FINALIZE_TIMEOUT:-1h}}"
-export PREPROCESS_NUM_SHARDS="${PREPROCESS_NUM_SHARDS:-180}"
+export PREPROCESS_NUM_SHARDS="${PREPROCESS_NUM_SHARDS:-64}"
 RUN_LOG_ID="${RUN_LOG_ID:-preprocess_${METHOD_FOLDER}_$(date -u +%Y%m%dT%H%M%SZ)}"
 export RUN_LOG_ID
+# Optional override; empty keeps the value from job.yaml.
+SKIP_EXISTING_OVERRIDE="${SKIP_EXISTING:-}"
 
 echo "=== preprocess nimble (distributed) ==="
 echo "method=${METHOD_FOLDER} activation_method=${ACTIVATION_METHOD}"
 echo "num_shards=${PREPROCESS_NUM_SHARDS}"
 echo "run_log_id=${RUN_LOG_ID}"
+echo "skip_existing_override=${SKIP_EXISTING_OVERRIDE:-<job.yaml>}"
 echo "worker kustomize:    ${KUSTOMIZE_DIR}"
 echo "normalization job:   ${NORMALIZATION_JOB}"
+echo "worker_timeout=${WORKER_TIMEOUT}"
 
 if [[ "${SKIP_DELETE:-0}" != "1" ]]; then
   echo "Deleting stale jobs (if any)..."
@@ -74,9 +79,16 @@ fi
 
 echo "Applying worker Indexed Job..."
 manifest="$(kubectl kustomize "${KUSTOMIZE_DIR}")"
-manifest="$(printf '%s\n' "${manifest}" | sed \
-  "s|RUN_LOG_ID_PLACEHOLDER|${RUN_LOG_ID}|g; \
-  /name: PREPROCESS_NUM_SHARDS/{n;s/value: .*/value: \"${PREPROCESS_NUM_SHARDS}\"/;}")"
+# Keep Indexed Job pod count and --num_shards in lockstep. Otherwise setting
+# PREPROCESS_NUM_SHARDS=1 still launches 64 pods that each process the full dataset.
+sed_script="s|RUN_LOG_ID_PLACEHOLDER|${RUN_LOG_ID}|g; \
+  /name: PREPROCESS_NUM_SHARDS/{n;s/value: .*/value: \"${PREPROCESS_NUM_SHARDS}\"/;}; \
+  s|^  parallelism: .*|  parallelism: ${PREPROCESS_NUM_SHARDS}|; \
+  s|^  completions: .*|  completions: ${PREPROCESS_NUM_SHARDS}|"
+if [[ -n "${SKIP_EXISTING_OVERRIDE}" ]]; then
+  sed_script="${sed_script}; /name: SKIP_EXISTING/{n;s/value: .*/value: \"${SKIP_EXISTING_OVERRIDE}\"/;}"
+fi
+manifest="$(printf '%s\n' "${manifest}" | sed "${sed_script}")"
 printf '%s\n' "${manifest}" | kubectl apply -f -
 
 echo "Waiting for worker Job to complete (timeout=${WORKER_TIMEOUT})..."

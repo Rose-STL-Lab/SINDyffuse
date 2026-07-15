@@ -23,6 +23,7 @@ __all__ = [
     "cleanup_preprocess_manifests",
     "default_datasets_dir",
     "default_humanml3d_root",
+    "humanml3d_text_dir",
     "nimble_b3d_dir",
     "repo_root",
     "resolve_data_root",
@@ -49,6 +50,19 @@ def nimble_b3d_dir(data_root: str | Path, *, subdir: str | None = None) -> Path:
     """Path to per-motion B3D cache (default ``nimble_b3d/`` under the dataset root)."""
     name = str(subdir).strip() if subdir else NIMBLE_B3D_SUBDIR
     return Path(data_root).expanduser().resolve() / name
+
+
+def humanml3d_text_dir(data_root: str | Path) -> Path:
+    """Directory with per-motion caption files (``{motion_id}.txt``).
+
+    HumanML3D releases usually use ``<root>/texts/``; some checkouts keep the same
+    ``*.txt`` files directly under the dataset root instead.
+    """
+    root = Path(data_root).expanduser().resolve()
+    texts_subdir = root / "texts"
+    if texts_subdir.is_dir():
+        return texts_subdir
+    return root
 
 
 def resolve_data_root(path: str | None) -> str:
