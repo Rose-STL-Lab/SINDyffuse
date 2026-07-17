@@ -1,23 +1,24 @@
-# Normalization phase: ./deploy/scripts/run-preprocess-nimble.sh moco-track
+# Apply: kubectl apply -k deploy/jobs/preprocess-nimble/normalization
+#
+# Merges shard preprocess manifests and writes nimble_b3d/Mean.npy + Std.npy.
+# Run after preprocess workers finish (or alone if shard manifests already exist).
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: sindyffuse-compute-normalization-moco-track
+  name: sindyffuse-compute-normalization
   labels:
-    app: sindyffuse-compute-normalization-moco-track
-    activation-method: moco-track
+    app: sindyffuse-compute-normalization
 spec:
   backoffLimit: 0
   template:
     metadata:
       labels:
-        app: sindyffuse-compute-normalization-moco-track
-        activation-method: moco-track
+        app: sindyffuse-compute-normalization
     spec:
       restartPolicy: Never
       terminationGracePeriodSeconds: 300
       containers:
-      - name: sindyffuse-compute-normalization-moco-track
+      - name: sindyffuse-compute-normalization
         image: sindyffuse:latest
         imagePullPolicy: IfNotPresent
         workingDir: /mnt/SINDyffuse
@@ -36,6 +37,7 @@ spec:
           export PYTHONPATH=/mnt/SINDyffuse
           HML=/mnt/SINDyffuse/datasets/HumanML3D
           NUM_SHARDS="${PREPROCESS_NUM_SHARDS:-64}"
+          test -d "${HML}/nimble_b3d" || { echo "Missing ${HML}/nimble_b3d"; exit 1; }
           python scripts/compute_normalization.py \
             --out_root "${HML}" \
             --num_shards "${NUM_SHARDS}" \

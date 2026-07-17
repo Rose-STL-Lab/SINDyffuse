@@ -12,17 +12,27 @@ if str(_REPO_ROOT) not in sys.path:
 import argparse
 import json
 import os
+import random
 from datetime import datetime
 from typing import Any, Dict
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from common.paths import default_humanml3d_root
+from common.paths import default_humanml3d_root, resolve_data_root
 from common.run_logging import RunLogger, add_run_log_cli_args, get_run_logger, run_logged_main
 from surrogate.dataset import ActivationB3DDataset
 from surrogate.model import build_activation_surrogate
+
+
+def _set_seed(seed: int) -> None:
+    random.seed(int(seed))
+    np.random.seed(int(seed))
+    torch.manual_seed(int(seed))
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(int(seed))
 
 
 def activation_surrogate_loss(
@@ -51,6 +61,7 @@ def train_activation_surrogate(
     window_stride: int = 16,
     normalize_q: bool = True,
     max_motions: int = 0,
+    skip_zero_placeholders: bool = True,
     model_type: str = "mlp",
     hidden_dim: int = 256,
     num_layers: int = 3,
@@ -64,7 +75,10 @@ def train_activation_surrogate(
     lambda_temporal: float = 0.1,
     device_name: str = "auto",
     num_workers: int = 0,
+    seed: int = 42,
 ) -> Dict[str, Any]:
+    _set_seed(int(seed))
+
     if str(device_name).strip().lower() == "cpu":
         device = torch.device("cpu")
     elif str(device_name).strip().lower() == "cuda":
@@ -79,6 +93,7 @@ def train_activation_surrogate(
         window_stride=window_stride,
         normalize_q=normalize_q,
         max_motions=max_motions,
+        skip_zero_placeholders=skip_zero_placeholders,
     )
     try:
         val_ds = ActivationB3DDataset(
@@ -88,9 +103,23 @@ def train_activation_surrogate(
             window_stride=window_stride,
             normalize_q=normalize_q,
             max_motions=max_motions,
+            skip_zero_placeholders=skip_zero_placeholders,
         )
     except ValueError:
         val_ds = None
+
+    logger = get_run_logger()
+    logger.progress(
+        f"train split={split}: windows={len(train_ds)} "
+        f"motions_kept={train_ds.num_motions_kept} "
+        f"skipped_zero={train_ds.num_motions_skipped_zero}"
+    )
+    if val_ds is not None:
+        logger.progress(
+            f"val split={val_split}: windows={len(val_ds)} "
+            f"motions_kept={val_ds.num_motions_kept} "
+            f"skipped_zero={val_ds.num_motions_skipped_zero}"
+        )
 
     train_loader = DataLoader(
         train_ds,
@@ -105,11 +134,26 @@ def train_activation_surrogate(
         else None
     )
 
-    sample_q, _ = train_ds[0]
+    sample_q, sample_act = train_ds[0]
+    ckpt_payload = {
+        "model_type": str(model_type),
+        "input_dim": int(sample_q.shape[-1]),
+        "output_dim": int(sample_act.shape[-1]),
+        "window_size": int(window_size),
+        "normalize_q": bool(normalize_q),
+        "skip_zero_placeholders": bool(skip_zero_placeholders),
+        "hidden_dim": int(hidden_dim),
+        "num_layers": int(num_layers),
+        "dropout": float(dropout),
+        "num_heads": int(num_heads),
+        "dim_feedforward": int(dim_feedforward),
+        "d_model": int(dim_feedforward) if str(model_type) == "transformer" else 0,
+        "seed": int(seed),
+    }
     model = build_activation_surrogate(
         model_type=model_type,
-        input_dim=int(sample_q.shape[-1]),
-        output_dim=int(train_ds[0][1].shape[-1]),
+        input_dim=int(ckpt_payload["input_dim"]),
+        output_dim=int(ckpt_payload["output_dim"]),
         hidden_dim=hidden_dim,
         num_layers=num_layers,
         dropout=dropout,
@@ -124,9 +168,21 @@ def train_activation_surrogate(
 
     out_dir = Path(output)
     out_dir.mkdir(parents=True, exist_ok=True)
-    ckpt_path = out_dir / "latest.pt"
+    latest_path = out_dir / "latest.pt"
+    best_path = out_dir / "best.pt"
     best_val = float("inf")
     history: list[dict[str, float]] = []
+
+    def _save_checkpoint(path: Path, *, epoch: int, val_loss: float) -> None:
+        torch.save(
+            {
+                **ckpt_payload,
+                "model_state_dict": model.state_dict(),
+                "epoch": int(epoch),
+                "val_loss": float(val_loss),
+            },
+            path,
+        )
 
     for epoch in range(int(epochs)):
         model.train()
@@ -165,6 +221,7 @@ def train_activation_surrogate(
             val_loss = vsum / max(1, vb)
             if val_loss < best_val:
                 best_val = val_loss
+                _save_checkpoint(best_path, epoch=epoch, val_loss=val_loss)
 
         history.append(
             {
@@ -173,36 +230,37 @@ def train_activation_surrogate(
                 "val_loss": val_loss,
             }
         )
-        get_run_logger().progress(
+        logger.progress(
             f"epoch {epoch + 1}/{epochs} train={train_loss:.6f} val={val_loss:.6f}"
         )
-        get_run_logger().verbose(
+        logger.verbose(
             f"[activation_surrogate] epoch {epoch + 1}/{epochs} "
             f"train={train_loss:.6f} val={val_loss:.6f}"
         )
 
-    torch.save(
-        {
-            "model_state_dict": model.state_dict(),
-            "model_type": str(model_type),
-            "input_dim": int(sample_q.shape[-1]),
-            "output_dim": int(train_ds[0][1].shape[-1]),
-            "window_size": int(window_size),
-            "normalize_q": bool(normalize_q),
-            "hidden_dim": int(hidden_dim),
-            "num_layers": int(num_layers),
-            "dropout": float(dropout),
-            "num_heads": int(num_heads),
-            "dim_feedforward": int(dim_feedforward),
-            "d_model": int(dim_feedforward) if str(model_type) == "transformer" else 0,
-        },
-        ckpt_path,
+    _save_checkpoint(
+        latest_path,
+        epoch=int(epochs) - 1,
+        val_loss=history[-1]["val_loss"] if history else float("nan"),
     )
+    if not best_path.is_file():
+        _save_checkpoint(
+            best_path,
+            epoch=int(epochs) - 1,
+            val_loss=history[-1]["val_loss"] if history else float("nan"),
+        )
 
     metrics = {
-        "checkpoint": str(ckpt_path),
+        "checkpoint": str(latest_path),
+        "best_checkpoint": str(best_path),
         "train_windows": len(train_ds),
         "val_windows": len(val_ds) if val_ds is not None else 0,
+        "train_motions_kept": int(train_ds.num_motions_kept),
+        "train_motions_skipped_zero": int(train_ds.num_motions_skipped_zero),
+        "val_motions_kept": int(val_ds.num_motions_kept) if val_ds is not None else 0,
+        "val_motions_skipped_zero": (
+            int(val_ds.num_motions_skipped_zero) if val_ds is not None else 0
+        ),
         "best_val_loss": best_val,
         "history": history,
     }
@@ -218,15 +276,10 @@ def _apply_json_config(args: argparse.Namespace, config_path: str) -> None:
         raise FileNotFoundError(f"Missing config: {path}")
     cfg = json.loads(path.read_text(encoding="utf-8"))
     for key, value in cfg.items():
-        if key in {"output", "seed"}:
+        if key == "output":
             continue
         if hasattr(args, key):
             setattr(args, key, value)
-
-
-def _argv_has_flag(argv: list[str], flag: str) -> bool:
-    sep = flag + "="
-    return any(a == flag or a.startswith(sep) for a in argv)
 
 
 def _default_output_dir() -> Path:
@@ -251,6 +304,12 @@ def main() -> None:
     parser.add_argument("--window_stride", type=int, default=16)
     parser.add_argument("--normalize_q", type=int, default=1)
     parser.add_argument("--max_motions", type=int, default=0)
+    parser.add_argument(
+        "--skip_zero_placeholders",
+        type=int,
+        default=1,
+        help="1=drop motions whose muscle_activations are all-zero fallbacks",
+    )
     parser.add_argument("--model_type", default="mlp")
     parser.add_argument("--hidden_dim", type=int, default=256)
     parser.add_argument("--num_layers", type=int, default=3)
@@ -264,6 +323,7 @@ def main() -> None:
     parser.add_argument("--lambda_temporal", type=float, default=0.1)
     parser.add_argument("--device", default="auto")
     parser.add_argument("--num_workers", type=int, default=0)
+    parser.add_argument("--seed", type=int, default=42)
     add_run_log_cli_args(parser)
     args = parser.parse_args()
 
@@ -272,12 +332,6 @@ def main() -> None:
         out_dir.mkdir(parents=True, exist_ok=True)
         args.output = str(out_dir)
 
-    data_root = str(args.data_root).strip()
-    if not data_root:
-        env_root = os.environ.get("HUMANML3D_ROOT", "").strip()
-        if env_root:
-            args.data_root = env_root
-
     cfg_path = str(args.config).strip()
     if not cfg_path:
         default_cfg = _REPO_ROOT / "configs" / "train_surrogate.json"
@@ -285,6 +339,8 @@ def main() -> None:
             cfg_path = str(default_cfg)
     if cfg_path:
         _apply_json_config(args, cfg_path)
+
+    args.data_root = resolve_data_root(str(args.data_root).strip() or None)
 
     def _run(_logger: RunLogger) -> None:
         metrics = train_activation_surrogate(
@@ -296,6 +352,7 @@ def main() -> None:
             window_stride=int(args.window_stride),
             normalize_q=bool(int(args.normalize_q)),
             max_motions=int(args.max_motions),
+            skip_zero_placeholders=bool(int(args.skip_zero_placeholders)),
             model_type=args.model_type,
             hidden_dim=int(args.hidden_dim),
             num_layers=int(args.num_layers),
@@ -309,6 +366,7 @@ def main() -> None:
             lambda_temporal=float(args.lambda_temporal),
             device_name=args.device,
             num_workers=int(args.num_workers),
+            seed=int(args.seed),
         )
         _logger.verbose(json.dumps(metrics, indent=2))
         os._exit(0)

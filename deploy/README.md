@@ -16,8 +16,10 @@ deploy/
       none/                   # IK-only (--activation_method none)
       static-optimization/
       moco-track/
+      normalization/          # Mean.npy / Std.npy after workers
     benchmark-moco-parallel/
     train-sindy/
+    train-surrogate/
     train-diffusion/
       none/
       nimble/
@@ -28,8 +30,10 @@ deploy/
 | Local | Kubernetes |
 |-------|------------|
 | `python scripts/preprocess_nimble.py ...` | `./deploy/scripts/run-preprocess-nimble.sh [none\|static-optimization\|moco-track]` |
+| `python scripts/compute_normalization.py ...` | `kubectl apply -k deploy/jobs/preprocess-nimble/normalization` |
 | `python scripts/benchmark_moco_parallel.py ...` | `kubectl apply -k deploy/jobs/benchmark-moco-parallel` |
 | `python scripts/train_sindy.py ...` | `kubectl apply -k deploy/jobs/train-sindy` |
+| `python scripts/train_surrogate.py ...` | `kubectl apply -k deploy/jobs/train-surrogate` |
 | `python scripts/train_diffusion.py ...` | `kubectl apply -k deploy/jobs/train-diffusion/{none,nimble,sindy}` |
 
 ## Container image (GHCR)
@@ -134,10 +138,16 @@ The PVC should contain:
 ./deploy/scripts/run-preprocess-nimble.sh static-optimization
 ./deploy/scripts/run-preprocess-nimble.sh moco-track
 
+# Or run normalization alone after workers already finished:
+kubectl apply -k deploy/jobs/preprocess-nimble/normalization
+
 kubectl get pods -l activation-method=static-optimization -w
 
 # Train SINDy (2× GPU)
 kubectl apply -k deploy/jobs/train-sindy
+
+# Train activation surrogate (1× GPU; requires Mean.npy/Std.npy; skips all-zero placeholders)
+kubectl apply -k deploy/jobs/train-surrogate
 
 # Train diffusion — pick guidance mode
 kubectl apply -k deploy/jobs/train-diffusion/none
@@ -155,7 +165,7 @@ Delete jobs before a manual re-run (example for static-optimization):
 
 ```bash
 kubectl delete job sindyffuse-preprocess-static-optimization \
-  sindyffuse-compute-normalization-static-optimization --ignore-not-found
+  sindyffuse-compute-normalization --ignore-not-found
 ```
 
 ## Dev pod
@@ -188,7 +198,7 @@ All manifests assume the PVC is mounted at `/mnt` with the repo at `/mnt/SINDyff
 
 Only **preprocess** is orchestrated via [`deploy/scripts/run-preprocess-nimble.sh`](scripts/run-preprocess-nimble.sh). Optional env: `PREPROCESS_NUM_SHARDS`, `MAX_MOTIONS`, `SKIP_EXISTING` (set in the job yaml).
 
-Each preprocess variant uses two Jobs: an Indexed worker Job (`parallelism=completions=64`) and a normalization Job (`compute_normalization.py`) that starts only after workers complete.
+Each preprocess variant uses an Indexed worker Job (`parallelism=completions=64`). Normalization is a separate Job under `preprocess-nimble/normalization` (`compute_normalization.py`) that merges shard manifests and writes `nimble_b3d/Mean.npy` / `Std.npy`. `run-preprocess-nimble.sh` runs workers then normalization; you can also apply normalization alone.
 
 ## Resource profiles
 
@@ -198,19 +208,21 @@ Each preprocess variant uses two Jobs: an Indexed worker Job (`parallelism=compl
 | preprocess-nimble/none (workers) | 64 × 1 | 64 × 2Gi | — |
 | preprocess-nimble/static-optimization (workers) | 64 × 1 | 64 × 2Gi | — |
 | preprocess-nimble/moco-track (workers) | 64 × 1 | 64 × 4Gi | — |
-| preprocess-nimble/*/normalization | 1 | 2Gi | — |
+| preprocess-nimble/normalization | 1 | 2Gi | — |
 | benchmark-moco-parallel | 64 | 64Gi | — |
 | train-sindy | 16 | 64Gi | 2 |
+| train-surrogate | 8 | 32Gi | 1 |
 | train-diffusion/* | 16 | 64Gi | 2 |
 
 Edit `deploy/jobs/<name>/job.yaml` to match your nodes.
 
 ## Pipeline order
 
-1. `preprocess-nimble/{none,static-optimization,moco-track}` via `run-preprocess-nimble.sh` (or `scripts/preprocess_nimble.py` locally)
-2. `train-sindy`
-3. `train-surrogate` — local only for now (`scripts/train_surrogate.py`)
-4. `train-diffusion/{none,nimble,sindy}`
+1. `preprocess-nimble/{none,static-optimization,moco-track}` workers via `run-preprocess-nimble.sh` (or `scripts/preprocess_nimble.py` locally)
+2. `preprocess-nimble/normalization` (included in the script, or `kubectl apply -k deploy/jobs/preprocess-nimble/normalization`)
+3. `train-sindy`
+4. `train-surrogate`
+5. `train-diffusion/{none,nimble,sindy}`
 
 ## Local development
 

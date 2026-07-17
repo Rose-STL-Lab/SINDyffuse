@@ -7,6 +7,7 @@
   "window_stride": 16,
   "normalize_q": 1,
   "max_motions": 0,
+  "skip_zero_placeholders": 1,
   "model_type": "mlp",
   "hidden_dim": 256,
   "num_layers": 3,
@@ -19,5 +20,5 @@
   "batch_size": 32,
   "lambda_temporal": 0.1,
   "device": "auto",
-  "num_workers": 0
+  "num_workers": 4
 }

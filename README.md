@@ -112,7 +112,7 @@ Config: `configs/train_sindy.json`
 python scripts/train_surrogate.py --config configs/train_surrogate.json --output results/activation_surrogate
 ```
 
-Config: `configs/train_surrogate.json`. Training uses L1 on all frames in each window (plus optional temporal regularization via `lambda_temporal`).
+Config: `configs/train_surrogate.json`. Training uses L1 on all frames in each window (plus optional temporal regularization via `lambda_temporal`). Motions whose cached `muscle_activations` are all-zero placeholders are skipped by default (`skip_zero_placeholders=1`).
 
 ### 4. Train diffusion
 
@@ -134,7 +134,10 @@ Job manifests live under `deploy/`. Configure your image and PVC in `deploy/comp
 
 ```bash
 ./deploy/scripts/run-preprocess-nimble.sh static-optimization
+# Or normalization alone after workers finished:
+kubectl apply -k deploy/jobs/preprocess-nimble/normalization
 kubectl apply -k deploy/jobs/train-sindy
+kubectl apply -k deploy/jobs/train-surrogate
 kubectl apply -k deploy/jobs/train-diffusion/nimble
 
 # Interactive dev shell on the cluster
