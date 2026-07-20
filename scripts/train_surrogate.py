@@ -51,6 +51,12 @@ def activation_surrogate_loss(
     return loss_main + float(lambda_temporal) * loss_temporal
 
 
+def _per_muscle_l1(pred: torch.Tensor, target: torch.Tensor) -> np.ndarray:
+    """Mean L1 per muscle channel over batch and time → ``[M]``."""
+    err = torch.abs(pred - target).mean(dim=(0, 1))
+    return err.detach().cpu().numpy().astype(np.float64)
+
+
 def train_activation_surrogate(
     *,
     data_root: str,
@@ -203,10 +209,14 @@ def train_activation_surrogate(
         train_loss /= max(1, n_batches)
 
         val_loss = float("nan")
+        val_muscle_l1_mean = float("nan")
+        val_muscle_l1_max = float("nan")
         if val_loader is not None:
             model.eval()
             vsum = 0.0
             vb = 0
+            muscle_l1_accum: np.ndarray | None = None
+            muscle_count = 0
             with torch.no_grad():
                 for q, act in val_loader:
                     q = q.to(device)
@@ -217,8 +227,17 @@ def train_activation_surrogate(
                             pred, act, lambda_temporal=lambda_temporal
                         ).item()
                     )
+                    per_m = _per_muscle_l1(pred, act)
+                    if muscle_l1_accum is None:
+                        muscle_l1_accum = np.zeros_like(per_m)
+                    muscle_l1_accum += per_m
+                    muscle_count += 1
                     vb += 1
             val_loss = vsum / max(1, vb)
+            if muscle_l1_accum is not None and muscle_count > 0:
+                muscle_l1_accum /= float(muscle_count)
+                val_muscle_l1_mean = float(np.mean(muscle_l1_accum))
+                val_muscle_l1_max = float(np.max(muscle_l1_accum))
             if val_loss < best_val:
                 best_val = val_loss
                 _save_checkpoint(best_path, epoch=epoch, val_loss=val_loss)
@@ -228,10 +247,13 @@ def train_activation_surrogate(
                 "epoch": float(epoch),
                 "train_loss": train_loss,
                 "val_loss": val_loss,
+                "val_muscle_l1_mean": val_muscle_l1_mean,
+                "val_muscle_l1_max": val_muscle_l1_max,
             }
         )
         logger.progress(
-            f"epoch {epoch + 1}/{epochs} train={train_loss:.6f} val={val_loss:.6f}"
+            f"epoch {epoch + 1}/{epochs} train={train_loss:.6f} val={val_loss:.6f} "
+            f"val_muscle_l1_mean={val_muscle_l1_mean:.6f} val_muscle_l1_max={val_muscle_l1_max:.6f}"
         )
         logger.verbose(
             f"[activation_surrogate] epoch {epoch + 1}/{epochs} "

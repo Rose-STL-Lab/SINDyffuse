@@ -14,18 +14,18 @@ from common.paths import nimble_b3d_dir
 from datasets.nimble_dataset import read_q_frames
 from datasets.splits import kinematics_pass_index, load_split_ids
 from nimble.b3d_io import (
+    b3d_has_muscle_activations,
     b3d_has_sindyffuse_custom_values,
     read_guidance_features_frames,
+    read_muscle_activations_frames,
     read_sindy_features_frames,
     warn_missing_custom_once,
 )
-from nimble.physics import load_model
-from sindy.features import features_from_q
+from nimble.muscle_b3d import is_zero_placeholder_activations
 from sindy.library import ThetaLibrary, ThetaSpec
 from sindy.targets import (
-    bio_matrix,
-    default_physics_cfg,
-    targets_for_theta,
+    N_SINDY_TARGETS,
+    build_sindy_targets,
 )
 
 
@@ -56,11 +56,21 @@ class WindowEntry:
     sample_id: str
 
 
+@dataclass
+class SindyIndexStats:
+    num_motions_seen: int = 0
+    num_motions_kept: int = 0
+    num_motions_skipped_missing: int = 0
+    num_motions_skipped_short: int = 0
+    num_motions_skipped_zero: int = 0
+
+
 class SindyWindowIndex:
     """List of strided B3D windows for a split (metadata only)."""
 
-    def __init__(self, entries: List[WindowEntry]):
+    def __init__(self, entries: List[WindowEntry], *, stats: SindyIndexStats | None = None):
         self.entries = list(entries)
+        self.stats = stats or SindyIndexStats()
 
     @classmethod
     def build(
@@ -71,6 +81,8 @@ class SindyWindowIndex:
         window_size: int,
         window_stride: int,
         max_samples: int,
+        skip_zero_placeholders: bool = True,
+        zero_atol: float = 1e-8,
     ) -> "SindyWindowIndex":
         root = Path(data_root)
         b3d_dir = nimble_b3d_dir(root)
@@ -78,14 +90,34 @@ class SindyWindowIndex:
             raise FileNotFoundError(f"Missing {b3d_dir}; run preprocess_nimble.py first.")
 
         entries: List[WindowEntry] = []
+        stats = SindyIndexStats()
         for sid in load_split_ids(root, split):
             b3d_path = b3d_dir / f"{sid}.b3d"
             if not b3d_path.is_file():
+                stats.num_motions_skipped_missing += 1
                 continue
+            stats.num_motions_seen += 1
             subj = nimble.biomechanics.SubjectOnDisk(str(b3d_path))
+            if not b3d_has_sindyffuse_custom_values(subj):
+                stats.num_motions_skipped_missing += 1
+                continue
+            if not b3d_has_muscle_activations(subj):
+                stats.num_motions_skipped_missing += 1
+                continue
+
             trial = 0
             tlen = int(subj.getTrialLength(trial))
-            del subj
+            if tlen < int(window_size):
+                stats.num_motions_skipped_short += 1
+                continue
+
+            if skip_zero_placeholders:
+                act = read_muscle_activations_frames(subj, trial, 0, tlen)
+                if is_zero_placeholder_activations(act, atol=float(zero_atol)):
+                    stats.num_motions_skipped_zero += 1
+                    continue
+
+            stats.num_motions_kept += 1
             for st in _window_starts(tlen, window_size, window_stride):
                 entries.append(
                     WindowEntry(
@@ -101,8 +133,20 @@ class SindyWindowIndex:
                 break
 
         if not entries:
-            raise ValueError(f"No B3D windows indexed from {root}")
-        return cls(entries)
+            raise ValueError(
+                f"No SINDy windows indexed from {root} (split={split!r}). "
+                f"Re-run preprocess_nimble.py with muscle activations. "
+                f"skipped_missing={stats.num_motions_skipped_missing} "
+                f"skipped_zero={stats.num_motions_skipped_zero}"
+            )
+        print(
+            f"[sindy/data] indexed {len(entries)} windows from {stats.num_motions_kept} motions "
+            f"(skipped_missing={stats.num_motions_skipped_missing} "
+            f"skipped_zero={stats.num_motions_skipped_zero} "
+            f"skipped_short={stats.num_motions_skipped_short})",
+            flush=True,
+        )
+        return cls(entries, stats=stats)
 
 
 def compute_window_arrays(
@@ -114,8 +158,6 @@ def compute_window_arrays(
     compute_bio: bool = True,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[str], List[str]]:
     """Read one window and compute SINDy ``u``, ``c``, ``y`` arrays."""
-    bio_cfg = default_physics_cfg(fps=fps, max_frames=window_size)
-    sk = load_model().skeleton
     subj = nimble.biomechanics.SubjectOnDisk(str(b3d_path))
     trial = 0
     kin = kinematics_pass_index(subj, trial)
@@ -129,21 +171,18 @@ def compute_window_arrays(
         un, cn = list(U_FEATURE_NAMES), list(C_FEATURE_NAMES)
         if compute_bio:
             bio = read_guidance_features_frames(subj, trial, int(start_frame), int(window_size))
-            y = targets_for_theta(bio)
+            act = read_muscle_activations_frames(subj, trial, int(start_frame), int(window_size))
+            y = build_sindy_targets(bio, act)
         else:
-            from nimble.channels import BIOMECH_COMPONENT_KEYS
-
-            y = np.zeros((max(0, window_size - 1), len(BIOMECH_COMPONENT_KEYS)), dtype=np.float32)
+            y = np.zeros((max(0, window_size - 1), N_SINDY_TARGETS), dtype=np.float32)
     else:
-        warn_missing_custom_once(str(b3d_path), "guidance_features/sindy_features")
-        u, c, un, cn = features_from_q(win_q, sk, fps=fps)
-        if compute_bio:
-            bio = bio_matrix(win_q, fps=fps, guidance_cfg=bio_cfg)
-            y = targets_for_theta(bio)
-        else:
-            from nimble.channels import BIOMECH_COMPONENT_KEYS
-
-            y = np.zeros((max(0, window_size - 1), len(BIOMECH_COMPONENT_KEYS)), dtype=np.float32)
+        warn_missing_custom_once(str(b3d_path), "guidance_features/sindy_features/muscle_activations")
+        raise RuntimeError(
+            f"B3D {b3d_path} missing SINDyffuse custom values with muscle activations; "
+            f"re-run preprocess_nimble.py with --activation_method moco_track or static_optimization."
+        )
+    if y.shape[1] != N_SINDY_TARGETS:
+        raise ValueError(f"Expected y with {N_SINDY_TARGETS} targets, got {y.shape}")
     return u, c, y, un, cn
 
 
@@ -205,6 +244,8 @@ def collect_windows(
     *,
     compute_bio: bool = True,
     log_every: int = 50,
+    skip_zero_placeholders: bool = True,
+    zero_atol: float = 1e-8,
 ):
     """Preload all SINDy windows into memory (``preload=True`` path)."""
     index = SindyWindowIndex.build(
@@ -213,6 +254,8 @@ def collect_windows(
         window_size=window_size,
         window_stride=window_stride,
         max_samples=max_samples,
+        skip_zero_placeholders=skip_zero_placeholders,
+        zero_atol=zero_atol,
     )
     u_list, c_list, y_list, sid_list = [], [], [], []
     u_names: List[str] = []

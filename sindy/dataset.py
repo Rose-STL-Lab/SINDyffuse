@@ -92,6 +92,8 @@ def prepare_lazy_sindy_data(
     include_u: bool,
     include_c: bool,
     log_every: int = 50,
+    skip_zero_placeholders: bool = True,
+    zero_atol: float = 1e-8,
 ) -> Tuple[SindyWindowIndex, StandardScaler, StandardScaler, List[str], List[str], List[str], int, ThetaSpec]:
     """Build window index and fit scalers with a single streaming pass over B3D files."""
     index = SindyWindowIndex.build(
@@ -100,6 +102,8 @@ def prepare_lazy_sindy_data(
         window_size=window_size,
         window_stride=window_stride,
         max_samples=max_samples,
+        skip_zero_placeholders=skip_zero_placeholders,
+        zero_atol=zero_atol,
     )
     print(f"[sindy/data] lazy mode: {len(index.entries)} windows indexed", flush=True)
     first = index.entries[0]

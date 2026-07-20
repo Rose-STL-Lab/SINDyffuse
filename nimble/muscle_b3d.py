@@ -16,6 +16,18 @@ def pack_muscle_activations(activations: np.ndarray) -> np.ndarray:
     return np.ascontiguousarray(arr.T)
 
 
+def is_zero_placeholder_activations(
+    activations: np.ndarray,
+    *,
+    atol: float = 1e-8,
+) -> bool:
+    """True when OpenSim labels are all-zero fallbacks (failed / skipped solve)."""
+    act = np.asarray(activations)
+    if act.size == 0:
+        return True
+    return bool(np.allclose(act, 0.0, atol=float(atol), equal_nan=True))
+
+
 def unpack_muscle_activations(matrix: np.ndarray) -> np.ndarray:
     """B3D ``[M, T]`` or ``[T, M]`` → ``[T, M]`` float32."""
     arr = np.asarray(matrix, dtype=np.float32)

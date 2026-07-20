@@ -90,6 +90,7 @@ def main() -> None:
     parser.add_argument("--out_npz", required=True)
     parser.add_argument("--guidance", choices=["none", "sindy", "nimble"], default="sindy")
     parser.add_argument("--sindy_checkpoint_dir", default="")
+    parser.add_argument("--surrogate_checkpoint_dir", default="")
     parser.add_argument("--data_root", default="", help="HumanML3D dataset root (default: datasets/HumanML3D).")
     parser.add_argument("--train_config", default="", help="Optional train JSON; reads train.nimble_guidance when guidance=nimble.")
     parser.add_argument("--seq_len", type=int, default=64)
@@ -153,11 +154,14 @@ def _generate(args: argparse.Namespace, logger: RunLogger) -> None:
     if mode == GuidanceMode.SINDY:
         if not args.sindy_checkpoint_dir:
             raise ValueError("--sindy_checkpoint_dir is required when guidance=sindy")
+        if not args.surrogate_checkpoint_dir:
+            raise ValueError("--surrogate_checkpoint_dir is required when guidance=sindy")
         sindy_guidance = LearnedSINDyGuidance(
             sild_dir=str(resolve_repo_path(args.sindy_checkpoint_dir)),
             data_root=data_root,
             fps=20.0,
             clip_model_name="ViT-B/32",
+            surrogate_checkpoint=str(resolve_repo_path(args.surrogate_checkpoint_dir)),
         )
     elif mode == GuidanceMode.NIMBLE:
         nimble_cfg: dict = {}

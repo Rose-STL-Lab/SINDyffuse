@@ -19,18 +19,7 @@ from nimble.b3d_io import (
     b3d_has_sindyffuse_custom_values,
     read_muscle_activations_frames,
 )
-
-
-def is_zero_placeholder_activations(
-    activations: np.ndarray,
-    *,
-    atol: float = 1e-8,
-) -> bool:
-    """True when OpenSim labels are all-zero fallbacks (failed / skipped solve)."""
-    act = np.asarray(activations)
-    if act.size == 0:
-        return True
-    return bool(np.allclose(act, 0.0, atol=float(atol), equal_nan=True))
+from nimble.muscle_b3d import is_zero_placeholder_activations
 
 
 class ActivationB3DDataset(Dataset):

@@ -157,16 +157,21 @@ def train(config_path: str, out_dir: str, *, preload: bool = False) -> None:
         nimble_cfg = {}
     sindy_dir_raw = str(train_cfg.get("sindy_checkpoint_dir", "")).strip()
     sindy_dir = str(resolve_repo_path(sindy_dir_raw)) if sindy_dir_raw else ""
+    surrogate_dir_raw = str(train_cfg.get("surrogate_checkpoint_dir", "")).strip()
+    surrogate_dir = str(resolve_repo_path(surrogate_dir_raw)) if surrogate_dir_raw else ""
     sindy_guidance = None
     nimble_guidance = None
     if guidance_mode == GuidanceMode.SINDY:
         if not sindy_dir:
             raise ValueError("Default guidance=sindy requires train.sindy_checkpoint_dir")
+        if not surrogate_dir:
+            raise ValueError("guidance=sindy requires train.surrogate_checkpoint_dir")
         sindy_guidance = LearnedSINDyGuidance(
             sild_dir=sindy_dir,
             data_root=data_root,
             fps=float(data_cfg.get("fps", 20.0)),
             clip_model_name=clip_model_name,
+            surrogate_checkpoint=surrogate_dir,
         )
     elif guidance_mode == GuidanceMode.NIMBLE:
         nimble_guidance = build_nimble_guidance(
@@ -183,7 +188,7 @@ def train(config_path: str, out_dir: str, *, preload: bool = False) -> None:
         f"world_size={get_world_size()} distributed={use_ddp} data_root={data_root}"
     )
     if guidance_mode == GuidanceMode.SINDY:
-        log_main(f"[train] lambda_sindy={lambda_sindy} sindy_dir={sindy_dir!r}")
+        log_main(f"[train] lambda_sindy={lambda_sindy} sindy_dir={sindy_dir!r} surrogate_dir={surrogate_dir!r}")
     if guidance_mode == GuidanceMode.NIMBLE:
         log_main(
             f"[train] lambda_nimble={lambda_nimble} "
@@ -236,9 +241,10 @@ def train(config_path: str, out_dir: str, *, preload: bool = False) -> None:
             denom = torch.clamp(sqrt_ab, min=1e-8)
             x0_pred = (x_t - sqrt_1mab * eps_pred) / denom
             if guidance_mode == GuidanceMode.SINDY and sindy_guidance is not None:
-                loss_guidance = float(lambda_sindy) * sindy_guidance.loss(
+                raw_guide, guide_stats = sindy_guidance.loss_and_stats(
                     x0_pred, captions=text_in, device=device
                 )
+                loss_guidance = float(lambda_sindy) * raw_guide
             elif guidance_mode == GuidanceMode.NIMBLE and nimble_guidance is not None:
                 raw_guide, guide_stats = nimble_guidance.loss_and_stats(x0_pred)
                 t_weight = nimble_guidance.guidance_weight(t=t, total_timesteps=int(sched.timesteps))
@@ -257,6 +263,12 @@ def train(config_path: str, out_dir: str, *, preload: bool = False) -> None:
                     f"step={step} loss={float(loss.item()):.6f} "
                     f"diff={float(loss_diff.item()):.6f} guide={float(loss_guidance.item()):.6f}"
                 )
+                if guidance_mode == GuidanceMode.SINDY and guide_stats:
+                    msg += (
+                        f" sindy_bio={guide_stats.get('sindy_bio_mse', 0.0):.4f}"
+                        f" sindy_muscle={guide_stats.get('sindy_muscle_mse', 0.0):.4f}"
+                        f" guide_scalar={guide_stats.get('sindy_guidance_scalar', 0.0):.4f}"
+                    )
                 if guidance_mode == GuidanceMode.NIMBLE and guide_stats:
                     msg += (
                         f" nimble_vel={guide_stats.get('nimble_vel', 0.0):.4f}"

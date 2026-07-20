@@ -30,6 +30,7 @@ spec:
           export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
           HML=/mnt/SINDyffuse/datasets/HumanML3D
           test -d "${HML}/nimble_b3d" || { echo "Missing ${HML}/nimble_b3d"; exit 1; }
+          # SINDy training requires muscle_activations in B3D (preprocess with moco_track or static_optimization).
           RUN=/mnt/SINDyffuse/results/sindy_$(date +%Y%m%d_%H%M%S)
           mkdir -p "${RUN}"
           NGPU=$(nvidia-smi -L | wc -l)

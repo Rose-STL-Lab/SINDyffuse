@@ -1,4 +1,4 @@
-"""Learned SINDy guidance: sparse text-conditioned model of Nimble L_bio."""
+"""Learned SINDy guidance: sparse text-conditioned bio + muscle targets."""
 
 from __future__ import annotations
 
@@ -18,7 +18,16 @@ from nimble.guidance import NimbleGuidanceConfig
 from nimble.physics import load_model, physics_from_q, physics_from_q_batch
 from sindy.library import ThetaLibrary, ThetaSpec
 from sindy.model import TextToXi, predict_from_xi
+from sindy.targets import (
+    N_BIO_TARGETS,
+    N_MUSCLE_TARGETS,
+    N_SINDY_TARGETS,
+    muscle_channel_names,
+    parse_target_weights,
+    sindy_target_keys,
+)
 from sindy.features import features_from_q_torch
+from surrogate.guidance import ActivationSurrogateGuidance, load_activation_surrogate_guidance
 
 
 def _install_numpy_pickle_compat() -> None:
@@ -60,10 +69,10 @@ def _load_train_config(sild_dir: Path) -> Dict[str, Any]:
 
 
 class LearnedSINDyGuidance:
-    """Sparse SINDy model: ``pred = Θ(motion) · Ξ(text)`` trained to match per-frame L_bio.
+    """Sparse SINDy model: ``pred = Θ(motion) · Ξ(text)`` trained to match bio + muscle targets.
 
-    Diffusion guidance minimizes MSE between the SINDy prediction and **actual** L_bio from
-    ``physics_from_q`` (FK-only, no train-time IK).
+    Diffusion guidance minimizes MSE between the SINDy prediction and **actual** targets from
+    ``physics_from_q`` (23 bio channels) and the activation surrogate (80 muscle channels).
     """
 
     def __init__(
@@ -74,6 +83,8 @@ class LearnedSINDyGuidance:
         clip_model_name: str = "ViT-B/32",
         *,
         bio_physics: NimbleGuidanceConfig | None = None,
+        surrogate_checkpoint: str | Path | None = None,
+        target_weights: List[float] | None = None,
     ):
         _install_numpy_pickle_compat()
         self.sild_dir = Path(sild_dir)
@@ -104,11 +115,34 @@ class LearnedSINDyGuidance:
             )
         self.bio_channel_names = bio_names
 
-        if self.target_dim != len(BIOMECH_COMPONENT_KEYS):
+        muscle_names_ckpt = list(ckpt.get("muscle_channel_names") or muscle_channel_names())
+        if len(muscle_names_ckpt) != N_MUSCLE_TARGETS:
             raise ValueError(
-                f"Checkpoint target_dim={self.target_dim} != {len(BIOMECH_COMPONENT_KEYS)}; "
-                "retrain SINDy on L_bio targets."
+                f"Checkpoint muscle_channel_names length {len(muscle_names_ckpt)} != "
+                f"{N_MUSCLE_TARGETS}; retrain SINDy with muscle activation targets."
             )
+        self.muscle_channel_names = muscle_names_ckpt
+
+        expected_target_dim = len(sindy_target_keys())
+        if self.target_dim != expected_target_dim:
+            raise ValueError(
+                f"Checkpoint target_dim={self.target_dim} != {expected_target_dim} "
+                f"(23 bio + 80 muscle); retrain SINDy on joint targets."
+            )
+
+        tw = parse_target_weights(target_weights, n_targets=self.target_dim)
+        self._target_weights = torch.tensor(tw, dtype=torch.float32)
+
+        sur_path = str(surrogate_checkpoint or "").strip()
+        if not sur_path:
+            raise ValueError(
+                "SINDy guidance with muscle targets requires surrogate_checkpoint "
+                "(path to activation surrogate latest.pt)."
+            )
+        self._surrogate: ActivationSurrogateGuidance = load_activation_surrogate_guidance(
+            sur_path,
+            data_root=str(self.data_root),
+        )
 
         self.text_to_xi = TextToXi(
             in_dim=self.in_dim,
@@ -231,6 +265,23 @@ class LearnedSINDyGuidance:
             rows.append(bio.detach())
         return torch.stack(rows, dim=0)
 
+    def _actual_targets_from_motion(self, motion_norm: torch.Tensor) -> torch.Tensor:
+        """Actual SINDy targets ``[B, L, 103]`` from predicted motion."""
+        bio = self._bio_from_motion(motion_norm)
+        denorm = self._denorm_motion(motion_norm)
+        muscle_full = self._surrogate.predict_activations(denorm)
+        muscle = muscle_full[:, :-1, :]
+        if muscle.shape[-1] != N_MUSCLE_TARGETS:
+            raise ValueError(
+                f"Surrogate returned {muscle.shape[-1]} muscle channels; expected {N_MUSCLE_TARGETS}"
+            )
+        return torch.cat([bio, muscle], dim=-1)
+
+    def _weighted_mse(self, pred_s: torch.Tensor, y_s: torch.Tensor) -> torch.Tensor:
+        err = (pred_s - y_s) ** 2
+        w = self._target_weights.to(device=pred_s.device, dtype=pred_s.dtype).view(1, 1, -1)
+        return torch.mean(err * w)
+
     def loss(self, motion_norm: torch.Tensor, captions: List[str], device: torch.device) -> torch.Tensor:
         b, t, _ = motion_norm.shape
         if t < 3:
@@ -239,11 +290,32 @@ class LearnedSINDyGuidance:
         theta_s = self._scale_theta(self._build_theta(motion_norm))
         emb = self._embed_text(captions, device=device)
         self.text_to_xi = self.text_to_xi.to(device)
+        self._surrogate = self._surrogate.to(device)
         xi_out = self.text_to_xi(emb, seq_len=int(t - 1))
         pred_s = predict_from_xi(theta_s, xi_out)
-        y_s = self._scale_y(self._bio_from_motion(motion_norm))
-        return torch.mean((pred_s - y_s) ** 2)
+        y_s = self._scale_y(self._actual_targets_from_motion(motion_norm))
+        return self._weighted_mse(pred_s, y_s)
 
     def loss_and_stats(self, motion_norm: torch.Tensor, captions: List[str], device: torch.device) -> tuple[torch.Tensor, Dict[str, float]]:
-        loss = self.loss(motion_norm, captions, device)
-        return loss, {"sindy_guidance_scalar": float(loss.detach().cpu().item())}
+        b, t, _ = motion_norm.shape
+        if t < 3:
+            z = torch.tensor(0.0, device=device)
+            return z, {"sindy_guidance_scalar": 0.0, "sindy_bio_mse": 0.0, "sindy_muscle_mse": 0.0}
+
+        theta_s = self._scale_theta(self._build_theta(motion_norm))
+        emb = self._embed_text(captions, device=device)
+        self.text_to_xi = self.text_to_xi.to(device)
+        self._surrogate = self._surrogate.to(device)
+        xi_out = self.text_to_xi(emb, seq_len=int(t - 1))
+        pred_s = predict_from_xi(theta_s, xi_out)
+        y_s = self._scale_y(self._actual_targets_from_motion(motion_norm))
+        err = (pred_s - y_s) ** 2
+        w = self._target_weights.to(device=pred_s.device, dtype=pred_s.dtype).view(1, 1, -1)
+        loss = torch.mean(err * w)
+        bio_mse = float(torch.mean(err[..., :N_BIO_TARGETS]).detach().cpu().item())
+        muscle_mse = float(torch.mean(err[..., N_BIO_TARGETS:]).detach().cpu().item())
+        return loss, {
+            "sindy_guidance_scalar": float(loss.detach().cpu().item()),
+            "sindy_bio_mse": bio_mse,
+            "sindy_muscle_mse": muscle_mse,
+        }

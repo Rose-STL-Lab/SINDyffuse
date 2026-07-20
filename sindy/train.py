@@ -1,4 +1,4 @@
-"""Train text→Xi SINDy model on Nimble L_bio targets."""
+"""Train text→Xi SINDy model on Nimble L_bio + muscle activation targets."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import clip  # type: ignore
 import joblib
@@ -40,6 +40,14 @@ from common.run_logging import RunLogger, add_run_log_cli_args, get_run_logger, 
 from nimble.channels import BIOMECH_COMPONENT_KEYS
 
 from sindy.dataset import SindyWindowDataset, prepare_lazy_sindy_data
+from sindy.targets import (
+    N_BIO_TARGETS,
+    N_MUSCLE_TARGETS,
+    N_SINDY_TARGETS,
+    muscle_channel_names,
+    parse_target_weights,
+    sindy_target_keys,
+)
 from sindy.windows import collect_windows, make_theta_spec
 from sindy.library import ThetaLibrary
 from sindy.model import TextToXi, predict_from_xi, xi_temporal_smoothness
@@ -151,9 +159,13 @@ def _run_training_loop(
     rng: np.random.Generator,
     fetch_batch: Any,
     run_validation: bool = True,
-) -> Tuple[float, Optional[Dict[str, torch.Tensor]]]:
+    n_bio_targets: int = N_BIO_TARGETS,
+    target_weights: torch.Tensor | None = None,
+) -> Tuple[float, Optional[Dict[str, torch.Tensor]], Dict[str, float]]:
     """Shared epoch loop for preloaded tensors or lazy dataset batches."""
     best_val, best_state = float("inf"), None
+    best_metrics: Dict[str, float] = {}
+    w = target_weights
     for ep in range(1, int(epochs) + 1):
         model.train()
         rng.shuffle(tr_idx)
@@ -169,7 +181,10 @@ def _run_training_loop(
                 e = emb_t[cap_to_idx[cap] : cap_to_idx[cap] + 1]
                 xi_out = model(e, seq_len=int(length))
                 pred = predict_from_xi(theta_b[bi : bi + 1], xi_out)
-                loss_fit = loss_fit + torch.mean((pred - y_b[bi : bi + 1]) ** 2)
+                err = (pred - y_b[bi : bi + 1]) ** 2
+                if w is not None:
+                    err = err * w.view(1, 1, -1)
+                loss_fit = loss_fit + torch.mean(err)
                 xi_tensor = xi_out[0] if isinstance(xi_out, tuple) else xi_out
                 loss_sparse = loss_sparse + torch.mean(torch.abs(xi_tensor))
                 loss_smooth = loss_smooth + xi_temporal_smoothness(xi_out)
@@ -181,9 +196,11 @@ def _run_training_loop(
             losses.append(float(loss.detach().cpu()))
 
         val_loss = float("inf")
+        val_bio = float("nan")
+        val_muscle = float("nan")
         if run_validation and len(val_idx) > 0:
             model.eval()
-            val_loss = 0.0
+            val_loss = val_bio_sum = val_muscle_sum = 0.0
             with torch.no_grad():
                 for sample_idx in val_idx:
                     cap = captions[int(sample_idx)]
@@ -191,19 +208,29 @@ def _run_training_loop(
                     theta_b, y_b = fetch_batch([int(sample_idx)])
                     xi_out = model(e, seq_len=int(length))
                     pred = predict_from_xi(theta_b, xi_out)
-                    val_loss += float(torch.mean((pred - y_b) ** 2).cpu())
-            val_loss /= max(1, len(val_idx))
+                    err = (pred - y_b) ** 2
+                    if w is not None:
+                        err = err * w.view(1, 1, -1)
+                    val_loss += float(torch.mean(err).cpu())
+                    val_bio_sum += float(torch.mean(err[..., :n_bio_targets]).cpu())
+                    val_muscle_sum += float(torch.mean(err[..., n_bio_targets:]).cpu())
+            n_val = max(1, len(val_idx))
+            val_loss /= n_val
+            val_bio = val_bio_sum / n_val
+            val_muscle = val_muscle_sum / n_val
             if val_loss < best_val:
                 best_val = val_loss
+                best_metrics = {"val_bio_mse": val_bio, "val_muscle_mse": val_muscle}
                 best_state = {k: v.detach().cpu().clone() for k, v in model_state_dict(model).items()}
         if (ep % max(1, epochs // 20) == 0 or ep == 1) and is_main_process():
             vl = val_loss if run_validation else float("nan")
             from common.run_logging import get_run_logger
 
             get_run_logger().progress(
-                f"epoch={ep}/{epochs} train_loss={np.mean(losses):.6f} val_loss={vl:.6f}"
+                f"epoch={ep}/{epochs} train_loss={np.mean(losses):.6f} val_loss={vl:.6f} "
+                f"val_bio_mse={val_bio:.6f} val_muscle_mse={val_muscle:.6f}"
             )
-    return best_val, best_state
+    return best_val, best_state, best_metrics
 
 
 def train(
@@ -231,6 +258,9 @@ def train(
     device_name: str,
     bio_log_every: int,
     preload: bool = False,
+    skip_zero_placeholders: bool = True,
+    zero_atol: float = 1e-8,
+    target_weights: Sequence[float] | None = None,
     distributed_cfg: Optional[Dict[str, Any]] = None,
     seed: int = 42,
 ) -> Dict[str, Any]:
@@ -243,6 +273,8 @@ def train(
             f"Run preprocess_nimble.py first."
         )
     bio_keys = list(BIOMECH_COMPONENT_KEYS)
+    muscle_keys = list(muscle_channel_names())
+    target_keys = list(sindy_target_keys())
     length = int(window_size) - 1
     u_names: List[str] = []
     feature_names: List[str] = []
@@ -262,6 +294,8 @@ def train(
             window_stride,
             max_samples,
             log_every=bio_log_every,
+            skip_zero_placeholders=skip_zero_placeholders,
+            zero_atol=zero_atol,
         )
         n, t, _u_dim = u.shape
         u_in = u[:, :-1, :] if include_u else None
@@ -278,6 +312,8 @@ def train(
         theta = theta_flat.reshape(n, length, f).astype(np.float32)
         if y.shape[1] != length:
             raise ValueError(f"y length {y.shape[1]} != theta length {length}")
+        if y.shape[2] != N_SINDY_TARGETS:
+            raise ValueError(f"Expected y target dim {N_SINDY_TARGETS}, got {y.shape[2]}")
         target_dim = int(y.shape[2])
         theta_scaler = StandardScaler()
         y_scaler = StandardScaler()
@@ -296,7 +332,11 @@ def train(
             include_u=include_u,
             include_c=include_c,
             log_every=bio_log_every,
+            skip_zero_placeholders=skip_zero_placeholders,
+            zero_atol=zero_atol,
         )
+        if target_dim != N_SINDY_TARGETS:
+            raise ValueError(f"Expected target_dim {N_SINDY_TARGETS}, got {target_dim}")
         f = len(feature_names)
         sample_ids = np.array([e.sample_id for e in index.entries], dtype=object)
         n = len(sample_ids)
@@ -352,9 +392,12 @@ def train(
     opt = optim.AdamW(model.parameters(), lr=float(lr))
     log_main(
         f"[sindy/train] device={device} world_size={get_world_size()} "
-        f"distributed={use_ddp} train_windows={len(tr_idx)} per_gpu_batch={batch_size}"
+        f"distributed={use_ddp} train_windows={len(tr_idx)} per_gpu_batch={batch_size} "
+        f"target_dim={target_dim} (bio={N_BIO_TARGETS} muscle={N_MUSCLE_TARGETS})"
     )
     emb_t = torch.tensor(unique_emb, dtype=torch.float32, device=device)
+    tw_np = parse_target_weights(target_weights, n_targets=target_dim)
+    target_w = torch.tensor(tw_np, dtype=torch.float32, device=device)
 
     if preload:
         assert theta_s is not None and y_s is not None
@@ -373,7 +416,7 @@ def train(
             y_b = torch.stack([it["y"] for it in items], dim=0).to(device)
             return theta_b, y_b
 
-    best_val, best_state = _run_training_loop(
+    best_val, best_state, best_val_metrics = _run_training_loop(
         model=model,
         opt=opt,
         device=device,
@@ -390,6 +433,8 @@ def train(
         rng=rng,
         fetch_batch=fetch_batch,
         run_validation=is_main_process(),
+        n_bio_targets=N_BIO_TARGETS,
+        target_weights=target_w,
     )
 
     if best_state is not None:
@@ -414,6 +459,8 @@ def train(
             "num_experts": int(num_experts),
             "max_seq_len": int(length),
             "bio_channel_names": bio_keys,
+            "muscle_channel_names": muscle_keys,
+            "target_channel_names": target_keys,
         },
         out / "text_to_xi.pt",
     )
@@ -428,12 +475,14 @@ def train(
             "fps": float(fps),
             "target_dim": target_dim,
             "bio_channel_names": bio_keys,
+            "muscle_channel_names": muscle_keys,
+            "target_channel_names": target_keys,
             "window_size": int(window_size),
             "window_stride": int(window_stride),
             "theta_tier": theta_tier,
             "preload": bool(preload),
         },
-        "metrics": {"best_val_loss": float(best_val)},
+        "metrics": {"best_val_loss": float(best_val), **best_val_metrics},
     }
     with open(out / "sild_text_train_results.json", "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2)
@@ -479,7 +528,9 @@ def main() -> None:
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--lambda_l1", type=float, default=1e-4)
     parser.add_argument("--lambda_xi_smooth", type=float, default=0.0)
-    parser.add_argument("--hidden_dim", type=int, default=512)
+    parser.add_argument("--hidden_dim", type=int, default=768)
+    parser.add_argument("--skip_zero_placeholders", type=int, default=1)
+    parser.add_argument("--zero_atol", type=float, default=1e-8)
     parser.add_argument("--num_experts", type=int, default=1)
     parser.add_argument("--fallback_caption_weight", type=float, default=0.2)
     parser.add_argument("--clip_model_name", default="ViT-B/32")
@@ -534,6 +585,9 @@ def main() -> None:
                 device_name=args.device,
                 bio_log_every=int(args.bio_log_every),
                 preload=bool(args.preload),
+                skip_zero_placeholders=bool(args.skip_zero_placeholders),
+                zero_atol=float(args.zero_atol),
+                target_weights=full_cfg.get("target_weights") if cfg_path else None,
                 distributed_cfg=dist_cfg,
                 seed=int(full_cfg.get("seed", 42)) if cfg_path else 42,
             )

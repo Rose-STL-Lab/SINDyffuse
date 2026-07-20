@@ -4,9 +4,9 @@ Text-conditioned human motion diffusion with **SINDy** biomechanics targets and 
 
 HumanML3D joint trajectories are retargeted to the Rajagopal 2015 musculoskeletal model, cached as Nimble B3D files, and used to train:
 
-1. **SINDy** — text → sparse biomechanics coefficients  
+1. **SINDy** — text → sparse coefficients for **103 targets** (23 L_bio + 80 muscle activations)  
 2. **Activation surrogate** — fast `q` → 80 muscle activations (OpenSim labels at preprocess)  
-3. **Diffusion** — text → motion with optional Nimble/SINDy guidance  
+3. **Diffusion** — text → motion with SINDy guidance (`loss_diff + lambda_sindy * loss_sindy`)  
 
 ## Setup
 
@@ -100,11 +100,13 @@ After upgrading the B3D schema (e.g. adding `muscle_activations`), **re-run prep
 
 ### 2. Train SINDy
 
+Requires B3D cache with **muscle activations** (preprocess with `moco_track` or `static_optimization`, not `none`).
+
 ```bash
 python scripts/train_sindy.py --output results/sindy
 ```
 
-Config: `configs/train_sindy.json`
+Config: `configs/train_sindy.json`. Joint model predicts **103 channels** (23 bio + 80 muscles) from text-conditioned sparse `Ξ(text)`. Ground-truth targets come from cached `guidance_features` and `muscle_activations`. Old `target_dim=23` checkpoints are incompatible.
 
 ### 3. Train activation surrogate
 
@@ -112,7 +114,7 @@ Config: `configs/train_sindy.json`
 python scripts/train_surrogate.py --config configs/train_surrogate.json --output results/activation_surrogate
 ```
 
-Config: `configs/train_surrogate.json`. Training uses L1 on all frames in each window (plus optional temporal regularization via `lambda_temporal`). Motions whose cached `muscle_activations` are all-zero placeholders are skipped by default (`skip_zero_placeholders=1`).
+Config: `configs/train_surrogate.json`. Default architecture is a **temporal transformer** (fidelity-first). Training uses L1 on all frames in each window (plus optional temporal regularization via `lambda_temporal`). Motions whose cached `muscle_activations` are all-zero placeholders are skipped by default (`skip_zero_placeholders=1`).
 
 ### 4. Train diffusion
 
@@ -120,12 +122,16 @@ Config: `configs/train_surrogate.json`. Training uses L1 on all frames in each w
 python scripts/train_diffusion.py --config configs/train_diffusion.json --out_dir results/diffusion
 ```
 
-Config: `configs/train_diffusion.json`
+Config: `configs/train_diffusion.json`. With `guidance=sindy`, loss is **diffusion denoising + SINDy consistency** only (no Nimble term). SINDy guidance compares `Θ(q)·Ξ(text)` to `actual(q)` where bio channels use FK physics and muscle channels use the **activation surrogate** at inference time. Set `train.sindy_checkpoint_dir` and `train.surrogate_checkpoint_dir`.
 
 ### 5. Generate motion
 
 ```bash
-python scripts/generate_motion.py --prompt "a person walks forward"
+python scripts/generate_motion.py --checkpoint results/diffusion/latest.pt \
+  --caption "a person walks forward" --out_npz out.npz \
+  --guidance sindy \
+  --sindy_checkpoint_dir results/sindy/latest \
+  --surrogate_checkpoint_dir results/activation_surrogate/latest
 ```
 
 ## Kubernetes
