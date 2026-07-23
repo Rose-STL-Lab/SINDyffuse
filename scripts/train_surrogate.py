@@ -14,13 +14,32 @@ import json
 import os
 import random
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
 
+from common.distributed import (
+    cleanup_distributed,
+    get_rank,
+    get_world_size,
+    init_distributed,
+    is_main_process,
+    log_gpu_diagnostics,
+    log_main,
+    maybe_relaunch_with_torchrun,
+    model_state_dict,
+    parse_distributed_enabled,
+    resolve_nproc_per_node,
+    should_auto_relaunch_torchrun,
+    resolve_train_device,
+    seed_all,
+    setup_spawn_if_distributed,
+    wrap_ddp,
+)
 from common.paths import default_humanml3d_root, resolve_data_root
 from common.run_logging import RunLogger, add_run_log_cli_args, get_run_logger, run_logged_main
 from surrogate.dataset import ActivationB3DDataset
@@ -82,15 +101,13 @@ def train_activation_surrogate(
     device_name: str = "auto",
     num_workers: int = 0,
     seed: int = 42,
+    distributed_cfg: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    _set_seed(int(seed))
-
-    if str(device_name).strip().lower() == "cpu":
-        device = torch.device("cpu")
-    elif str(device_name).strip().lower() == "cuda":
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    else:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    use_ddp = init_distributed(distributed_cfg=distributed_cfg)
+    seed_all(int(seed))
+    device = resolve_train_device(device_name)
+    if not use_ddp:
+        log_gpu_diagnostics()
 
     train_ds = ActivationB3DDataset(
         data_root,
@@ -127,15 +144,42 @@ def train_activation_surrogate(
             f"skipped_zero={val_ds.num_motions_skipped_zero}"
         )
 
+    per_gpu_batch = int(batch_size)
+    train_sampler = None
+    val_sampler = None
+    if use_ddp:
+        train_sampler = DistributedSampler(
+            train_ds,
+            num_replicas=get_world_size(),
+            rank=get_rank(),
+            shuffle=True,
+            drop_last=False,
+        )
+        if val_ds is not None:
+            val_sampler = DistributedSampler(
+                val_ds,
+                num_replicas=get_world_size(),
+                rank=get_rank(),
+                shuffle=False,
+                drop_last=False,
+            )
     train_loader = DataLoader(
         train_ds,
-        batch_size=int(batch_size),
-        shuffle=True,
+        batch_size=per_gpu_batch,
+        shuffle=train_sampler is None,
+        sampler=train_sampler,
         num_workers=int(num_workers),
         pin_memory=device.type == "cuda",
     )
     val_loader = (
-        DataLoader(val_ds, batch_size=int(batch_size), shuffle=False, num_workers=int(num_workers))
+        DataLoader(
+            val_ds,
+            batch_size=per_gpu_batch,
+            shuffle=False,
+            sampler=val_sampler,
+            num_workers=int(num_workers),
+            pin_memory=device.type == "cuda",
+        )
         if val_ds is not None
         else None
     )
@@ -167,23 +211,34 @@ def train_activation_surrogate(
         dim_feedforward=dim_feedforward,
         max_seq_len=window_size,
     ).to(device)
+    find_unused = bool((distributed_cfg or {}).get("find_unused_parameters", False))
+    model = wrap_ddp(model, find_unused_parameters=find_unused)
 
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=float(lr), weight_decay=float(weight_decay)
     )
 
+    log_main(
+        f"[activation_surrogate] device={device} world_size={get_world_size()} "
+        f"distributed={use_ddp} per_gpu_batch={per_gpu_batch} "
+        f"global_batch={per_gpu_batch * get_world_size()}"
+    )
+
     out_dir = Path(output)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    if is_main_process():
+        out_dir.mkdir(parents=True, exist_ok=True)
     latest_path = out_dir / "latest.pt"
     best_path = out_dir / "best.pt"
     best_val = float("inf")
     history: list[dict[str, float]] = []
 
     def _save_checkpoint(path: Path, *, epoch: int, val_loss: float) -> None:
+        if not is_main_process():
+            return
         torch.save(
             {
                 **ckpt_payload,
-                "model_state_dict": model.state_dict(),
+                "model_state_dict": model_state_dict(model),
                 "epoch": int(epoch),
                 "val_loss": float(val_loss),
             },
@@ -191,6 +246,8 @@ def train_activation_surrogate(
         )
 
     for epoch in range(int(epochs)):
+        if train_sampler is not None:
+            train_sampler.set_epoch(epoch)
         model.train()
         train_loss = 0.0
         n_batches = 0
@@ -211,7 +268,7 @@ def train_activation_surrogate(
         val_loss = float("nan")
         val_muscle_l1_mean = float("nan")
         val_muscle_l1_max = float("nan")
-        if val_loader is not None:
+        if val_loader is not None and is_main_process():
             model.eval()
             vsum = 0.0
             vb = 0
@@ -251,26 +308,37 @@ def train_activation_surrogate(
                 "val_muscle_l1_max": val_muscle_l1_max,
             }
         )
-        logger.progress(
-            f"epoch {epoch + 1}/{epochs} train={train_loss:.6f} val={val_loss:.6f} "
-            f"val_muscle_l1_mean={val_muscle_l1_mean:.6f} val_muscle_l1_max={val_muscle_l1_max:.6f}"
-        )
-        logger.verbose(
-            f"[activation_surrogate] epoch {epoch + 1}/{epochs} "
-            f"train={train_loss:.6f} val={val_loss:.6f}"
-        )
+        if is_main_process():
+            logger.progress(
+                f"epoch {epoch + 1}/{epochs} train={train_loss:.6f} val={val_loss:.6f} "
+                f"val_muscle_l1_mean={val_muscle_l1_mean:.6f} val_muscle_l1_max={val_muscle_l1_max:.6f}"
+            )
+            logger.verbose(
+                f"[activation_surrogate] epoch {epoch + 1}/{epochs} "
+                f"train={train_loss:.6f} val={val_loss:.6f}"
+            )
 
-    _save_checkpoint(
-        latest_path,
-        epoch=int(epochs) - 1,
-        val_loss=history[-1]["val_loss"] if history else float("nan"),
-    )
-    if not best_path.is_file():
+    if is_main_process():
         _save_checkpoint(
-            best_path,
+            latest_path,
             epoch=int(epochs) - 1,
             val_loss=history[-1]["val_loss"] if history else float("nan"),
         )
+        if not best_path.is_file():
+            _save_checkpoint(
+                best_path,
+                epoch=int(epochs) - 1,
+                val_loss=history[-1]["val_loss"] if history else float("nan"),
+            )
+
+    if not is_main_process():
+        return {
+            "checkpoint": str(latest_path),
+            "best_checkpoint": str(best_path),
+            "train_windows": len(train_ds),
+            "val_windows": len(val_ds) if val_ds is not None else 0,
+            "best_val_loss": best_val,
+        }
 
     metrics = {
         "checkpoint": str(latest_path),
@@ -298,7 +366,7 @@ def _apply_json_config(args: argparse.Namespace, config_path: str) -> None:
         raise FileNotFoundError(f"Missing config: {path}")
     cfg = json.loads(path.read_text(encoding="utf-8"))
     for key, value in cfg.items():
-        if key == "output":
+        if key in {"output", "distributed", "seed"}:
             continue
         if hasattr(args, key):
             setattr(args, key, value)
@@ -355,42 +423,56 @@ def main() -> None:
         args.output = str(out_dir)
 
     cfg_path = str(args.config).strip()
+    dist_cfg: Dict[str, Any] = {}
+    full_cfg: Dict[str, Any] = {}
     if not cfg_path:
         default_cfg = _REPO_ROOT / "configs" / "train_surrogate.json"
         if default_cfg.is_file():
             cfg_path = str(default_cfg)
     if cfg_path:
         _apply_json_config(args, cfg_path)
+        full_cfg = json.loads(Path(cfg_path).read_text(encoding="utf-8"))
+        if isinstance(full_cfg.get("distributed"), dict):
+            dist_cfg = full_cfg["distributed"]
 
     args.data_root = resolve_data_root(str(args.data_root).strip() or None)
 
+    if should_auto_relaunch_torchrun(dist_cfg):
+        maybe_relaunch_with_torchrun()
+    setup_spawn_if_distributed()
+
     def _run(_logger: RunLogger) -> None:
-        metrics = train_activation_surrogate(
-            data_root=args.data_root,
-            output=args.output,
-            split=args.split,
-            val_split=args.val_split,
-            window_size=int(args.window_size),
-            window_stride=int(args.window_stride),
-            normalize_q=bool(int(args.normalize_q)),
-            max_motions=int(args.max_motions),
-            skip_zero_placeholders=bool(int(args.skip_zero_placeholders)),
-            model_type=args.model_type,
-            hidden_dim=int(args.hidden_dim),
-            num_layers=int(args.num_layers),
-            dropout=float(args.dropout),
-            num_heads=int(args.num_heads),
-            dim_feedforward=int(args.dim_feedforward),
-            lr=float(args.lr),
-            weight_decay=float(args.weight_decay),
-            epochs=int(args.epochs),
-            batch_size=int(args.batch_size),
-            lambda_temporal=float(args.lambda_temporal),
-            device_name=args.device,
-            num_workers=int(args.num_workers),
-            seed=int(args.seed),
-        )
-        _logger.verbose(json.dumps(metrics, indent=2))
+        try:
+            metrics = train_activation_surrogate(
+                data_root=args.data_root,
+                output=args.output,
+                split=args.split,
+                val_split=args.val_split,
+                window_size=int(args.window_size),
+                window_stride=int(args.window_stride),
+                normalize_q=bool(int(args.normalize_q)),
+                max_motions=int(args.max_motions),
+                skip_zero_placeholders=bool(int(args.skip_zero_placeholders)),
+                model_type=args.model_type,
+                hidden_dim=int(args.hidden_dim),
+                num_layers=int(args.num_layers),
+                dropout=float(args.dropout),
+                num_heads=int(args.num_heads),
+                dim_feedforward=int(args.dim_feedforward),
+                lr=float(args.lr),
+                weight_decay=float(args.weight_decay),
+                epochs=int(args.epochs),
+                batch_size=int(args.batch_size),
+                lambda_temporal=float(args.lambda_temporal),
+                device_name=args.device,
+                num_workers=int(args.num_workers),
+                seed=int(full_cfg.get("seed", args.seed)) if cfg_path else int(args.seed),
+                distributed_cfg=dist_cfg,
+            )
+            if is_main_process():
+                _logger.verbose(json.dumps(metrics, indent=2))
+        finally:
+            cleanup_distributed()
         os._exit(0)
 
     run_logged_main(

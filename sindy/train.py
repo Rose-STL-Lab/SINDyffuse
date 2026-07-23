@@ -27,7 +27,12 @@ from common.distributed import (
     is_distributed,
     is_main_process,
     log_main,
+    log_gpu_diagnostics,
+    maybe_relaunch_with_torchrun,
     model_state_dict,
+    parse_distributed_enabled,
+    resolve_nproc_per_node,
+    should_auto_relaunch_torchrun,
     resolve_train_device,
     seed_all,
     setup_spawn_if_distributed,
@@ -265,6 +270,8 @@ def train(
     seed: int = 42,
 ) -> Dict[str, Any]:
     use_ddp = init_distributed(distributed_cfg=distributed_cfg)
+    if not use_ddp:
+        log_gpu_diagnostics()
     seed_all(int(seed))
     root = Path(data_root)
     if not nimble_b3d_dir(root).is_dir():
@@ -506,7 +513,6 @@ def _apply_json_config(args: argparse.Namespace, config_path: str) -> None:
 
 
 def main() -> None:
-    setup_spawn_if_distributed()
     parser = argparse.ArgumentParser(description="Train SINDy text→Xi on Nimble L_bio targets")
     parser.add_argument(
         "--config",
@@ -559,6 +565,10 @@ def main() -> None:
             dist_cfg = full_cfg["distributed"]
     else:
         full_cfg = {}
+    if should_auto_relaunch_torchrun(dist_cfg):
+        maybe_relaunch_with_torchrun(module="sindy.train")
+    setup_spawn_if_distributed()
+
     def _run(_logger: RunLogger) -> None:
         try:
             metrics = train(

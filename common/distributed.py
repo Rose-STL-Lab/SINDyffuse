@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Optional, Union
+import shutil
+import sys
+from typing import Any, Dict, List, Optional, Union
 
 import torch
 import torch.distributed as dist
@@ -25,6 +27,98 @@ def torchrun_launched() -> bool:
     return _env_int("WORLD_SIZE", 1) > 1
 
 
+def under_torchrun() -> bool:
+    """True when this process was started by ``torchrun`` / ``torch.distributed.run``."""
+    if _env_int("WORLD_SIZE", 1) > 1:
+        return True
+    return os.environ.get("LOCAL_RANK", "").strip() != ""
+
+
+def resolve_nproc_per_node(*, cap: Optional[int] = None) -> int:
+    """Return GPU/process count for multi-GPU training (always >= 1).
+
+    Resolution order:
+    1. ``NPROC_PER_NODE`` env (matches ``nvidia.com/gpu`` in K8s when set)
+    2. ``CUDA_VISIBLE_DEVICES`` entry count
+    3. ``torch.cuda.device_count()`` when CUDA is available
+    4. ``1`` (CPU / no GPU)
+    """
+    raw = os.environ.get("NPROC_PER_NODE", "").strip()
+    if raw:
+        n = max(1, int(raw))
+        if cap is not None:
+            n = min(n, int(cap))
+        return n
+
+    visible = os.environ.get("CUDA_VISIBLE_DEVICES", "").strip()
+    if visible:
+        devs = [d.strip() for d in visible.split(",") if d.strip()]
+        if devs:
+            n = len(devs)
+            if cap is not None:
+                n = min(n, int(cap))
+            return max(1, n)
+
+    if torch.cuda.is_available():
+        n = int(torch.cuda.device_count())
+        if cap is not None:
+            n = min(n, int(cap))
+        return max(1, n)
+
+    return 1
+
+
+def cuda_usable() -> bool:
+    """True when CUDA kernels can run (not just ``torch.cuda.is_available()``)."""
+    if not torch.cuda.is_available():
+        return False
+    try:
+        torch.cuda.set_device(0)
+        x = torch.randn(2, 2, device="cuda:0")
+        return bool(float(x.sum()) == float(x.sum()))
+    except RuntimeError:
+        return False
+
+
+def _torchrun_executable() -> List[str]:
+    """Return argv prefix to invoke ``torchrun`` (or ``python -m torch.distributed.run``)."""
+    path = shutil.which("torchrun")
+    if path:
+        return [path]
+    return [sys.executable, "-m", "torch.distributed.run"]
+
+
+def maybe_relaunch_with_torchrun(*, module: Optional[str] = None) -> None:
+    """Re-exec the current training entry point under ``torchrun`` when needed.
+
+    No-op when already launched by torchrun, when ``NPROC_PER_NODE=1``, or when only
+    one process should run. Call near the top of training ``main()`` after parsing
+    CLI args (and optionally checking ``parse_distributed_enabled``).
+    """
+    if under_torchrun():
+        return
+    if os.environ.get("SINDYFFUSE_NO_TORCHRUN", "").strip().lower() in {"1", "true", "yes"}:
+        return
+
+    nproc = resolve_nproc_per_node()
+    if nproc <= 1:
+        return
+
+    prefix = _torchrun_executable()
+    cmd = [*prefix, "--standalone", f"--nproc_per_node={nproc}"]
+    if module:
+        cmd.extend(["-m", module, *sys.argv[1:]])
+    else:
+        cmd.extend([sys.argv[0], *sys.argv[1:]])
+
+    print(
+        f"[distributed] Relaunching under torchrun (nproc_per_node={nproc}): "
+        f"{' '.join(cmd)}",
+        flush=True,
+    )
+    os.execv(cmd[0], cmd)
+
+
 def parse_distributed_enabled(cfg: Optional[Dict[str, Any]]) -> bool:
     """Resolve ``distributed.enabled``: auto | true | false."""
     if not cfg:
@@ -35,6 +129,24 @@ def parse_distributed_enabled(cfg: Optional[Dict[str, Any]]) -> bool:
     if raw in {"false", "0", "no", "off"}:
         return False
     return torchrun_launched()
+
+
+def distributed_explicitly_disabled(cfg: Optional[Dict[str, Any]]) -> bool:
+    if not cfg:
+        return False
+    raw = str(cfg.get("enabled", "auto")).strip().lower()
+    return raw in {"false", "0", "no", "off"}
+
+
+def should_auto_relaunch_torchrun(cfg: Optional[Dict[str, Any]] = None) -> bool:
+    """True when training should re-exec under torchrun before DDP init."""
+    if under_torchrun():
+        return False
+    if distributed_explicitly_disabled(cfg):
+        return False
+    if os.environ.get("SINDYFFUSE_NO_TORCHRUN", "").strip().lower() in {"1", "true", "yes"}:
+        return False
+    return resolve_nproc_per_node() > 1
 
 
 def init_distributed(
@@ -60,16 +172,24 @@ def init_distributed(
         return False
 
     use_backend = str((distributed_cfg or {}).get("backend", backend)).strip().lower()
-    if use_backend == "nccl" and not torch.cuda.is_available():
+    if use_backend == "nccl" and not cuda_usable():
+        if torch.cuda.is_available():
+            raise RuntimeError(
+                "CUDA is visible but kernels fail (common in Kubernetes when the pod lacks "
+                "a proper nvidia.com/gpu request or /dev/nvidia0 is missing). "
+                "Recreate the pod with GPU resources so the device plugin mounts /dev/nvidia0, "
+                "nvidia1, … inside the container."
+            )
         use_backend = "gloo"
 
-    if torch.cuda.is_available():
+    if use_backend == "nccl":
         torch.cuda.set_device(local_rank)
 
     if not dist.is_initialized():
         dist.init_process_group(backend=use_backend, rank=rank, world_size=world_size)
 
     _DIST_INITIALIZED = True
+    log_gpu_diagnostics()
     return True
 
 
@@ -167,3 +287,23 @@ def log_main(msg: str) -> None:
         from common.run_logging import get_run_logger
 
         get_run_logger().verbose(msg)
+
+
+def log_gpu_diagnostics() -> None:
+    """Log visible GPUs and distributed env (every rank; cheap sanity check)."""
+    if not is_main_process():
+        return
+    visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+    nproc = os.environ.get("NPROC_PER_NODE", "")
+    world_env = os.environ.get("WORLD_SIZE", "")
+    cuda_ok = torch.cuda.is_available()
+    dev_count = int(torch.cuda.device_count()) if cuda_ok else 0
+    log_main(
+        "[distributed/gpu] "
+        f"NPROC_PER_NODE={nproc or 'unset'} "
+        f"CUDA_VISIBLE_DEVICES={visible or 'unset'} "
+        f"WORLD_SIZE_env={world_env or 'unset'} "
+        f"rank={get_rank()} local_rank={get_local_rank()} "
+        f"world_size={get_world_size()} distributed={is_distributed()} "
+        f"torch.cuda.is_available={cuda_ok} torch.cuda.device_count={dev_count}"
+    )

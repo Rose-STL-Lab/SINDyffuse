@@ -146,7 +146,7 @@ kubectl get pods -l activation-method=static-optimization -w
 # Train SINDy (2× GPU)
 kubectl apply -k deploy/jobs/train-sindy
 
-# Train activation surrogate (1× GPU; requires Mean.npy/Std.npy; skips all-zero placeholders)
+# Train activation surrogate (2× GPU; auto torchrun in Python; requires Mean.npy/Std.npy)
 kubectl apply -k deploy/jobs/train-surrogate
 
 # Train diffusion — pick guidance mode
@@ -205,16 +205,27 @@ Each preprocess variant uses an Indexed worker Job (`parallelism=completions=64`
 | Job | CPUs | Memory | GPUs |
 |-----|------|--------|------|
 | dev | 8–32 | 32–64Gi | — (add in pod.yaml if needed) |
-| preprocess-nimble/none (workers) | 64 × 1 | 64 × 2Gi | — |
-| preprocess-nimble/static-optimization (workers) | 64 × 1 | 64 × 2Gi | — |
-| preprocess-nimble/moco-track (workers) | 64 × 1 | 64 × 4Gi | — |
+| preprocess-nimble/* (workers) | 64 × 1 | 64 × 2–4Gi | — (CPU-only OpenSim/Nimble) |
 | preprocess-nimble/normalization | 1 | 2Gi | — |
 | benchmark-moco-parallel | 64 | 64Gi | — |
 | train-sindy | 16 | 64Gi | 2 |
-| train-surrogate | 8 | 32Gi | 1 |
+| train-surrogate | 16 | 64Gi | 2 |
 | train-diffusion/* | 16 | 64Gi | 2 |
 
 Edit `deploy/jobs/<name>/job.yaml` to match your nodes.
+
+### Multi-GPU training
+
+Training jobs invoke plain `python` (no shell helpers). Each trainer calls
+`maybe_relaunch_with_torchrun()` in `common/distributed.py`, which:
+
+1. Reads `NPROC_PER_NODE` (set in job yaml to match `nvidia.com/gpu`)
+2. Else counts `CUDA_VISIBLE_DEVICES`
+3. Else uses `torch.cuda.device_count()`
+4. Re-execs under `torchrun` when count > 1 and `distributed.enabled` is not `false`
+
+Set `NPROC_PER_NODE=1` or `SINDYFFUSE_NO_TORCHRUN=1` to force single-process training.
+Startup logs include `[distributed/gpu]` with rank, world size, and device count.
 
 ## Pipeline order
 

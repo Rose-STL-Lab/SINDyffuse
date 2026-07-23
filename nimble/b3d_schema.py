@@ -135,15 +135,19 @@ def pack_guidance_features(bio: np.ndarray) -> np.ndarray:
 def unpack_guidance_features(matrix: np.ndarray) -> np.ndarray:
     """B3D ``[C, T]`` or frame stack ``[T, C]`` → ``[T, C]`` float32."""
     arr = np.asarray(matrix, dtype=np.float32)
-    if arr.ndim == 2 and arr.shape[0] == GUIDANCE_FEATURE_ROWS:
+    if arr.ndim != 2:
+        raise ValueError(f"Expected 2D guidance matrix, got {arr.shape}")
+    c = GUIDANCE_FEATURE_ROWS
+    storage = B3D_CUSTOM_VALUE_STORAGE_ROWS
+    if arr.shape[1] == storage:
+        return arr[:, :c]
+    if arr.shape[0] == storage:
+        return arr[:c, :].T
+    if arr.shape[0] == c:
         return arr.T
-    if arr.ndim == 2 and arr.shape[1] == GUIDANCE_FEATURE_ROWS:
+    if arr.shape[1] == c:
         return arr
-    if arr.ndim == 2 and arr.shape[0] >= GUIDANCE_FEATURE_ROWS:
-        return arr[:GUIDANCE_FEATURE_ROWS, :].T
-    if arr.ndim == 2 and arr.shape[1] >= GUIDANCE_FEATURE_ROWS:
-        return arr[:, :GUIDANCE_FEATURE_ROWS]
-    raise ValueError(f"Expected guidance layout with {GUIDANCE_FEATURE_ROWS} channels, got {arr.shape}")
+    raise ValueError(f"Expected guidance layout with {c} channels, got {arr.shape}")
 
 
 def pack_sindy_features(u: np.ndarray, c: np.ndarray) -> np.ndarray:
@@ -166,13 +170,18 @@ def unpack_sindy_features(matrix: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     u_rows = _sindy_u_rows()
     feature_rows = _sindy_feature_rows()
     arr = np.asarray(matrix, dtype=np.float32)
-    if arr.ndim == 2 and arr.shape[0] == feature_rows:
-        return arr[:u_rows, :].T, arr[u_rows:, :].T
-    if arr.ndim == 2 and arr.shape[0] >= feature_rows:
+    if arr.ndim != 2:
+        raise ValueError(f"Expected 2D sindy matrix, got {arr.shape}")
+    storage = B3D_CUSTOM_VALUE_STORAGE_ROWS
+    if arr.shape[1] == storage:
+        trimmed = arr[:, :feature_rows]
+        return trimmed[:, :u_rows], trimmed[:, u_rows:]
+    if arr.shape[0] == storage:
         trimmed = arr[:feature_rows, :]
         return trimmed[:u_rows, :].T, trimmed[u_rows:, :].T
-    if arr.ndim == 2 and arr.shape[1] >= feature_rows:
-        arr = arr[:, :feature_rows]
+    if arr.shape[0] == feature_rows:
+        return arr[:u_rows, :].T, arr[u_rows:, :].T
+    if arr.shape[1] == feature_rows:
         return arr[:, :u_rows], arr[:, u_rows:]
     raise ValueError(f"Expected sindy_features with {feature_rows} rows, got {arr.shape}")
 

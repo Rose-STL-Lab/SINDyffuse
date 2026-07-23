@@ -25,7 +25,12 @@ from common.distributed import (
     init_distributed,
     is_main_process,
     log_main,
+    log_gpu_diagnostics,
+    maybe_relaunch_with_torchrun,
     model_state_dict,
+    parse_distributed_enabled,
+    resolve_nproc_per_node,
+    should_auto_relaunch_torchrun,
     resolve_train_device,
     seed_all,
     setup_spawn_if_distributed,
@@ -62,6 +67,8 @@ def train(config_path: str, out_dir: str, *, preload: bool = False) -> None:
         sys.exit(1)
 
     use_ddp = init_distributed(distributed_cfg=dist_cfg)
+    if not use_ddp:
+        log_gpu_diagnostics()
     seed_all(int(cfg.get("seed", 42)))
     data_cfg = cfg.get("data", {})
     model_cfg = cfg.get("model", {})
@@ -303,7 +310,6 @@ def train(config_path: str, out_dir: str, *, preload: bool = False) -> None:
 
 
 def main() -> None:
-    setup_spawn_if_distributed()
     parser = argparse.ArgumentParser(description="Train text-conditioned diffusion model with guidance modes.")
     parser.add_argument("--config", required=True)
     parser.add_argument("--out_dir", required=True)
@@ -314,6 +320,12 @@ def main() -> None:
     )
     add_run_log_cli_args(parser)
     args = parser.parse_args()
+
+    cfg = load_json(str(args.config))
+    dist_cfg = cfg.get("distributed") if isinstance(cfg.get("distributed"), dict) else {}
+    if should_auto_relaunch_torchrun(dist_cfg):
+        maybe_relaunch_with_torchrun()
+    setup_spawn_if_distributed()
 
     def _run(_logger: RunLogger) -> None:
         try:

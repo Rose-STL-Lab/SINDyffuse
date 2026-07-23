@@ -1,5 +1,10 @@
 {
   "seed": 42,
+  "distributed": {
+    "enabled": "auto",
+    "backend": "nccl",
+    "find_unused_parameters": false
+  },
   "data_root": "datasets/HumanML3D",
   "split": "train",
   "val_split": "val",

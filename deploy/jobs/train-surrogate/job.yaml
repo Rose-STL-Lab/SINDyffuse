@@ -18,6 +18,9 @@ spec:
         image: sindyffuse:latest
         imagePullPolicy: IfNotPresent
         workingDir: /mnt/SINDyffuse
+        env:
+        - name: NPROC_PER_NODE
+          value: "2"
         command: ["/bin/bash", "-c"]
         args:
         - |
@@ -42,18 +45,17 @@ spec:
             --data_root "${HML}" \
             --output "${RUN}" \
             --skip_zero_placeholders 1 \
-            --device cuda \
             --num_workers 4
           ln -sfn "${RUN}" /mnt/SINDyffuse/results/activation_surrogate/latest
         resources:
           limits:
-            nvidia.com/gpu: 1
-            memory: 32Gi
-            cpu: "8"
+            nvidia.com/gpu: 2
+            memory: 64Gi
+            cpu: "16"
           requests:
-            nvidia.com/gpu: 1
-            memory: 32Gi
-            cpu: "8"
+            nvidia.com/gpu: 2
+            memory: 64Gi
+            cpu: "16"
         volumeMounts:
         - name: data
           mountPath: /mnt
@@ -66,4 +68,4 @@ spec:
       - name: dshm
         emptyDir:
           medium: Memory
-          sizeLimit: 16Gi
+          sizeLimit: 64Gi
