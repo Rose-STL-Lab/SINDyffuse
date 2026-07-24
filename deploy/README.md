@@ -216,8 +216,9 @@ Edit `deploy/jobs/<name>/job.yaml` to match your nodes.
 
 ### Multi-GPU training
 
-Training jobs invoke plain `python` (no shell helpers). Each trainer calls
-`maybe_relaunch_with_torchrun()` in `common/distributed.py`, which:
+Training jobs source `deploy/scripts/job-env.sh` (conda + runtime env) and invoke the same Python entry points used locally, e.g. `python scripts/train_diffusion.py --guidance sindy --preload`. Run directories, resolved configs, preflight checks, and `latest` symlinks are handled inside the scripts (`common/run_setup.py`).
+
+Each trainer calls `maybe_relaunch_with_torchrun()` in `common/distributed.py`, which:
 
 1. Reads `NPROC_PER_NODE` (set in job yaml to match `nvidia.com/gpu`)
 2. Else counts `CUDA_VISIBLE_DEVICES`
@@ -234,6 +235,10 @@ Startup logs include `[distributed/gpu]` with rank, world size, and device count
 3. `train-sindy`
 4. `train-surrogate`
 5. `train-diffusion/{none,nimble,sindy}`
+
+## Results layout
+
+Each trainer writes timestamped runs under ``results/<family>/runs/`` and updates ``results/<family>/latest`` when training completes (see ``common/run_setup.py``).
 
 ## Local development
 

@@ -55,6 +55,7 @@ from common.cpu import (
     resolve_k8s_shard,
     resolve_preprocess_parallelism,
 )
+from common.run_setup import apply_preprocess_job_env
 from common.paths import (
     NIMBLE_B3D_SUBDIR,
     cleanup_preprocess_manifests,
@@ -786,6 +787,7 @@ def main() -> None:
     add_muscle_activation_cli_args(parser)
     add_run_log_cli_args(parser)
     args = parser.parse_args()
+    apply_preprocess_job_env(args)
 
     shard_idx = int(args.shard_index)
     if args.num_shards > 1 and shard_idx < 0:

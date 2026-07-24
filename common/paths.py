@@ -28,6 +28,11 @@ __all__ = [
     "repo_root",
     "resolve_data_root",
     "resolve_repo_path",
+    "results_dir",
+    "sindy_latest_link",
+    "activation_surrogate_latest_link",
+    "diffusion_latest_link",
+    "update_latest_symlink",
 ]
 
 
@@ -77,6 +82,31 @@ def resolve_repo_path(path: str | Path) -> Path:
     if p.is_absolute():
         return p.resolve()
     return (repo_root() / p).resolve()
+
+
+def results_dir() -> Path:
+    return repo_root() / "results"
+
+
+def sindy_latest_link() -> Path:
+    return results_dir() / "sindy" / "latest"
+
+
+def activation_surrogate_latest_link() -> Path:
+    return results_dir() / "activation_surrogate" / "latest"
+
+
+def diffusion_latest_link(guidance: str) -> Path:
+    return results_dir() / "diffusion" / str(guidance).strip().lower() / "latest"
+
+
+def update_latest_symlink(*, run_dir: Path, latest_link: Path) -> None:
+    """Point ``latest_link`` at ``run_dir`` (overwrites prior symlink)."""
+    run = run_dir.resolve()
+    latest_link.parent.mkdir(parents=True, exist_ok=True)
+    if latest_link.is_symlink() or latest_link.exists():
+        latest_link.unlink()
+    latest_link.symlink_to(run, target_is_directory=True)
 
 
 def cleanup_preprocess_manifests(out_root: str | Path) -> list[str]:

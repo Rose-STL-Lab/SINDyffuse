@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -20,6 +21,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.preprocessing import StandardScaler
 
 from common.distributed import (
+    barrier,
     cleanup_distributed,
     get_rank,
     get_world_size,
@@ -40,7 +42,14 @@ from common.distributed import (
     unwrap_module as unwrap_train_module,
     wrap_ddp,
 )
-from common.paths import default_humanml3d_root, humanml3d_text_dir, nimble_b3d_dir
+from common.paths import (
+    default_humanml3d_root,
+    humanml3d_text_dir,
+    nimble_b3d_dir,
+    sindy_latest_link,
+    update_latest_symlink,
+)
+from common.run_setup import default_config_path, require_nimble_b3d, resolve_run_dir, resolve_training_data_root
 from common.run_logging import RunLogger, add_run_log_cli_args, get_run_logger, run_logged_main
 from nimble.channels import BIOMECH_COMPONENT_KEYS
 
@@ -56,6 +65,46 @@ from sindy.targets import (
 from sindy.windows import collect_windows, make_theta_spec
 from sindy.library import ThetaLibrary
 from sindy.model import TextToXi, predict_from_xi, xi_temporal_smoothness
+
+
+def _build_lr_scheduler(
+    opt: optim.Optimizer,
+    *,
+    scheduler_name: str,
+    epochs: int,
+    warmup_epochs: int,
+    lr_min: float,
+):
+    name = str(scheduler_name).strip().lower()
+    if name in {"", "none"}:
+        return None
+    total = max(1, int(epochs))
+    warmup = max(0, min(int(warmup_epochs), total - 1))
+    eta_min = float(lr_min)
+    base_lr = float(opt.param_groups[0]["lr"])
+    if name == "cosine":
+        eta_min_ratio = eta_min / max(base_lr, 1e-12)
+
+        def lr_lambda(epoch_idx: int) -> float:
+            if warmup > 0 and epoch_idx < warmup:
+                return 0.01 + (1.0 - 0.01) * (float(epoch_idx) / float(warmup))
+            if total <= warmup:
+                return eta_min_ratio
+            progress = (float(epoch_idx) - float(warmup)) / float(max(1, total - warmup))
+            progress = min(max(progress, 0.0), 1.0)
+            cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+            return eta_min_ratio + (1.0 - eta_min_ratio) * cosine
+
+        return optim.lr_scheduler.LambdaLR(opt, lr_lambda=lr_lambda)
+    if name == "plateau":
+        return optim.lr_scheduler.ReduceLROnPlateau(
+            opt,
+            mode="min",
+            factor=0.5,
+            patience=max(5, total // 20),
+            min_lr=eta_min,
+        )
+    raise ValueError(f"Unknown scheduler: {scheduler_name!r} (expected cosine, plateau, or none)")
 
 
 def _resolve_device(name: str) -> torch.device:
@@ -150,6 +199,7 @@ def _run_training_loop(
     *,
     model: TextToXi,
     opt: optim.Optimizer,
+    scheduler: Any,
     device: torch.device,
     length: int,
     tr_idx: np.ndarray,
@@ -161,17 +211,23 @@ def _run_training_loop(
     batch_size: int,
     lambda_l1: float,
     lambda_xi_smooth: float,
+    grad_clip: float,
+    early_stop_patience: int,
     rng: np.random.Generator,
     fetch_batch: Any,
     run_validation: bool = True,
     n_bio_targets: int = N_BIO_TARGETS,
     target_weights: torch.Tensor | None = None,
-) -> Tuple[float, Optional[Dict[str, torch.Tensor]], Dict[str, float]]:
+) -> Tuple[float, Optional[Dict[str, torch.Tensor]], Dict[str, float], int]:
     """Shared epoch loop for preloaded tensors or lazy dataset batches."""
     best_val, best_state = float("inf"), None
     best_metrics: Dict[str, float] = {}
     w = target_weights
+    stale_epochs = 0
+    last_epoch = 0
+    plateau_sched = isinstance(scheduler, optim.lr_scheduler.ReduceLROnPlateau)
     for ep in range(1, int(epochs) + 1):
+        last_epoch = ep
         model.train()
         rng.shuffle(tr_idx)
         losses = []
@@ -197,6 +253,8 @@ def _run_training_loop(
             loss = loss_fit / denom + float(lambda_l1) * (loss_sparse / denom) + float(lambda_xi_smooth) * (loss_smooth / denom)
             opt.zero_grad(set_to_none=True)
             loss.backward()
+            if float(grad_clip) > 0.0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), float(grad_clip))
             opt.step()
             losses.append(float(loss.detach().cpu()))
 
@@ -227,14 +285,52 @@ def _run_training_loop(
                 best_val = val_loss
                 best_metrics = {"val_bio_mse": val_bio, "val_muscle_mse": val_muscle}
                 best_state = {k: v.detach().cpu().clone() for k, v in model_state_dict(model).items()}
+                stale_epochs = 0
+            else:
+                stale_epochs += 1
+
+        if scheduler is not None:
+            if plateau_sched:
+                if run_validation and len(val_idx) > 0:
+                    scheduler.step(val_loss)
+            else:
+                scheduler.step()
+            if plateau_sched and is_distributed():
+                lr_t = torch.tensor([float(opt.param_groups[0]["lr"])], device=device)
+                torch.distributed.broadcast(lr_t, src=0)
+                for pg in opt.param_groups:
+                    pg["lr"] = float(lr_t.item())
+
+        should_stop = 0
+        if (
+            is_main_process()
+            and int(early_stop_patience) > 0
+            and len(val_idx) > 0
+            and stale_epochs >= int(early_stop_patience)
+        ):
+            should_stop = 1
+            from common.run_logging import get_run_logger
+
+            get_run_logger().progress(
+                f"early_stop at epoch={ep} (patience={int(early_stop_patience)}, best_val_loss={best_val:.6f})"
+            )
+        if is_distributed():
+            stop_flag = torch.tensor([should_stop], device=device, dtype=torch.int32)
+            torch.distributed.broadcast(stop_flag, src=0)
+            should_stop = int(stop_flag.item())
+        if should_stop:
+            break
+
         if (ep % max(1, epochs // 20) == 0 or ep == 1) and is_main_process():
             vl = val_loss if run_validation else float("nan")
             from common.run_logging import get_run_logger
 
+            lr_now = float(opt.param_groups[0]["lr"])
             get_run_logger().progress(
-                f"epoch={ep}/{epochs} train_loss={np.mean(losses):.6f} val_loss={vl:.6f} "
+                f"epoch={ep}/{epochs} lr={lr_now:.2e} train_loss={np.mean(losses):.6f} val_loss={vl:.6f} "
                 f"val_bio_mse={val_bio:.6f} val_muscle_mse={val_muscle:.6f}"
             )
+    best_metrics["epochs_run"] = float(last_epoch)
     return best_val, best_state, best_metrics
 
 
@@ -251,11 +347,20 @@ def train(
     include_c: bool,
     max_samples: int,
     lr: float,
+    lr_min: float,
+    warmup_epochs: int,
+    scheduler_name: str,
+    weight_decay: float,
+    grad_clip: float,
+    early_stop_patience: int,
     epochs: int,
     batch_size: int,
     lambda_l1: float,
     lambda_xi_smooth: float,
     hidden_dim: int,
+    num_layers: int,
+    dropout: float,
+    ff_mult: int,
     num_experts: int,
     fallback_caption_weight: float,
     clip_model_name: str,
@@ -273,12 +378,9 @@ def train(
     if not use_ddp:
         log_gpu_diagnostics()
     seed_all(int(seed))
+    data_root = resolve_training_data_root(data_root)
+    require_nimble_b3d(data_root)
     root = Path(data_root)
-    if not nimble_b3d_dir(root).is_dir():
-        raise FileNotFoundError(
-            f"Nimble B3D cache required at {nimble_b3d_dir(root)}. "
-            f"Run preprocess_nimble.py first."
-        )
     bio_keys = list(BIOMECH_COMPONENT_KEYS)
     muscle_keys = list(muscle_channel_names())
     target_keys = list(sindy_target_keys())
@@ -394,13 +496,25 @@ def train(
         target_dim=target_dim,
         num_experts=int(num_experts),
         max_seq_len=int(length),
+        num_layers=int(num_layers),
+        dropout=float(dropout),
+        ff_mult=int(ff_mult),
     ).to(device)
     model = wrap_ddp(model, find_unused_parameters=find_unused)
-    opt = optim.AdamW(model.parameters(), lr=float(lr))
+    opt = optim.AdamW(model.parameters(), lr=float(lr), weight_decay=float(weight_decay))
+    scheduler = _build_lr_scheduler(
+        opt,
+        scheduler_name=str(scheduler_name),
+        epochs=int(epochs),
+        warmup_epochs=int(warmup_epochs),
+        lr_min=float(lr_min),
+    )
     log_main(
         f"[sindy/train] device={device} world_size={get_world_size()} "
         f"distributed={use_ddp} train_windows={len(tr_idx)} per_gpu_batch={batch_size} "
-        f"target_dim={target_dim} (bio={N_BIO_TARGETS} muscle={N_MUSCLE_TARGETS})"
+        f"target_dim={target_dim} (bio={N_BIO_TARGETS} muscle={N_MUSCLE_TARGETS}) "
+        f"layers={num_layers} dropout={dropout} "
+        f"scheduler={scheduler_name} weight_decay={weight_decay}"
     )
     emb_t = torch.tensor(unique_emb, dtype=torch.float32, device=device)
     tw_np = parse_target_weights(target_weights, n_targets=target_dim)
@@ -426,6 +540,7 @@ def train(
     best_val, best_state, best_val_metrics = _run_training_loop(
         model=model,
         opt=opt,
+        scheduler=scheduler,
         device=device,
         length=length,
         tr_idx=tr_idx,
@@ -437,6 +552,8 @@ def train(
         batch_size=batch_size,
         lambda_l1=lambda_l1,
         lambda_xi_smooth=lambda_xi_smooth,
+        grad_clip=grad_clip,
+        early_stop_patience=early_stop_patience,
         rng=rng,
         fetch_batch=fetch_batch,
         run_validation=is_main_process(),
@@ -450,6 +567,7 @@ def train(
     out = Path(output)
     if is_main_process():
         out.mkdir(parents=True, exist_ok=True)
+    barrier()
     if not is_main_process():
         return {
             "config": {"distributed_rank": int(get_world_size())},
@@ -465,6 +583,9 @@ def train(
             "target_dim": target_dim,
             "num_experts": int(num_experts),
             "max_seq_len": int(length),
+            "num_layers": int(num_layers),
+            "dropout": float(dropout),
+            "ff_mult": int(ff_mult),
             "bio_channel_names": bio_keys,
             "muscle_channel_names": muscle_keys,
             "target_channel_names": target_keys,
@@ -488,11 +609,25 @@ def train(
             "window_stride": int(window_stride),
             "theta_tier": theta_tier,
             "preload": bool(preload),
+            "hidden_dim": int(hidden_dim),
+            "num_layers": int(num_layers),
+            "dropout": float(dropout),
+            "ff_mult": int(ff_mult),
+            "lr": float(lr),
+            "lr_min": float(lr_min),
+            "warmup_epochs": int(warmup_epochs),
+            "scheduler": str(scheduler_name),
+            "weight_decay": float(weight_decay),
+            "grad_clip": float(grad_clip),
+            "early_stop_patience": int(early_stop_patience),
+            "lambda_l1": float(lambda_l1),
+            "lambda_xi_smooth": float(lambda_xi_smooth),
         },
         "metrics": {"best_val_loss": float(best_val), **best_val_metrics},
     }
     with open(out / "sild_text_train_results.json", "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2)
+    update_latest_symlink(run_dir=out, latest_link=sindy_latest_link())
     return results
 
 
@@ -522,7 +657,7 @@ def main() -> None:
     parser.add_argument("--data_root", default=default_humanml3d_root())
     parser.add_argument("--split", default="train")
     parser.add_argument("--fps", type=float, default=20.0)
-    parser.add_argument("--output", required=True)
+    parser.add_argument("--output", default="", help="Run directory (default: results/sindy/runs/<timestamp>)")
     parser.add_argument("--window_size", type=int, default=64)
     parser.add_argument("--window_stride", type=int, default=16)
     parser.add_argument("--theta_tier", default="tier2_moderate")
@@ -530,11 +665,20 @@ def main() -> None:
     parser.add_argument("--include_c", type=int, default=1)
     parser.add_argument("--max_samples", type=int, default=0)
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--lr_min", type=float, default=1e-6)
+    parser.add_argument("--warmup_epochs", type=int, default=10)
+    parser.add_argument("--scheduler", default="cosine")
+    parser.add_argument("--weight_decay", type=float, default=1e-4)
+    parser.add_argument("--grad_clip", type=float, default=1.0)
+    parser.add_argument("--early_stop_patience", type=int, default=40)
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--lambda_l1", type=float, default=1e-4)
-    parser.add_argument("--lambda_xi_smooth", type=float, default=0.0)
+    parser.add_argument("--lambda_xi_smooth", type=float, default=1e-4)
     parser.add_argument("--hidden_dim", type=int, default=768)
+    parser.add_argument("--num_layers", type=int, default=3)
+    parser.add_argument("--dropout", type=float, default=0.1)
+    parser.add_argument("--ff_mult", type=int, default=4)
     parser.add_argument("--skip_zero_placeholders", type=int, default=1)
     parser.add_argument("--zero_atol", type=float, default=1e-8)
     parser.add_argument("--num_experts", type=int, default=1)
@@ -555,7 +699,7 @@ def main() -> None:
     full_cfg: Dict[str, Any] = {}
     if not cfg_path:
         repo_root = Path(__file__).resolve().parents[1]
-        default_cfg = repo_root / "configs" / "train_sindy.json"
+        default_cfg = default_config_path("train_sindy.json")
         if default_cfg.is_file():
             cfg_path = str(default_cfg)
     if cfg_path:
@@ -565,6 +709,12 @@ def main() -> None:
             dist_cfg = full_cfg["distributed"]
     else:
         full_cfg = {}
+
+    args.data_root = resolve_training_data_root(args.data_root)
+    args.output = str(
+        resolve_run_dir(str(args.output).strip() or None, family="sindy")
+    )
+
     if should_auto_relaunch_torchrun(dist_cfg):
         maybe_relaunch_with_torchrun(module="sindy.train")
     setup_spawn_if_distributed()
@@ -583,11 +733,20 @@ def main() -> None:
                 include_c=bool(args.include_c),
                 max_samples=int(args.max_samples),
                 lr=float(args.lr),
+                lr_min=float(args.lr_min),
+                warmup_epochs=int(args.warmup_epochs),
+                scheduler_name=str(args.scheduler),
+                weight_decay=float(args.weight_decay),
+                grad_clip=float(args.grad_clip),
+                early_stop_patience=int(args.early_stop_patience),
                 epochs=int(args.epochs),
                 batch_size=int(args.batch_size),
                 lambda_l1=float(args.lambda_l1),
                 lambda_xi_smooth=float(args.lambda_xi_smooth),
                 hidden_dim=int(args.hidden_dim),
+                num_layers=int(args.num_layers),
+                dropout=float(args.dropout),
+                ff_mult=int(args.ff_mult),
                 num_experts=int(args.num_experts),
                 fallback_caption_weight=float(args.fallback_caption_weight),
                 clip_model_name=args.clip_model_name,
@@ -611,7 +770,7 @@ def main() -> None:
             clear_cache()
         except Exception:
             pass
-        os._exit(0)
+        sys.exit(0)
 
     rank = get_rank() if is_distributed() else None
     if args.no_run_log:

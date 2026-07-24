@@ -1,7 +1,4 @@
 # Apply: kubectl apply -k deploy/jobs/preprocess-nimble/normalization
-#
-# Merges shard preprocess manifests and writes nimble_b3d/Mean.npy + Std.npy.
-# Run after preprocess workers finish (or alone if shard manifests already exist).
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -30,20 +27,8 @@ spec:
         command: ["/bin/bash", "-c"]
         args:
         - |
-          set -eo pipefail
-          eval "$(conda shell.bash hook)"
-          conda activate sindyffuse
-          export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
-          export PYTHONPATH=/mnt/SINDyffuse
-          HML=/mnt/SINDyffuse/datasets/HumanML3D
-          NUM_SHARDS="${PREPROCESS_NUM_SHARDS:-64}"
-          test -d "${HML}/nimble_b3d" || { echo "Missing ${HML}/nimble_b3d"; exit 1; }
-          python scripts/compute_normalization.py \
-            --out_root "${HML}" \
-            --num_shards "${NUM_SHARDS}" \
-            --log_dir /mnt/SINDyffuse/logs
-          test -f "${HML}/nimble_b3d/Mean.npy"
-          test -f "${HML}/nimble_b3d/Std.npy"
+          source deploy/scripts/job-env.sh
+          python scripts/compute_normalization.py
         resources:
           limits:
             memory: 2Gi

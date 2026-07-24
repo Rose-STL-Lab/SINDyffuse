@@ -26,32 +26,8 @@ spec:
         command: ["/bin/bash", "-c"]
         args:
         - |
-          set -eo pipefail
-          eval "$(conda shell.bash hook)"
-          conda activate sindyffuse
-          export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
-          export PYTHONPATH=/mnt/SINDyffuse
-          export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-          export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
-          HML=/mnt/SINDyffuse/datasets/HumanML3D
-          test -d "${HML}/nimble_b3d" || { echo "Missing ${HML}/nimble_b3d"; exit 1; }
-          RUN=/mnt/SINDyffuse/results/diffusion_none_$(date +%Y%m%d_%H%M%S)
-          mkdir -p "${RUN}"
-          CFG="${RUN}/config_resolved.json"
-          python - <<PY
-          import json
-          from pathlib import Path
-          repo = Path("/mnt/SINDyffuse")
-          cfg = json.loads((repo / "configs/train_diffusion.json").read_text(encoding="utf-8"))
-          cfg.setdefault("train", {})["guidance"] = "none"
-          cfg.setdefault("data", {})["data_root"] = str(repo / "datasets/HumanML3D")
-          cfg.setdefault("data", {})["dataset"] = "nimble"
-          Path("${RUN}/config_resolved.json").write_text(json.dumps(cfg, indent=2), encoding="utf-8")
-          PY
-          python scripts/train_diffusion.py \
-            --config "${CFG}" \
-            --out_dir "${RUN}" \
-            --preload
+          source deploy/scripts/job-env.sh
+          python scripts/train_diffusion.py --guidance none --preload
         resources:
           limits:
             nvidia.com/gpu: 2

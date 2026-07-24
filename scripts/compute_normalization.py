@@ -32,6 +32,7 @@ from common.paths import (
     default_humanml3d_root,
     nimble_b3d_dir,
 )
+from common.run_setup import env_int, require_nimble_b3d
 from common.run_logging import RunLogger, add_run_log_cli_args, null_logger, run_log_session
 from datasets.nimble_dataset import compute_nimble_normalization_stats
 
@@ -198,8 +199,8 @@ def main() -> None:
     parser.add_argument(
         "--num_shards",
         type=int,
-        required=True,
-        help="Number of preprocess shards to merge",
+        default=0,
+        help="Number of preprocess shards to merge (default: PREPROCESS_NUM_SHARDS env or 1)",
     )
     parser.add_argument(
         "--wait",
@@ -220,6 +221,11 @@ def main() -> None:
     )
     add_run_log_cli_args(parser)
     args = parser.parse_args()
+
+    if int(args.num_shards) <= 0:
+        args.num_shards = env_int("PREPROCESS_NUM_SHARDS", 1)
+    out_root = Path(str(args.out_root)).expanduser().resolve()
+    require_nimble_b3d(out_root)
 
     if args.no_run_log:
         compute_normalization(args, null_logger())

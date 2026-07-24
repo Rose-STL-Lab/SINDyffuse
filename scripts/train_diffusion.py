@@ -37,7 +37,17 @@ from common.distributed import (
     wrap_ddp,
 )
 from common.io import load_json, save_json
-from common.paths import nimble_b3d_dir, resolve_data_root, resolve_repo_path
+from common.paths import diffusion_latest_link, nimble_b3d_dir, resolve_data_root, resolve_repo_path, update_latest_symlink
+from common.run_setup import (
+    default_config_path,
+    require_nimble_b3d,
+    require_nimble_normalization,
+    require_sindy_checkpoint,
+    require_surrogate_checkpoint,
+    resolve_repo_checkpoint,
+    resolve_run_dir,
+    resolve_training_data_root,
+)
 from common.run_logging import RunLogger, add_run_log_cli_args, get_run_logger, run_logged_main
 from diffusion.clip import clip_encode
 from diffusion.config import GuidanceMode
@@ -53,6 +63,42 @@ def _collate(batch):
     captions = [x["caption"] for x in batch]
     motion_ids = [x["motion_id"] for x in batch]
     return motions, captions, motion_ids
+
+
+def _prepare_diffusion_config(
+    config_path: Path,
+    *,
+    guidance: str = "",
+    data_root: str = "",
+) -> dict:
+    cfg = load_json(str(config_path))
+    train_cfg = cfg.setdefault("train", {})
+    data_cfg = cfg.setdefault("data", {})
+
+    if str(guidance).strip():
+        train_cfg["guidance"] = str(guidance).strip().lower()
+    if str(data_root).strip():
+        data_cfg["data_root"] = resolve_training_data_root(data_root)
+    else:
+        data_cfg["data_root"] = resolve_training_data_root(data_cfg.get("data_root"))
+
+    data_cfg["dataset"] = "nimble"
+    for key in ("sindy_checkpoint_dir", "surrogate_checkpoint_dir"):
+        raw = str(train_cfg.get(key, "")).strip()
+        if raw:
+            train_cfg[key] = resolve_repo_checkpoint(raw)
+    return cfg
+
+
+def _validate_diffusion_inputs(cfg: dict) -> GuidanceMode:
+    data_root = resolve_data_root(cfg.get("data", {}).get("data_root"))
+    require_nimble_b3d(data_root)
+    require_nimble_normalization(data_root)
+    mode = GuidanceMode(str(cfg.get("train", {}).get("guidance", "sindy")).strip().lower())
+    if mode == GuidanceMode.SINDY:
+        require_sindy_checkpoint()
+        require_surrogate_checkpoint()
+    return mode
 
 
 def train(config_path: str, out_dir: str, *, preload: bool = False) -> None:
@@ -307,12 +353,32 @@ def train(config_path: str, out_dir: str, *, preload: bool = False) -> None:
             },
             out / "last.pt",
         )
+        update_latest_symlink(run_dir=out, latest_link=diffusion_latest_link(guidance_mode.value))
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train text-conditioned diffusion model with guidance modes.")
-    parser.add_argument("--config", required=True)
-    parser.add_argument("--out_dir", required=True)
+    parser.add_argument(
+        "--config",
+        default=str(default_config_path("train_diffusion.json")),
+        help="Path to train_diffusion.json",
+    )
+    parser.add_argument(
+        "--out_dir",
+        default="",
+        help="Output directory (default: results/diffusion/<guidance>/runs/<timestamp>)",
+    )
+    parser.add_argument(
+        "--guidance",
+        default="",
+        choices=["", "none", "sindy", "nimble"],
+        help="Override train.guidance from config",
+    )
+    parser.add_argument(
+        "--data_root",
+        default="",
+        help="Override data.data_root (default: datasets/HumanML3D or HUMANML3D_ROOT)",
+    )
     parser.add_argument(
         "--preload",
         action="store_true",
@@ -321,7 +387,25 @@ def main() -> None:
     add_run_log_cli_args(parser)
     args = parser.parse_args()
 
-    cfg = load_json(str(args.config))
+    config_path = Path(str(args.config)).expanduser()
+    if not config_path.is_file():
+        raise FileNotFoundError(f"Missing config: {config_path}")
+
+    cfg = _prepare_diffusion_config(
+        config_path,
+        guidance=str(args.guidance),
+        data_root=str(args.data_root),
+    )
+    guidance_mode = _validate_diffusion_inputs(cfg)
+    out_dir = resolve_run_dir(
+        str(args.out_dir).strip() or None,
+        family="diffusion",
+        guidance=guidance_mode.value,
+    )
+    resolved_config = out_dir / "config_resolved.json"
+    if not resolved_config.is_file():
+        save_json(str(resolved_config), cfg)
+
     dist_cfg = cfg.get("distributed") if isinstance(cfg.get("distributed"), dict) else {}
     if should_auto_relaunch_torchrun(dist_cfg):
         maybe_relaunch_with_torchrun()
@@ -330,8 +414,8 @@ def main() -> None:
     def _run(_logger: RunLogger) -> None:
         try:
             train(
-                config_path=str(args.config),
-                out_dir=str(args.out_dir),
+                config_path=str(resolved_config),
+                out_dir=str(out_dir),
                 preload=bool(args.preload),
             )
         finally:

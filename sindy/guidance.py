@@ -17,7 +17,7 @@ from nimble.channels import BIOMECH_COMPONENT_KEYS
 from nimble.guidance import NimbleGuidanceConfig
 from nimble.physics import load_model, physics_from_q, physics_from_q_batch
 from sindy.library import ThetaLibrary, ThetaSpec
-from sindy.model import TextToXi, predict_from_xi
+from sindy.model import load_text_to_xi_from_checkpoint, predict_from_xi
 from sindy.targets import (
     N_BIO_TARGETS,
     N_MUSCLE_TARGETS,
@@ -144,15 +144,7 @@ class LearnedSINDyGuidance:
             data_root=str(self.data_root),
         )
 
-        self.text_to_xi = TextToXi(
-            in_dim=self.in_dim,
-            hidden_dim=int(ckpt["hidden_dim"]),
-            theta_dim=self.theta_dim,
-            target_dim=self.target_dim,
-            num_experts=self.num_experts,
-            max_seq_len=self.max_seq_len,
-        )
-        self.text_to_xi.load_state_dict(ckpt["model_state"])
+        self.text_to_xi = load_text_to_xi_from_checkpoint(ckpt)
         self.text_to_xi.eval()
 
         self.theta_scaler = joblib.load(self.sild_dir / "scaler_theta.pkl")

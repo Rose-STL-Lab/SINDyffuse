@@ -13,7 +13,6 @@ import argparse
 import json
 import os
 import random
-from datetime import datetime
 from typing import Any, Dict, Optional
 
 import numpy as np
@@ -40,7 +39,14 @@ from common.distributed import (
     setup_spawn_if_distributed,
     wrap_ddp,
 )
-from common.paths import default_humanml3d_root, resolve_data_root
+from common.paths import activation_surrogate_latest_link, default_humanml3d_root, update_latest_symlink
+from common.run_setup import (
+    default_config_path,
+    require_nimble_b3d,
+    require_nimble_normalization,
+    resolve_run_dir,
+    resolve_training_data_root,
+)
 from common.run_logging import RunLogger, add_run_log_cli_args, get_run_logger, run_logged_main
 from surrogate.dataset import ActivationB3DDataset
 from surrogate.model import build_activation_surrogate
@@ -105,6 +111,9 @@ def train_activation_surrogate(
 ) -> Dict[str, Any]:
     use_ddp = init_distributed(distributed_cfg=distributed_cfg)
     seed_all(int(seed))
+    data_root = resolve_training_data_root(data_root)
+    require_nimble_b3d(data_root)
+    require_nimble_normalization(data_root)
     device = resolve_train_device(device_name)
     if not use_ddp:
         log_gpu_diagnostics()
@@ -357,6 +366,7 @@ def train_activation_surrogate(
     (out_dir / "train_metrics.json").write_text(
         json.dumps(metrics, indent=2), encoding="utf-8"
     )
+    update_latest_symlink(run_dir=out_dir, latest_link=activation_surrogate_latest_link())
     return metrics
 
 
@@ -370,13 +380,6 @@ def _apply_json_config(args: argparse.Namespace, config_path: str) -> None:
             continue
         if hasattr(args, key):
             setattr(args, key, value)
-
-
-def _default_output_dir() -> Path:
-    out = os.environ.get("ACTIVATION_SURROGATE_OUTPUT", "").strip()
-    if out:
-        return Path(out).expanduser()
-    return _REPO_ROOT / "results" / f"activation_surrogate_{datetime.now():%Y%m%d_%H%M%S}"
 
 
 def main() -> None:
@@ -417,16 +420,11 @@ def main() -> None:
     add_run_log_cli_args(parser)
     args = parser.parse_args()
 
-    if not str(args.output).strip():
-        out_dir = _default_output_dir()
-        out_dir.mkdir(parents=True, exist_ok=True)
-        args.output = str(out_dir)
-
     cfg_path = str(args.config).strip()
     dist_cfg: Dict[str, Any] = {}
     full_cfg: Dict[str, Any] = {}
     if not cfg_path:
-        default_cfg = _REPO_ROOT / "configs" / "train_surrogate.json"
+        default_cfg = default_config_path("train_surrogate.json")
         if default_cfg.is_file():
             cfg_path = str(default_cfg)
     if cfg_path:
@@ -435,7 +433,14 @@ def main() -> None:
         if isinstance(full_cfg.get("distributed"), dict):
             dist_cfg = full_cfg["distributed"]
 
-    args.data_root = resolve_data_root(str(args.data_root).strip() or None)
+    args.data_root = resolve_training_data_root(args.data_root)
+    out_override = os.environ.get("ACTIVATION_SURROGATE_OUTPUT", "").strip()
+    args.output = str(
+        resolve_run_dir(
+            str(args.output).strip() or out_override or None,
+            family="activation_surrogate",
+        )
+    )
 
     if should_auto_relaunch_torchrun(dist_cfg):
         maybe_relaunch_with_torchrun()
@@ -473,7 +478,7 @@ def main() -> None:
                 _logger.verbose(json.dumps(metrics, indent=2))
         finally:
             cleanup_distributed()
-        os._exit(0)
+        sys.exit(0)
 
     run_logged_main(
         Path(__file__).stem,

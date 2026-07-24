@@ -24,29 +24,8 @@ spec:
         command: ["/bin/bash", "-c"]
         args:
         - |
-          set -eo pipefail
-          eval "$(conda shell.bash hook)"
-          conda activate sindyffuse
-          export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
-          export PYTHONPATH=/mnt/SINDyffuse
-          export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-          export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
-          HML=/mnt/SINDyffuse/datasets/HumanML3D
-          test -d "${HML}/nimble_b3d" || { echo "Missing ${HML}/nimble_b3d"; exit 1; }
-          test -f "${HML}/nimble_b3d/Mean.npy" && test -f "${HML}/nimble_b3d/Std.npy" || {
-            echo "Missing nimble_b3d/Mean.npy or Std.npy."
-            echo "Run: kubectl apply -k deploy/jobs/preprocess-nimble/normalization"
-            exit 1
-          }
-          RUN=/mnt/SINDyffuse/results/activation_surrogate_$(date +%Y%m%d_%H%M%S)
-          mkdir -p "${RUN}" /mnt/SINDyffuse/results/activation_surrogate
-          python scripts/train_surrogate.py \
-            --config /mnt/SINDyffuse/configs/train_surrogate.json \
-            --data_root "${HML}" \
-            --output "${RUN}" \
-            --skip_zero_placeholders 1 \
-            --num_workers 4
-          ln -sfn "${RUN}" /mnt/SINDyffuse/results/activation_surrogate/latest
+          source deploy/scripts/job-env.sh
+          python scripts/train_surrogate.py
         resources:
           limits:
             nvidia.com/gpu: 2
