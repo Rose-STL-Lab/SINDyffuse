@@ -12,6 +12,7 @@ results/
 wandb/
 
 # Local datasets and caches (HumanML3D is ~20GB; never commit)
+.cache/
 datasets/*
 !datasets/*.py
 

@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from common.clip_model import load_clip
 import clip  # type: ignore
 import joblib
 import numpy as np
@@ -180,7 +181,7 @@ class LearnedSINDyGuidance:
 
     def _get_clip(self, device: torch.device):
         if self._clip_model is None or self._clip_device != str(device):
-            model, _ = clip.load(self.clip_model_name, device=device, jit=False)
+            model, _ = load_clip(self.clip_model_name, device=device, jit=False)
             model.eval()
             for p in model.parameters():
                 p.requires_grad = False

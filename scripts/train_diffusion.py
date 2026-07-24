@@ -16,7 +16,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
-import clip  # type: ignore
+from common.clip_model import load_clip
 
 from common.distributed import (
     cleanup_distributed,
@@ -177,7 +177,7 @@ def train(config_path: str, out_dir: str, *, preload: bool = False) -> None:
     )
 
     clip_model_name = str(model_cfg.get("clip_model_name", "ViT-B/32"))
-    clip_model, _ = clip.load(clip_model_name, device=device, jit=False)
+    clip_model, _ = load_clip(clip_model_name, device=device, jit=False)
     clip_model.eval()
     for p in clip_model.parameters():
         p.requires_grad = False

@@ -11,7 +11,7 @@ import argparse
 import numpy as np
 import torch
 
-import clip  # type: ignore
+from common.clip_model import load_clip
 
 from common.io import load_json
 from common.paths import nimble_b3d_dir, resolve_data_root, resolve_repo_path
@@ -132,7 +132,7 @@ def _generate(args: argparse.Namespace, logger: RunLogger) -> None:
     model.load_state_dict(ckpt["model_state"], strict=True)
     model.eval()
     sched = GaussianDiffusionSchedule(timesteps=int(args.timesteps)).to(device)
-    clip_model, _ = clip.load("ViT-B/32", device=device, jit=False)
+    clip_model, _ = load_clip("ViT-B/32", device=device, jit=False)
     clip_model.eval()
     text_ctx, text_mask = clip_encode(clip_model, [args.caption] * int(args.batch_size), device=device)
     motion = _sample_motion(

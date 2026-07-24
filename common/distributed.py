@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import glob
 import os
 import shutil
 import sys
@@ -34,15 +35,29 @@ def under_torchrun() -> bool:
     return os.environ.get("LOCAL_RANK", "").strip() != ""
 
 
-def resolve_nproc_per_node(*, cap: Optional[int] = None) -> int:
-    """Return GPU/process count for multi-GPU training (always >= 1).
+def cuda_usable(device_index: int = 0) -> bool:
+    """True when CUDA kernels can run on ``device_index`` (not just ``is_available()``)."""
+    if not torch.cuda.is_available():
+        return False
+    if device_index < 0 or device_index >= torch.cuda.device_count():
+        return False
+    try:
+        torch.cuda.set_device(device_index)
+        x = torch.randn(2, 2, device=f"cuda:{device_index}")
+        _ = float(x.sum())
+        return True
+    except RuntimeError:
+        return False
 
-    Resolution order:
-    1. ``NPROC_PER_NODE`` env (matches ``nvidia.com/gpu`` in K8s when set)
-    2. ``CUDA_VISIBLE_DEVICES`` entry count
-    3. ``torch.cuda.device_count()`` when CUDA is available
-    4. ``1`` (CPU / no GPU)
-    """
+
+def usable_cuda_device_count() -> int:
+    """Count CUDA devices that can actually run kernels."""
+    if not torch.cuda.is_available():
+        return 0
+    return sum(1 for i in range(torch.cuda.device_count()) if cuda_usable(i))
+
+
+def _requested_nproc_per_node(*, cap: Optional[int] = None) -> int:
     raw = os.environ.get("NPROC_PER_NODE", "").strip()
     if raw:
         n = max(1, int(raw))
@@ -68,16 +83,61 @@ def resolve_nproc_per_node(*, cap: Optional[int] = None) -> int:
     return 1
 
 
-def cuda_usable() -> bool:
-    """True when CUDA kernels can run (not just ``torch.cuda.is_available()``)."""
-    if not torch.cuda.is_available():
-        return False
-    try:
-        torch.cuda.set_device(0)
-        x = torch.randn(2, 2, device="cuda:0")
-        return bool(float(x.sum()) == float(x.sum()))
-    except RuntimeError:
-        return False
+def resolve_nproc_per_node(*, cap: Optional[int] = None) -> int:
+    """Return GPU/process count for multi-GPU training (always >= 1).
+
+    Resolution order:
+    1. ``NPROC_PER_NODE`` env (matches ``nvidia.com/gpu`` in K8s when set)
+    2. ``CUDA_VISIBLE_DEVICES`` entry count
+    3. ``torch.cuda.device_count()`` when CUDA is available
+    4. ``1`` (CPU / no GPU)
+
+    The result is capped by the number of CUDA devices that can run kernels.
+    """
+    requested = _requested_nproc_per_node(cap=cap)
+    usable = usable_cuda_device_count()
+    if usable <= 0:
+        return requested
+
+    if requested > usable:
+        print(
+            f"[distributed] Requested nproc_per_node={requested} but only {usable} "
+            f"usable CUDA device(s) are visible; using {usable}.",
+            flush=True,
+        )
+        return usable
+    return requested
+
+
+def _cuda_env_summary(*, local_rank: Optional[int] = None) -> str:
+    visible = os.environ.get("CUDA_VISIBLE_DEVICES", "unset")
+    nproc = os.environ.get("NPROC_PER_NODE", "unset")
+    dev_count = int(torch.cuda.device_count()) if torch.cuda.is_available() else 0
+    usable = usable_cuda_device_count()
+    nodes = sorted(glob.glob("/dev/nvidia[0-9]*"))
+    parts = [
+        f"NPROC_PER_NODE={nproc}",
+        f"CUDA_VISIBLE_DEVICES={visible}",
+        f"torch.cuda.device_count={dev_count}",
+        f"usable_cuda_devices={usable}",
+        f"nvidia_device_nodes={nodes or 'none'}",
+    ]
+    if local_rank is not None:
+        parts.append(f"local_rank={local_rank}")
+    return " ".join(parts)
+
+
+def _raise_cuda_unusable(*, local_rank: int, world_size: int) -> None:
+    raise RuntimeError(
+        "CUDA is visible but kernels fail on this process "
+        f"(rank/local_rank={local_rank}, world_size={world_size}). "
+        f"{_cuda_env_summary(local_rank=local_rank)}. "
+        "Common causes in Kubernetes: the pod was scheduled without enough GPUs, "
+        "nvidia.com/gpu limits do not match NPROC_PER_NODE, or the NVIDIA device "
+        "plugin did not mount /dev/nvidia* inside the container. "
+        "Recreate the job on a GPU node, align nvidia.com/gpu with NPROC_PER_NODE, "
+        "or set NPROC_PER_NODE=1 for single-GPU training."
+    )
 
 
 def _torchrun_executable() -> List[str]:
@@ -103,6 +163,10 @@ def maybe_relaunch_with_torchrun(*, module: Optional[str] = None) -> None:
     nproc = resolve_nproc_per_node()
     if nproc <= 1:
         return
+
+    usable = usable_cuda_device_count()
+    if torch.cuda.is_available() and usable <= 0:
+        _raise_cuda_unusable(local_rank=0, world_size=nproc)
 
     prefix = _torchrun_executable()
     cmd = [*prefix, "--standalone", f"--nproc_per_node={nproc}"]
@@ -171,16 +235,19 @@ def init_distributed(
     if world_size <= 1:
         return False
 
+    log_gpu_diagnostics_preinit()
+
     use_backend = str((distributed_cfg or {}).get("backend", backend)).strip().lower()
-    if use_backend == "nccl" and not cuda_usable():
-        if torch.cuda.is_available():
-            raise RuntimeError(
-                "CUDA is visible but kernels fail (common in Kubernetes when the pod lacks "
-                "a proper nvidia.com/gpu request or /dev/nvidia0 is missing). "
-                "Recreate the pod with GPU resources so the device plugin mounts /dev/nvidia0, "
-                "nvidia1, … inside the container."
-            )
-        use_backend = "gloo"
+    usable = usable_cuda_device_count()
+    if use_backend == "nccl":
+        if local_rank >= usable:
+            _raise_cuda_unusable(local_rank=local_rank, world_size=world_size)
+        if not cuda_usable(local_rank):
+            if torch.cuda.is_available():
+                _raise_cuda_unusable(local_rank=local_rank, world_size=world_size)
+            use_backend = "gloo"
+        elif world_size > usable:
+            _raise_cuda_unusable(local_rank=local_rank, world_size=world_size)
 
     if use_backend == "nccl":
         torch.cuda.set_device(local_rank)
@@ -289,6 +356,13 @@ def log_main(msg: str) -> None:
         get_run_logger().verbose(msg)
 
 
+def log_gpu_diagnostics_preinit() -> None:
+    """Log GPU env before DDP init (rank 0 only; uses print so it always appears)."""
+    if get_local_rank() != 0:
+        return
+    print(f"[distributed/gpu] preinit {_cuda_env_summary()}", flush=True)
+
+
 def log_gpu_diagnostics() -> None:
     """Log visible GPUs and distributed env (every rank; cheap sanity check)."""
     if not is_main_process():
@@ -298,6 +372,7 @@ def log_gpu_diagnostics() -> None:
     world_env = os.environ.get("WORLD_SIZE", "")
     cuda_ok = torch.cuda.is_available()
     dev_count = int(torch.cuda.device_count()) if cuda_ok else 0
+    usable = usable_cuda_device_count()
     log_main(
         "[distributed/gpu] "
         f"NPROC_PER_NODE={nproc or 'unset'} "
@@ -305,5 +380,6 @@ def log_gpu_diagnostics() -> None:
         f"WORLD_SIZE_env={world_env or 'unset'} "
         f"rank={get_rank()} local_rank={get_local_rank()} "
         f"world_size={get_world_size()} distributed={is_distributed()} "
-        f"torch.cuda.is_available={cuda_ok} torch.cuda.device_count={dev_count}"
+        f"torch.cuda.is_available={cuda_ok} torch.cuda.device_count={dev_count} "
+        f"usable_cuda_devices={usable}"
     )

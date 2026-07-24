@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-import clip  # type: ignore
+from common.clip_model import load_clip
 import joblib
 import numpy as np
 import torch
@@ -183,7 +183,7 @@ def _text_embed(
     model_name: str = "ViT-B/32",
     batch_size: int = 128,
 ) -> np.ndarray:
-    model, _ = clip.load(model_name, device=device, jit=False)
+    model, _ = load_clip(model_name, device=device, jit=False)
     model.eval()
     for p in model.parameters():
         p.requires_grad = False

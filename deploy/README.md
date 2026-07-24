@@ -223,10 +223,13 @@ Each trainer calls `maybe_relaunch_with_torchrun()` in `common/distributed.py`, 
 1. Reads `NPROC_PER_NODE` (set in job yaml to match `nvidia.com/gpu`)
 2. Else counts `CUDA_VISIBLE_DEVICES`
 3. Else uses `torch.cuda.device_count()`
-4. Re-execs under `torchrun` when count > 1 and `distributed.enabled` is not `false`
+4. Caps the process count by the number of CUDA devices that can actually run kernels
+5. Re-execs under `torchrun` when count > 1 and `distributed.enabled` is not `false`
+
+If the pod only exposes one working GPU, training automatically falls back to single-GPU mode instead of launching a broken 2-process job.
 
 Set `NPROC_PER_NODE=1` or `SINDYFFUSE_NO_TORCHRUN=1` to force single-process training.
-Startup logs include `[distributed/gpu]` with rank, world size, and device count.
+Startup logs include `[distributed/gpu]` with rank, world size, device count, and `/dev/nvidia*` nodes.
 
 ## Pipeline order
 
