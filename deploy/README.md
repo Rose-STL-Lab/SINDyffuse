@@ -208,9 +208,9 @@ Each preprocess variant uses an Indexed worker Job (`parallelism=completions=64`
 | preprocess-nimble/* (workers) | 64 × 1 | 64 × 2–4Gi | — (CPU-only OpenSim/Nimble) |
 | preprocess-nimble/normalization | 1 | 2Gi | — |
 | benchmark-moco-parallel | 64 | 64Gi | — |
-| train-sindy | 16 | 64Gi | 2 |
-| train-surrogate | 16 | 64Gi | 2 |
-| train-diffusion/* | 16 | 64Gi | 2 |
+| train-sindy | 16 | 64Gi | 1 |
+| train-surrogate | 16 | 64Gi | 1 |
+| train-diffusion/* | 16 | 64Gi | 1 |
 
 Edit `deploy/jobs/<name>/job.yaml` to match your nodes.
 
@@ -220,7 +220,7 @@ Training jobs source `deploy/scripts/job-env.sh` (conda + runtime env) and invok
 
 Each trainer calls `maybe_relaunch_with_torchrun()` in `common/distributed.py`, which:
 
-1. Reads `NPROC_PER_NODE` (set in job yaml to match `nvidia.com/gpu`)
+1. Reads `NPROC_PER_NODE` (set in job yaml to match `nvidia.com/gpu`, default **1**)
 2. Else counts `CUDA_VISIBLE_DEVICES`
 3. Else uses `torch.cuda.device_count()`
 4. Caps the process count by the number of CUDA devices that can actually run kernels

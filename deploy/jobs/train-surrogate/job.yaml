@@ -20,7 +20,7 @@ spec:
         workingDir: /mnt/SINDyffuse
         env:
         - name: NPROC_PER_NODE
-          value: "2"
+          value: "1"
         command: ["/bin/bash", "-c"]
         args:
         - |
@@ -28,11 +28,11 @@ spec:
           python scripts/train_surrogate.py
         resources:
           limits:
-            nvidia.com/gpu: 2
+            nvidia.com/gpu: 1
             memory: 64Gi
             cpu: "16"
           requests:
-            nvidia.com/gpu: 2
+            nvidia.com/gpu: 1
             memory: 64Gi
             cpu: "16"
         volumeMounts:

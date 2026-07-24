@@ -37,17 +37,22 @@ def under_torchrun() -> bool:
 
 def cuda_usable(device_index: int = 0) -> bool:
     """True when CUDA kernels can run on ``device_index`` (not just ``is_available()``)."""
+    return cuda_device_error(device_index) is None
+
+
+def cuda_device_error(device_index: int = 0) -> Optional[str]:
+    """Return an error string when ``device_index`` cannot run kernels, else ``None``."""
     if not torch.cuda.is_available():
-        return False
+        return "torch.cuda.is_available() is False"
     if device_index < 0 or device_index >= torch.cuda.device_count():
-        return False
+        return f"device index {device_index} out of range (count={torch.cuda.device_count()})"
     try:
         torch.cuda.set_device(device_index)
         x = torch.randn(2, 2, device=f"cuda:{device_index}")
         _ = float(x.sum())
-        return True
-    except RuntimeError:
-        return False
+        return None
+    except RuntimeError as exc:
+        return str(exc)
 
 
 def usable_cuda_device_count() -> int:
@@ -109,21 +114,41 @@ def resolve_nproc_per_node(*, cap: Optional[int] = None) -> int:
     return requested
 
 
+def _cuda_device_errors() -> List[str]:
+    if not torch.cuda.is_available():
+        return ["torch.cuda.is_available() is False"]
+    errors: List[str] = []
+    for i in range(torch.cuda.device_count()):
+        err = cuda_device_error(i)
+        if err is not None:
+            errors.append(f"cuda:{i}: {err}")
+    return errors
+
+
 def _cuda_env_summary(*, local_rank: Optional[int] = None) -> str:
     visible = os.environ.get("CUDA_VISIBLE_DEVICES", "unset")
+    nvidia_visible = os.environ.get("NVIDIA_VISIBLE_DEVICES", "unset")
     nproc = os.environ.get("NPROC_PER_NODE", "unset")
     dev_count = int(torch.cuda.device_count()) if torch.cuda.is_available() else 0
     usable = usable_cuda_device_count()
     nodes = sorted(glob.glob("/dev/nvidia[0-9]*"))
+    ld_path = os.environ.get("LD_LIBRARY_PATH", "unset")
+    if len(ld_path) > 120:
+        ld_path = ld_path[:117] + "..."
     parts = [
         f"NPROC_PER_NODE={nproc}",
         f"CUDA_VISIBLE_DEVICES={visible}",
+        f"NVIDIA_VISIBLE_DEVICES={nvidia_visible}",
         f"torch.cuda.device_count={dev_count}",
         f"usable_cuda_devices={usable}",
         f"nvidia_device_nodes={nodes or 'none'}",
+        f"LD_LIBRARY_PATH={ld_path}",
     ]
     if local_rank is not None:
         parts.append(f"local_rank={local_rank}")
+    device_errors = _cuda_device_errors()
+    if device_errors:
+        parts.append(f"device_errors={'; '.join(device_errors)}")
     return " ".join(parts)
 
 
@@ -132,11 +157,11 @@ def _raise_cuda_unusable(*, local_rank: int, world_size: int) -> None:
         "CUDA is visible but kernels fail on this process "
         f"(rank/local_rank={local_rank}, world_size={world_size}). "
         f"{_cuda_env_summary(local_rank=local_rank)}. "
-        "Common causes in Kubernetes: the pod was scheduled without enough GPUs, "
-        "nvidia.com/gpu limits do not match NPROC_PER_NODE, or the NVIDIA device "
-        "plugin did not mount /dev/nvidia* inside the container. "
-        "Recreate the job on a GPU node, align nvidia.com/gpu with NPROC_PER_NODE, "
-        "or set NPROC_PER_NODE=1 for single-GPU training."
+        "Common causes: CUDA_VISIBLE_DEVICES was unset before Python imported torch "
+        "(job-env.sh should map NVIDIA_VISIBLE_DEVICES and run before training), "
+        "LD_LIBRARY_PATH puts conda libs ahead of NVIDIA driver libs, or the pod lacks "
+        "a working nvidia.com/gpu allocation. Recreate the job with nvidia.com/gpu: 1 "
+        "and ensure the NVIDIA device plugin is healthy."
     )
 
 

@@ -21,7 +21,7 @@ spec:
       grep -q sindyffuse /root/.bashrc 2>/dev/null || cat >> /root/.bashrc <<'EOF'
       eval "$(conda shell.bash hook)"
       conda activate sindyffuse
-      export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
+      export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}${CONDA_PREFIX}/lib"
       export PYTHONPATH=/mnt/SINDyffuse
       EOF
       exec sleep infinity
