@@ -14,7 +14,8 @@ import torch
 from common.clip_model import load_clip
 
 from common.io import load_json
-from common.paths import nimble_b3d_dir, resolve_data_root, resolve_repo_path
+from common.paths import motion_cache_dir, resolve_data_root, resolve_repo_path
+from common.skeleton_config import resolve_skeleton
 from common.run_logging import RunLogger, add_run_log_cli_args, run_logged_main
 from common.runtime import resolve_torch_device
 from diffusion.clip import clip_encode
@@ -99,6 +100,7 @@ def main() -> None:
     parser.add_argument("--cfg_scale", type=float, default=2.5)
     parser.add_argument("--opt_steps", type=int, default=0)
     parser.add_argument("--opt_lr", type=float, default=1e-3)
+    parser.add_argument("--skeleton", default="", help="rajagopal|mint (default: SINDYFFUSE_SKELETON or mint)")
     parser.add_argument("--device", default="auto")
     add_run_log_cli_args(parser)
     args = parser.parse_args()
@@ -117,10 +119,12 @@ def main() -> None:
 
 def _generate(args: argparse.Namespace, logger: RunLogger) -> None:
     data_root = resolve_data_root(args.data_root or None)
-    cache = nimble_b3d_dir(data_root)
+    sk = resolve_skeleton(getattr(args, "skeleton", None))
+    cache = motion_cache_dir(data_root, skeleton=sk)
     if not cache.is_dir():
         raise FileNotFoundError(
-            f"Nimble B3D cache required at {cache}. Run preprocess_nimble.py first."
+            f"Motion cache required at {cache} (skeleton={sk.value}). "
+            "Run preprocess_mint.py or preprocess_nimble.py first."
         )
 
     device = resolve_torch_device(args.device)
@@ -162,6 +166,7 @@ def _generate(args: argparse.Namespace, logger: RunLogger) -> None:
             fps=20.0,
             clip_model_name="ViT-B/32",
             surrogate_checkpoint=str(resolve_repo_path(args.surrogate_checkpoint_dir)),
+            skeleton=sk.value,
         )
     elif mode == GuidanceMode.NIMBLE:
         nimble_cfg: dict = {}

@@ -10,7 +10,8 @@ import numpy as np
 import nimblephysics as nimble
 from sklearn.preprocessing import StandardScaler
 
-from common.paths import nimble_b3d_dir
+from common.paths import mint_cache_dir, nimble_b3d_dir
+from common.skeleton_config import SkeletonKind, resolve_skeleton
 from datasets.nimble_dataset import read_q_frames
 from datasets.splits import kinematics_pass_index, load_split_ids
 from nimble.b3d_io import (
@@ -148,16 +149,120 @@ class SindyWindowIndex:
         )
         return cls(entries, stats=stats)
 
+    @classmethod
+    def build_mint(
+        cls,
+        data_root: str,
+        split: str,
+        *,
+        window_size: int,
+        window_stride: int,
+        max_samples: int,
+        skip_zero_placeholders: bool = True,
+        zero_atol: float = 1e-8,
+    ) -> "SindyWindowIndex":
+        from mint.cache_schema import cache_has_labels, read_motion_cache
+        from mint.muscle_schema import validate_activation_matrix
+
+        root = Path(data_root)
+        cache_dir = mint_cache_dir(root)
+        if not cache_dir.is_dir():
+            raise FileNotFoundError(f"Missing {cache_dir}; run preprocess_mint.py first.")
+
+        entries: List[WindowEntry] = []
+        stats = SindyIndexStats()
+        for sid in load_split_ids(root, split):
+            npz_path = cache_dir / f"{sid}.npz"
+            if not npz_path.is_file():
+                stats.num_motions_skipped_missing += 1
+                continue
+            stats.num_motions_seen += 1
+            data = read_motion_cache(npz_path)
+            tlen = int(data["q"].shape[0])
+            if tlen < int(window_size):
+                stats.num_motions_skipped_short += 1
+                continue
+            if not cache_has_labels(npz_path):
+                stats.num_motions_skipped_missing += 1
+                continue
+            if skip_zero_placeholders:
+                act = data["muscle_activations"]
+                if validate_activation_matrix(act, atol=float(zero_atol)):
+                    stats.num_motions_skipped_zero += 1
+                    continue
+
+            stats.num_motions_kept += 1
+            for st in _window_starts(tlen, window_size, window_stride):
+                entries.append(
+                    WindowEntry(
+                        motion_id=str(sid),
+                        start_frame=int(st),
+                        b3d_path=str(npz_path),
+                        sample_id=f"{sid}:start{st}",
+                    )
+                )
+                if max_samples > 0 and len(entries) >= int(max_samples):
+                    break
+            if max_samples > 0 and len(entries) >= int(max_samples):
+                break
+
+        if not entries:
+            raise ValueError(
+                f"No MinT SINDy windows indexed from {root} (split={split!r}). "
+                f"Run preprocess_mint.py with MinT labels."
+            )
+        print(
+            f"[sindy/data] indexed {len(entries)} MinT windows from {stats.num_motions_kept} motions",
+            flush=True,
+        )
+        return cls(entries, stats=stats)
+
+
+def compute_mint_window_arrays(
+    npz_path: str,
+    start_frame: int,
+    window_size: int,
+    *,
+    fps: float,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[str], List[str]]:
+    from mint.cache_schema import read_motion_cache
+    from mint.features import features_from_mint_q
+
+    data = read_motion_cache(npz_path)
+    st = int(start_frame)
+    n = int(window_size)
+    q = data["q"][st : st + n].astype(np.float32)
+    bio = data["guidance_features"][st : st + n].astype(np.float32)
+    act = data["muscle_activations"][st : st + n].astype(np.float32)
+    if "sindy_features" in data:
+        sc = data["sindy_features"][st : st + n].astype(np.float32)
+        u_dim = 10
+        u = sc[:, :u_dim]
+        c = sc[:, u_dim:]
+        from mint.features import features_from_mint_q as _ff
+
+        _, _, un, cn = _ff(q, fps=fps)
+    else:
+        u, c, un, cn = features_from_mint_q(q, fps=fps)
+    y = build_sindy_targets(bio, act)
+    if y.shape[1] != N_SINDY_TARGETS:
+        raise ValueError(f"Expected y with {N_SINDY_TARGETS} targets, got {y.shape}")
+    return u, c, y, un, cn
+
 
 def compute_window_arrays(
-    b3d_path: str,
+    cache_path: str,
     start_frame: int,
     window_size: int,
     *,
     fps: float,
     compute_bio: bool = True,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[str], List[str]]:
-    """Read one window and compute SINDy ``u``, ``c``, ``y`` arrays."""
+    """Read one window from B3D or MinT NPZ and compute SINDy ``u``, ``c``, ``y``."""
+    if str(cache_path).endswith(".npz"):
+        return compute_mint_window_arrays(cache_path, start_frame, window_size, fps=fps)
+
+    b3d_path = cache_path
     subj = nimble.biomechanics.SubjectOnDisk(str(b3d_path))
     trial = 0
     kin = kinematics_pass_index(subj, trial)
@@ -172,16 +277,6 @@ def compute_window_arrays(
         if compute_bio:
             bio = read_guidance_features_frames(subj, trial, int(start_frame), int(window_size))
             act = read_muscle_activations_frames(subj, trial, int(start_frame), int(window_size))
-            # #region agent log
-            if bio.shape[0] != act.shape[0]:
-                import json, time
-                _log = {"sessionId": "69d422", "runId": "pre-fix", "hypothesisId": "H1", "location": "sindy/windows.py:compute_window_arrays", "message": "bio/act length mismatch before build_sindy_targets", "data": {"b3d_path": str(b3d_path), "start_frame": int(start_frame), "window_size": int(window_size), "bio_shape": list(bio.shape), "act_shape": list(act.shape), "u_shape": list(u.shape), "c_shape": list(c.shape)}, "timestamp": int(time.time() * 1000)}
-                try:
-                    with open("/mnt/.cursor/debug-69d422.log", "a") as _f:
-                        _f.write(json.dumps(_log) + "\n")
-                except Exception:
-                    pass
-            # #endregion
             y = build_sindy_targets(bio, act)
         else:
             y = np.zeros((max(0, window_size - 1), N_SINDY_TARGETS), dtype=np.float32)
@@ -256,8 +351,43 @@ def collect_windows(
     log_every: int = 50,
     skip_zero_placeholders: bool = True,
     zero_atol: float = 1e-8,
+    skeleton: str | None = None,
 ):
     """Preload all SINDy windows into memory (``preload=True`` path)."""
+    sk = resolve_skeleton(skeleton)
+    if sk == SkeletonKind.MINT:
+        index = SindyWindowIndex.build_mint(
+            data_root,
+            split,
+            window_size=window_size,
+            window_stride=window_stride,
+            max_samples=max_samples,
+            skip_zero_placeholders=skip_zero_placeholders,
+            zero_atol=zero_atol,
+        )
+        u_list, c_list, y_list, sid_list = [], [], [], []
+        u_names: List[str] = []
+        c_names: List[str] = []
+        for i, entry in enumerate(index.entries):
+            u, c, y, un, cn = compute_mint_window_arrays(
+                entry.b3d_path,
+                entry.start_frame,
+                window_size,
+                fps=fps,
+            )
+            if not u_names:
+                u_names, c_names = un, cn
+            u_list.append(u)
+            c_list.append(c)
+            y_list.append(y)
+            sid_list.append(entry.sample_id)
+            if log_every > 0 and len(sid_list) % int(log_every) == 0:
+                print(f"[sindy/data] preloaded {len(sid_list)}/{len(index.entries)} MinT windows", flush=True)
+        u = np.stack(u_list, axis=0).astype(np.float32)
+        c = np.stack(c_list, axis=0).astype(np.float32)
+        y = np.stack(y_list, axis=0).astype(np.float32)
+        return u, c, y, u_names, c_names, np.array(sid_list, dtype=object)
+
     index = SindyWindowIndex.build(
         data_root,
         split,

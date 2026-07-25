@@ -1,0 +1,343 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<OpenSimDocument Version="40000">
+	<MarkerSet name="markerset">
+		<objects>
+			<Marker name="C7">
+				<socket_parent_frame>/bodyset/torso</socket_parent_frame>
+				<location>-0.08036470588235295 0.4199803921568627 0.0025176470588235294</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="CLAV">
+				<socket_parent_frame>/bodyset/torso</socket_parent_frame>
+				<location>0.046286274509803924 0.3855137254901961 0.024745098039215686</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LANK">
+				<socket_parent_frame>/bodyset/tibia_l</socket_parent_frame>
+				<location>-0.017560784313725493 -0.3844313725490196 -0.047850980392156864</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LASI">
+				<socket_parent_frame>/bodyset/pelvis</socket_parent_frame>
+				<location>0.027384313725490196 0.009941176470588236 -0.12864705882352942</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LBAK">
+				<socket_parent_frame>/bodyset/torso</socket_parent_frame>
+				<location>0.04526666666666666 0.3840862745098039 -0.024070588235294118</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LBCEP">
+				<socket_parent_frame>/bodyset/humerus_l</socket_parent_frame>
+				<location>0.010006535024915289 -0.27378210489203125 -0.04112527889354544</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LBHD">
+				<socket_parent_frame>/bodyset/torso</socket_parent_frame>
+				<location>-0.08010588235294118 0.41927450980392156 0.0038431372549019606</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LBUM">
+				<socket_parent_frame>/bodyset/pelvis</socket_parent_frame>
+				<location>0.02718823529411765 0.010333333333333333 -0.128921568627451</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LBUST">
+				<socket_parent_frame>/bodyset/torso</socket_parent_frame>
+				<location>0.04644313725490196 0.3859529411764706 -0.02410980392156863</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LCHEECK">
+				<socket_parent_frame>/bodyset/torso</socket_parent_frame>
+				<location>-0.08091372549019608 0.42053725490196076 0.0031607843137254903</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LELB">
+				<socket_parent_frame>/bodyset/humerus_l</socket_parent_frame>
+				<location>0.01072810365236627 -0.27345269312732534 -0.04247429850138858</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LELBIN">
+				<socket_parent_frame>/bodyset/humerus_l</socket_parent_frame>
+				<location>0.004676013810859054 -0.2783072134916919 0.046882751432158136</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LFHD">
+				<socket_parent_frame>/bodyset/torso</socket_parent_frame>
+				<location>-0.0797764705882353 0.42005882352941176 0.002674509803921569</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LFIN">
+				<socket_parent_frame>/bodyset/radius_l</socket_parent_frame>
+				<location>-0.034768495846312225 -0.22614092106957565 -0.035585539603643246</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LFRM">
+				<socket_parent_frame>/bodyset/radius_l</socket_parent_frame>
+				<location>-0.03510575074827301 -0.2266977838146737 -0.035303186662466776</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LFTHIIN">
+				<socket_parent_frame>/bodyset/femur_l</socket_parent_frame>
+				<location>0.08067843137254903 -0.32476470588235296 -0.004445098039215686</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LHEE">
+				<socket_parent_frame>/bodyset/calcn_l</socket_parent_frame>
+				<location>-0.02947843137254902 0.014372231397855397 0.009776470588235294</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LIWR">
+				<socket_parent_frame>/bodyset/radius_l</socket_parent_frame>
+				<location>-0.03497241741493968 -0.22723896028526194 -0.03666789254481972</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LKNE">
+				<socket_parent_frame>/bodyset/femur_l</socket_parent_frame>
+				<location>0.007635294117647059 -0.40476470588235297 -0.05447843137254902</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LKNI">
+				<socket_parent_frame>/bodyset/femur_l</socket_parent_frame>
+				<location>0.011803921568627451 -0.40100392156862746 0.05531764705882353</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LMT1">
+				<socket_parent_frame>/bodyset/calcn_l</socket_parent_frame>
+				<location>0.1797728330978004 0.01833113331372433 -0.0007574531851994406</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LMT5">
+				<socket_parent_frame>/bodyset/calcn_l</socket_parent_frame>
+				<location>0.13621281277585695 0.0018716902957750066 -0.061781143607137295</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LNWST">
+				<socket_parent_frame>/bodyset/torso</socket_parent_frame>
+				<location>0.04609019607843137 0.38588235294117645 -0.025529411764705884</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LOWR">
+				<socket_parent_frame>/bodyset/radius_l</socket_parent_frame>
+				<location>-0.04086159500078493 -0.22602232815611595 0.005384183421133354</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LPSI">
+				<socket_parent_frame>/bodyset/pelvis</socket_parent_frame>
+				<location>-0.15325882352941175 0.024290196078431373 -0.05066274509803922</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LRSTBEEF">
+				<socket_parent_frame>/bodyset/calcn_l</socket_parent_frame>
+				<location>-0.029266666666666667 0.014450662770404417 0.009392156862745098</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LSCAP">
+				<socket_parent_frame>/bodyset/torso</socket_parent_frame>
+				<location>-5.882352941176472e-05 0.41725098039215686 -0.14288235294117646</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LSHN">
+				<socket_parent_frame>/bodyset/tibia_l</socket_parent_frame>
+				<location>0.012770588235294119 -0.32043529411764704 -0.059627450980392155</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LSHO">
+				<socket_parent_frame>/bodyset/torso</socket_parent_frame>
+				<location>-0.000811764705882353 0.41734509803921566 -0.14140784313725488</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LTHI">
+				<socket_parent_frame>/bodyset/femur_l</socket_parent_frame>
+				<location>0.0793921568627451 -0.3248901960784314 -0.005033333333333333</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LTHILO">
+				<socket_parent_frame>/bodyset/femur_l</socket_parent_frame>
+				<location>0.08090588235294117 -0.32470196078431374 -0.0049</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LTHMB">
+				<socket_parent_frame>/bodyset/radius_l</socket_parent_frame>
+				<location>-0.03562339780709654 -0.2263056269519286 -0.035616912152662855</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="LTOE">
+				<socket_parent_frame>/bodyset/calcn_l</socket_parent_frame>
+				<location>0.18040812721544744 0.018268388215685112 -0.0012045120087288523</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="MBLLY">
+				<socket_parent_frame>/bodyset/torso</socket_parent_frame>
+				<location>0.046890196078431375 0.38454901960784316 0.024721568627450983</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RANK">
+				<socket_parent_frame>/bodyset/tibia_r</socket_parent_frame>
+				<location>-0.017898399859946436 -0.3860321996461736 0.04677233518537517</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RASI">
+				<socket_parent_frame>/bodyset/pelvis</socket_parent_frame>
+				<location>0.028090196078431374 0.009470588235294118 0.12759607843137255</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RBAK">
+				<socket_parent_frame>/bodyset/torso</socket_parent_frame>
+				<location>0.04596470588235294 0.3851921568627451 0.025301960784313727</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RBCEP">
+				<socket_parent_frame>/bodyset/humerus_r</socket_parent_frame>
+				<location>0.009512417377856465 -0.2739781833234038 0.04090567105040818</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RBHD">
+				<socket_parent_frame>/bodyset/torso</socket_parent_frame>
+				<location>-0.08043529411764706 0.42089803921568625 0.0026588235294117647</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RBSH">
+				<socket_parent_frame>/bodyset/torso</socket_parent_frame>
+				<location>0.04633333333333333 0.3850117647058824 0.024133333333333333</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RBUM">
+				<socket_parent_frame>/bodyset/pelvis</socket_parent_frame>
+				<location>0.02729019607843137 0.010325490196078431 0.12706274509803922</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RBUST">
+				<socket_parent_frame>/bodyset/torso</socket_parent_frame>
+				<location>0.04634117647058823 0.3855294117647059 0.024172549019607845</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RCHEECK">
+				<socket_parent_frame>/bodyset/torso</socket_parent_frame>
+				<location>-0.07946274509803922 0.42040392156862744 0.0031921568627450983</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RELB">
+				<socket_parent_frame>/bodyset/humerus_r</socket_parent_frame>
+				<location>0.009959476201385877 -0.2728958303822273 0.04127429850138858</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RELBIN">
+				<socket_parent_frame>/bodyset/humerus_r</socket_parent_frame>
+				<location>0.005287778516741407 -0.2775385860407115 -0.04620039849098167</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RFHD">
+				<socket_parent_frame>/bodyset/torso</socket_parent_frame>
+				<location>-0.08072549019607843 0.42040392156862744 0.0034509803921568627</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RFIN">
+				<socket_parent_frame>/bodyset/radius_r</socket_parent_frame>
+				<location>-0.02942485866803047 -0.22479599119506208 0.03411328064093359</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RFRM2">
+				<socket_parent_frame>/bodyset/radius_r</socket_parent_frame>
+				<location>-0.029597407687638314 -0.22509403041074835 0.03412112377818849</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RFTHI">
+				<socket_parent_frame>/bodyset/femur_r</socket_parent_frame>
+				<location>0.07998823529411765 -0.32443529411764704 0.004476470588235294</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RFTHIIN">
+				<socket_parent_frame>/bodyset/femur_r</socket_parent_frame>
+				<location>0.07921176470588236 -0.32398823529411763 0.0047666666666666664</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RHEE">
+				<socket_parent_frame>/bodyset/calcn_r</socket_parent_frame>
+				<location>-0.03149875392539828 0.015079420175403568 -0.010906755252912933</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RIWR">
+				<socket_parent_frame>/bodyset/radius_r</socket_parent_frame>
+				<location>-0.029260152785677528 -0.22517246178329736 0.034544653189953194</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RKNE">
+				<socket_parent_frame>/bodyset/femur_r</socket_parent_frame>
+				<location>0.0072980392156862745 -0.40398823529411765 0.0559921568627451</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RKNI">
+				<socket_parent_frame>/bodyset/femur_r</socket_parent_frame>
+				<location>0.010227450980392155 -0.4006117647058824 -0.055341176470588234</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RMT1">
+				<socket_parent_frame>/bodyset/calcn_r</socket_parent_frame>
+				<location>0.18037675466642783 0.01733505488235178 0.0005300022048072839</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RMT5">
+				<socket_parent_frame>/bodyset/calcn_r</socket_parent_frame>
+				<location>0.13496575395232754 0.0008599255898926535 0.06159290831301965</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RNWST">
+				<socket_parent_frame>/bodyset/torso</socket_parent_frame>
+				<location>0.04656862745098039 0.3851529411764706 0.02580392156862745</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="ROWR">
+				<socket_parent_frame>/bodyset/radius_r</socket_parent_frame>
+				<location>-0.029234734418186067 -0.22599921834666603 -0.011211173810932229</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RPSI">
+				<socket_parent_frame>/bodyset/pelvis</socket_parent_frame>
+				<location>-0.15321176470588235 0.025207843137254902 0.04972941176470588</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RRSTBEEF">
+				<socket_parent_frame>/bodyset/calcn_r</socket_parent_frame>
+				<location>-0.03180463627833946 0.01489118488128592 -0.010444010154873716</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RSHO">
+				<socket_parent_frame>/bodyset/torso</socket_parent_frame>
+				<location>-0.0009529411764705882 0.41876470588235293 0.14290588235294116</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RTHI">
+				<socket_parent_frame>/bodyset/femur_r</socket_parent_frame>
+				<location>0.08046666666666667 -0.3237921568627451 0.004170588235294118</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RTHMB">
+				<socket_parent_frame>/bodyset/radius_r</socket_parent_frame>
+				<location>-0.030640544942540274 -0.22547050099898364 0.03380739828799241</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RTIB">
+				<socket_parent_frame>/bodyset/tibia_r</socket_parent_frame>
+				<location>0.011149019607843137 -0.23272156862745097 0.07476470588235294</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="RTOE">
+				<socket_parent_frame>/bodyset/calcn_r</socket_parent_frame>
+				<location>0.17963949976446705 0.01758603527450864 0.0010005904401014015</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="STRN">
+				<socket_parent_frame>/bodyset/torso</socket_parent_frame>
+				<location>0.04545490196078431 0.38480000000000003 0.024015686274509805</location>
+				<fixed>false</fixed>
+			</Marker>
+			<Marker name="T8">
+				<socket_parent_frame>/bodyset/torso</socket_parent_frame>
+				<location>-0.081 0.4192196078431372 0.003913725490196079</location>
+				<fixed>false</fixed>
+			</Marker>
+		</objects>
+		<groups />
+	</MarkerSet>
+</OpenSimDocument>

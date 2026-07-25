@@ -13,6 +13,7 @@ class GuidanceMode(str, Enum):
 
 class DatasetName(str, Enum):
     NIMBLE = "nimble"
+    MINT = "mint"
 
 
 __all__ = ["DatasetName", "GuidanceMode", "default_humanml3d_root"]

@@ -1,0 +1,26 @@
+{
+  "seed": 42,
+  "skeleton": "mint",
+  "fps": 20.0,
+  "distributed": {
+    "enabled": "auto",
+    "backend": "nccl",
+    "find_unused_parameters": false
+  },
+  "data_root": "datasets/HumanML3D",
+  "window_size": 64,
+  "window_stride": 16,
+  "max_samples": 0,
+  "skip_zero_placeholders": 1,
+  "theta_tier": "tier2_moderate",
+  "include_u": true,
+  "include_c": true,
+  "target_dim": 424,
+  "clip_model_name": "ViT-B/32",
+  "lr": 0.001,
+  "weight_decay": 0.0001,
+  "epochs": 200,
+  "batch_size": 32,
+  "device": "auto",
+  "num_workers": 0
+}

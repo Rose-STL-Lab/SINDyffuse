@@ -1,0 +1,52 @@
+# Apply: kubectl apply -k deploy/jobs/train-diffusion-mint/sindy
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sindyffuse-diffusion-mint-sindy
+  labels:
+    app: sindyffuse-diffusion-mint-sindy
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: sindyffuse-diffusion-mint-sindy
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: sindyffuse-diffusion
+        image: sindyffuse:latest
+        imagePullPolicy: IfNotPresent
+        workingDir: /mnt/SINDyffuse
+        env:
+        - name: SINDYFFUSE_SKELETON
+          value: "mint"
+        - name: NPROC_PER_NODE
+          value: "1"
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          source deploy/scripts/job-env.sh
+          python scripts/train_diffusion.py --config configs/train_diffusion_mint.json --preload
+        resources:
+          limits:
+            nvidia.com/gpu: 1
+            memory: 64Gi
+            cpu: "16"
+          requests:
+            nvidia.com/gpu: 1
+            memory: 64Gi
+            cpu: "16"
+        volumeMounts:
+        - name: data
+          mountPath: /mnt
+        - name: dshm
+          mountPath: /dev/shm
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: sindyffuse
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 64Gi

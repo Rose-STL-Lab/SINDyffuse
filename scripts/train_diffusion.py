@@ -40,8 +40,8 @@ from common.io import load_json, save_json
 from common.paths import diffusion_latest_link, nimble_b3d_dir, resolve_data_root, resolve_repo_path, update_latest_symlink
 from common.run_setup import (
     default_config_path,
-    require_nimble_b3d,
-    require_nimble_normalization,
+    require_motion_cache,
+    require_motion_normalization,
     require_sindy_checkpoint,
     require_surrogate_checkpoint,
     resolve_repo_checkpoint,
@@ -82,7 +82,15 @@ def _prepare_diffusion_config(
     else:
         data_cfg["data_root"] = resolve_training_data_root(data_cfg.get("data_root"))
 
-    data_cfg["dataset"] = "nimble"
+    from common.skeleton_config import SkeletonKind, resolve_skeleton
+
+    sk = resolve_skeleton(data_cfg.get("skeleton"))
+    if str(data_cfg.get("dataset", "")).strip().lower() == "mint" or sk == SkeletonKind.MINT:
+        data_cfg["dataset"] = "mint"
+        data_cfg.setdefault("skeleton", "mint")
+    else:
+        data_cfg.setdefault("dataset", "nimble")
+        data_cfg.setdefault("skeleton", "rajagopal")
     for key in ("sindy_checkpoint_dir", "surrogate_checkpoint_dir"):
         raw = str(train_cfg.get(key, "")).strip()
         if raw:
@@ -91,9 +99,11 @@ def _prepare_diffusion_config(
 
 
 def _validate_diffusion_inputs(cfg: dict) -> GuidanceMode:
-    data_root = resolve_data_root(cfg.get("data", {}).get("data_root"))
-    require_nimble_b3d(data_root)
-    require_nimble_normalization(data_root)
+    data_cfg = cfg.get("data", {}) or {}
+    data_root = resolve_data_root(data_cfg.get("data_root"))
+    skeleton = str(data_cfg.get("skeleton", "")).strip()
+    require_motion_cache(data_root, skeleton=skeleton or None)
+    require_motion_normalization(data_root, skeleton=skeleton or None)
     mode = GuidanceMode(str(cfg.get("train", {}).get("guidance", "sindy")).strip().lower())
     if mode == GuidanceMode.SINDY:
         require_sindy_checkpoint()
@@ -122,10 +132,18 @@ def train(config_path: str, out_dir: str, *, preload: bool = False) -> None:
 
     dataset_name = str(data_cfg.get("dataset", "nimble"))
     data_root = resolve_data_root(data_cfg.get("data_root"))
-    cache = nimble_b3d_dir(data_root)
+    from common.skeleton_config import SkeletonKind, resolve_skeleton
+    from common.paths import mint_cache_dir, nimble_b3d_dir
+
+    sk = resolve_skeleton(data_cfg.get("skeleton"))
+    if dataset_name.lower() == "mint" or sk == SkeletonKind.MINT:
+        dataset_name = "mint"
+        cache = mint_cache_dir(data_root)
+    else:
+        cache = nimble_b3d_dir(data_root)
     if not cache.is_dir():
         raise FileNotFoundError(
-            f"Nimble B3D cache required at {cache}. Run preprocess_nimble.py first."
+            f"Motion cache required at {cache}. Run preprocess_mint.py or preprocess_nimble.py first."
         )
     _preload = bool(preload or data_cfg.get("preload", False))
     train_ds = get_dataset(
@@ -140,7 +158,7 @@ def train(config_path: str, out_dir: str, *, preload: bool = False) -> None:
     log_main(
         "[train] data.preload=True: q trajectories loaded into RAM"
         if _preload
-        else "[train] data.preload=False: reading B3D windows on demand"
+        else "[train] data.preload=False: reading motion cache windows on demand"
     )
 
     device = resolve_train_device(str(train_cfg.get("device", "auto")))
@@ -225,6 +243,7 @@ def train(config_path: str, out_dir: str, *, preload: bool = False) -> None:
             fps=float(data_cfg.get("fps", 20.0)),
             clip_model_name=clip_model_name,
             surrogate_checkpoint=surrogate_dir,
+            skeleton=str(data_cfg.get("skeleton", "")),
         )
     elif guidance_mode == GuidanceMode.NIMBLE:
         nimble_guidance = build_nimble_guidance(

@@ -12,6 +12,11 @@ deploy/
   components/
     cluster-config/           # edit image + PVC here (applies to all jobs/dev pod)
   jobs/
+    preprocess-mint/            # MinT NPZ cache (default on mint branch)
+    train-surrogate-mint/
+    train-sindy-mint/
+    train-diffusion-mint/
+      sindy/
     preprocess-nimble/
       none/                   # IK-only (--activation_method none)
       static-optimization/
@@ -29,9 +34,13 @@ deploy/
 
 | Local | Kubernetes |
 |-------|------------|
+| `python scripts/preprocess_mint.py ...` | `./deploy/scripts/run-preprocess-mint.sh` or `kubectl apply -k deploy/jobs/preprocess-mint` |
 | `python scripts/preprocess_nimble.py ...` | `./deploy/scripts/run-preprocess-nimble.sh [none\|static-optimization\|moco-track]` |
 | `python scripts/compute_normalization.py ...` | `kubectl apply -k deploy/jobs/preprocess-nimble/normalization` |
 | `python scripts/benchmark_moco_parallel.py ...` | `kubectl apply -k deploy/jobs/benchmark-moco-parallel` |
+| `python scripts/train_surrogate.py --config configs/train_surrogate_mint.json` | `kubectl apply -k deploy/jobs/train-surrogate-mint` |
+| `python scripts/train_sindy.py --config configs/train_sindy_mint.json` | `kubectl apply -k deploy/jobs/train-sindy-mint` |
+| `python scripts/train_diffusion.py --config configs/train_diffusion_mint.json` | `kubectl apply -k deploy/jobs/train-diffusion-mint/sindy` |
 | `python scripts/train_sindy.py ...` | `kubectl apply -k deploy/jobs/train-sindy` |
 | `python scripts/train_surrogate.py ...` | `kubectl apply -k deploy/jobs/train-surrogate` |
 | `python scripts/train_diffusion.py ...` | `kubectl apply -k deploy/jobs/train-diffusion/{none,nimble,sindy}` |
