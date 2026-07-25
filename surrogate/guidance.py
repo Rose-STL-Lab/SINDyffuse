@@ -84,9 +84,10 @@ def load_activation_surrogate_guidance(
     if bool(payload.get("normalize_q", False)) and data_root:
         import numpy as np
 
-        from common.paths import nimble_b3d_dir
+        from common.paths import motion_cache_dir
+        from common.skeleton_config import resolve_skeleton
 
-        cache = nimble_b3d_dir(data_root)
+        cache = motion_cache_dir(data_root, skeleton=resolve_skeleton())
         mean_p, std_p = cache / "Mean.npy", cache / "Std.npy"
         if mean_p.is_file() and std_p.is_file():
             mean_q = torch.from_numpy(np.load(mean_p).astype(np.float32))

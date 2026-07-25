@@ -1,12 +1,14 @@
 # SINDyffuse
 
-Text-conditioned human motion diffusion with **SINDy** biomechanics targets and **Nimble/OpenSim** physics guidance.
+Text-conditioned human motion diffusion with **SINDy** biomechanics targets and musculoskeletal physics guidance.
 
-HumanML3D joint trajectories are retargeted to the Rajagopal 2015 musculoskeletal model, cached as Nimble B3D files, and used to train:
+On the **`mint` branch** (default skeleton: MinT), HumanML3D joint trajectories are retargeted to the **Lai lower-body + Bruno thoracolumbar** OpenSim models, cached as NPZ files, and used to train:
 
-1. **SINDy** — text → sparse coefficients for **103 targets** (23 L_bio + 80 muscle activations)  
-2. **Activation surrogate** — fast `q` → 80 muscle activations (OpenSim labels at preprocess)  
+1. **SINDy** — text → sparse coefficients for **424 targets** (22 L_bio + 402 muscle activations)  
+2. **Activation surrogate** — fast MinT `q` → 402 muscle activations (MinT labels via `musint`, no Moco/static)  
 3. **Diffusion** — text → motion with SINDy guidance (`loss_diff + lambda_sindy * loss_sindy`)  
+
+The legacy **Rajagopal 2015** path (`SINDYFFUSE_SKELETON=rajagopal`) remains available: 37 DOF, 80 muscles, Nimble B3D cache, MocoTrack/static optimization.
 
 ## Setup
 
@@ -15,12 +17,37 @@ conda env create -f env/environment.yaml
 conda activate sindyffuse
 ```
 
-OpenSim and the Rajagopal `.osim` model come from the `opensim` and `nimblephysics` conda/pip packages (no bundled geometry in this repo).
+OpenSim comes from the `opensim` conda package. The MinT Lai model is bundled under `models/mint/`; set `MINT_ROOT` to your extracted MinT dataset for precomputed muscle labels.
 
 Point at your HumanML3D checkout:
 
 ```bash
 export HUMANML3D_ROOT=/path/to/HumanML3D   # optional; default: datasets/HumanML3D
+export SINDYFFUSE_SKELETON=mint            # default on mint branch
+export MINT_ROOT=/path/to/MinT             # required for MinT muscle labels at preprocess
+export SMPLH_MODEL_PATH=/path/to/smplh     # SMPLH_NEUTRAL.pkl for MinT-faithful retargeting
+```
+
+### Retargeting (HumanML3D → MinT `q`)
+
+Default preprocess uses the **MinT-faithful** pipeline:
+
+```
+HML 22×3 joints → SMPL-H fit (smplx) → 67 SSM virtual markers → OpenSim IK (Lai model)
+```
+
+Requires `SMPLH_MODEL_PATH` (directory with `SMPLH_NEUTRAL.pkl`) and OpenSim from conda. Marker sets and IK setup are generated under `models/mint/opensim/` on first run.
+
+| Env / flag | Purpose |
+|------------|---------|
+| `SMPLH_MODEL_PATH` | SMPL-H model directory (required for `method=mint`) |
+| `MINT_RETARGET_METHOD` | `mint` (default) or `bootstrap` |
+| `MINT_IK_KEEP_WORKDIR=1` | Keep temp IK work dirs for debugging |
+
+Legacy bootstrap (direct HML→Lai heuristic, no SMPL-H):
+
+```bash
+python scripts/preprocess_mint.py --max_motions 1  # set MINT_RETARGET_METHOD=bootstrap
 ```
 
 ## Data layout
@@ -30,18 +57,72 @@ datasets/HumanML3D/          # not committed (~20GB)
   new_joint_vecs/
   texts/
   train.txt, val.txt, test.txt
-  nimble_b3d/                # canonical B3D cache (IK / static / Moco — one folder)
+  mint_cache/                # MinT NPZ cache (default on mint branch)
+    {motion_id}.npz          # q, muscle_activations [402], guidance/sindy features
+    Mean.npy, Std.npy
+    metadata.json
+  nimble_b3d/                # legacy Rajagopal B3D cache (SINDYFFUSE_SKELETON=rajagopal)
     {motion_id}.b3d
     Mean.npy, Std.npy
 ```
 
-## Pipeline
+## Pipeline (MinT — default)
 
 Run entry points from the repo root:
 
 ```bash
 cd /path/to/SINDyffuse
+export SINDYFFUSE_SKELETON=mint
+export MINT_ROOT=/path/to/MinT
 ```
+
+### 1. Preprocess (MinT retarget + musint labels)
+
+HumanML3D joints are retargeted via SMPL-H → 67 SSM markers → OpenSim IK (see **Retargeting** above). MinT muscle activations are loaded from `musint` at **20 fps**.
+
+```bash
+python scripts/preprocess_mint.py --max_motions 1
+python scripts/compute_normalization.py --skeleton mint
+```
+
+MinT activations are loaded from `musint` at **20 fps** (resampled from 50 fps). Motions without MinT overlap get `has_mint_labels=false` and are skipped by surrogate/SINDy training by default. No MocoTrack or static optimization on the mint path.
+
+**Kubernetes:**
+
+```bash
+./deploy/scripts/run-preprocess-mint.sh
+kubectl apply -k deploy/jobs/preprocess-mint
+```
+
+### 2. Train SINDy (424 targets)
+
+```bash
+python scripts/train_sindy.py --config configs/train_sindy_mint.json
+```
+
+### 3. Train activation surrogate (q → 402)
+
+```bash
+python scripts/train_surrogate.py --config configs/train_surrogate_mint.json
+```
+
+### 4. Train diffusion (MinT ndof)
+
+```bash
+python scripts/train_diffusion.py --config configs/train_diffusion_mint.json
+```
+
+### 5. Generate motion
+
+```bash
+python scripts/generate_motion.py --checkpoint results/diffusion/latest.pt \
+  --caption "a person walks forward" --out_npz out.npz \
+  --guidance sindy --skeleton mint \
+  --sindy_checkpoint_dir results/sindy/latest \
+  --surrogate_checkpoint_dir results/activation_surrogate/latest
+```
+
+## Pipeline (Rajagopal — legacy)
 
 ### 1. Preprocess (IK + OpenSim MocoTrack + feature cache)
 
@@ -139,6 +220,12 @@ python scripts/generate_motion.py --checkpoint results/diffusion/latest.pt \
 Job manifests live under `deploy/`. Configure your image and PVC in `deploy/components/cluster-config/`, then apply individual jobs:
 
 ```bash
+kubectl apply -k deploy/jobs/preprocess-mint
+kubectl apply -k deploy/jobs/train-surrogate-mint
+kubectl apply -k deploy/jobs/train-sindy-mint
+kubectl apply -k deploy/jobs/train-diffusion-mint/sindy
+
+# Legacy Rajagopal jobs:
 ./deploy/scripts/run-preprocess-nimble.sh static-optimization
 # Or normalization alone after workers finished:
 kubectl apply -k deploy/jobs/preprocess-nimble/normalization
@@ -159,12 +246,15 @@ See [deploy/README.md](deploy/README.md) for image build, storage setup, and the
 
 | Path | Role |
 |------|------|
-| `scripts/preprocess_nimble.py` | HumanML3D → Nimble B3D cache |
+| `scripts/preprocess_mint.py` | HumanML3D → MinT NPZ cache (default) |
+| `scripts/preprocess_nimble.py` | HumanML3D → Nimble B3D cache (legacy) |
 | `scripts/compute_normalization.py` | Merge shard manifests; compute `Mean.npy` / `Std.npy` |
 | `scripts/train_sindy.py` | Train SINDy text→Xi model |
 | `scripts/train_surrogate.py` | Train q→activation surrogate |
 | `scripts/train_diffusion.py` | Train text-conditioned diffusion |
 | `scripts/generate_motion.py` | Sample motion from trained diffusion |
+| `scripts/discover_mint.py` | MinT layout / HML overlap report |
+| `mint/` | MinT OpenSim integration, cache, labels, physics |
 | `env/environment.yaml` | Conda environment |
 | `env/Dockerfile` | Container image (`docker build -f env/Dockerfile .`; CI publishes to GHCR) |
 | `deploy/` | Kubernetes job manifests (see `deploy/README.md`) |

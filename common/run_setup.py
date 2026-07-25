@@ -9,6 +9,8 @@ from pathlib import Path
 from common.paths import (
     activation_surrogate_latest_link,
     default_humanml3d_root,
+    mint_cache_dir,
+    motion_cache_dir,
     nimble_b3d_dir,
     repo_root,
     resolve_data_root,
@@ -23,6 +25,10 @@ __all__ = [
     "PINNED_OUT_DIR_ENV",
     "default_config_path",
     "new_run_dir",
+    "require_mint_cache",
+    "require_mint_normalization",
+    "require_motion_cache",
+    "require_motion_normalization",
     "require_nimble_b3d",
     "require_nimble_normalization",
     "require_sindy_checkpoint",
@@ -92,6 +98,45 @@ def require_nimble_normalization(data_root: str | Path) -> None:
         raise FileNotFoundError(
             f"Missing {mean_path} or {std_path}. Run scripts/compute_normalization.py first."
         )
+
+
+def require_mint_cache(data_root: str | Path) -> Path:
+    cache = mint_cache_dir(data_root)
+    if not cache.is_dir():
+        raise FileNotFoundError(
+            f"MinT NPZ cache required at {cache}. Run scripts/preprocess_mint.py first."
+        )
+    return cache
+
+
+def require_mint_normalization(data_root: str | Path) -> None:
+    cache = require_mint_cache(data_root)
+    mean_path = cache / "Mean.npy"
+    std_path = cache / "Std.npy"
+    if not mean_path.is_file() or not std_path.is_file():
+        raise FileNotFoundError(
+            f"Missing {mean_path} or {std_path}. "
+            "Run scripts/compute_normalization.py --skeleton mint."
+        )
+
+
+def require_motion_cache(data_root: str | Path, *, skeleton: str | None = None) -> Path:
+    from common.skeleton_config import SkeletonKind, resolve_skeleton
+
+    sk = resolve_skeleton(skeleton)
+    if sk == SkeletonKind.MINT:
+        return require_mint_cache(data_root)
+    return require_nimble_b3d(data_root)
+
+
+def require_motion_normalization(data_root: str | Path, *, skeleton: str | None = None) -> None:
+    from common.skeleton_config import SkeletonKind, resolve_skeleton
+
+    sk = resolve_skeleton(skeleton)
+    if sk == SkeletonKind.MINT:
+        require_mint_normalization(data_root)
+    else:
+        require_nimble_normalization(data_root)
 
 
 def require_sindy_checkpoint() -> Path:

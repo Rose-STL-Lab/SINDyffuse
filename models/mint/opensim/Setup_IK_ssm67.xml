@@ -1,0 +1,289 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<OpenSimDocument Version="40000">
+	<InverseKinematicsTool name="ssm67">
+		<results_directory>Unassigned</results_directory>
+		<model_file>Unassigned</model_file>
+		<constraint_weight>Inf</constraint_weight>
+		<accuracy>1e-5</accuracy>
+		<IKTaskSet>
+			<objects>
+				<IKMarkerTask name="C7">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="CLAV">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="LANK">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="LASI">
+					<apply>true</apply>
+					<weight>25</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="LBAK">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="LBCEP">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="LBHD">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="LBUM">
+					<apply>true</apply>
+					<weight>25</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="LBUST">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="LCHEECK">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="LELB">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="LELBIN">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="LFHD">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="LFIN">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="LFRM">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="LFTHIIN">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="LHEE">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="LIWR">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="LKNE">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="LKNI">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="LMT1">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="LMT5">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="LNWST">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="LOWR">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="LPSI">
+					<apply>true</apply>
+					<weight>25</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="LRSTBEEF">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="LSCAP">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="LSHN">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="LSHO">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="LTHI">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="LTHILO">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="LTHMB">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="LTOE">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="MBLLY">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="RANK">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="RASI">
+					<apply>true</apply>
+					<weight>25</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="RBAK">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="RBCEP">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="RBHD">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="RBSH">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="RBUM">
+					<apply>true</apply>
+					<weight>25</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="RBUST">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="RCHEECK">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="RELB">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="RELBIN">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="RFHD">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="RFIN">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="RFRM2">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="RFTHI">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="RFTHIIN">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="RHEE">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="RIWR">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="RKNE">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="RKNI">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="RMT1">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="RMT5">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="RNWST">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="ROWR">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="RPSI">
+					<apply>true</apply>
+					<weight>25</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="RRSTBEEF">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="RSHO">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="RTHI">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="RTHMB">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="RTIB">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="RTOE">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="STRN">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>,
+				<IKMarkerTask name="T8">
+					<apply>true</apply>
+					<weight>5</weight>
+				</IKMarkerTask>
+			</objects>
+			<groups />
+		</IKTaskSet>
+		<marker_file>Unassigned</marker_file>
+		<coordinate_file>Unassigned</coordinate_file>
+		<report_errors>true</report_errors>
+		<report_marker_locations>false</report_marker_locations>
+		<output_motion_file>Unassigned</output_motion_file>
+		<output_marker_file>Unassigned</output_marker_file>
+		<output_forces_file>Unassigned</output_forces_file>
+	</InverseKinematicsTool>
+</OpenSimDocument>

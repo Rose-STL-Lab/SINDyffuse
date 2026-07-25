@@ -373,13 +373,17 @@ def train(
     target_weights: Sequence[float] | None = None,
     distributed_cfg: Optional[Dict[str, Any]] = None,
     seed: int = 42,
+    skeleton: str | None = None,
 ) -> Dict[str, Any]:
     use_ddp = init_distributed(distributed_cfg=distributed_cfg)
     if not use_ddp:
         log_gpu_diagnostics()
     seed_all(int(seed))
     data_root = resolve_training_data_root(data_root)
-    require_nimble_b3d(data_root)
+    from common.run_setup import require_motion_cache
+
+    sk = skeleton or __import__("os").environ.get("SINDYFFUSE_SKELETON", "mint")
+    require_motion_cache(data_root, skeleton=sk)
     root = Path(data_root)
     bio_keys = list(BIOMECH_COMPONENT_KEYS)
     muscle_keys = list(muscle_channel_names())
@@ -405,6 +409,7 @@ def train(
             log_every=bio_log_every,
             skip_zero_placeholders=skip_zero_placeholders,
             zero_atol=zero_atol,
+            skeleton=sk,
         )
         n, t, _u_dim = u.shape
         u_in = u[:, :-1, :] if include_u else None
@@ -443,6 +448,7 @@ def train(
             log_every=bio_log_every,
             skip_zero_placeholders=skip_zero_placeholders,
             zero_atol=zero_atol,
+            skeleton=sk,
         )
         if target_dim != N_SINDY_TARGETS:
             raise ValueError(f"Expected target_dim {N_SINDY_TARGETS}, got {target_dim}")
@@ -687,6 +693,7 @@ def main() -> None:
     parser.add_argument("--clip_text_batch_size", type=int, default=128)
     parser.add_argument("--device", default="auto")
     parser.add_argument("--bio_log_every", type=int, default=50)
+    parser.add_argument("--skeleton", default="", help="rajagopal|mint")
     parser.add_argument(
         "--preload",
         action="store_true",
@@ -698,8 +705,11 @@ def main() -> None:
     dist_cfg: Dict[str, Any] = {}
     full_cfg: Dict[str, Any] = {}
     if not cfg_path:
-        repo_root = Path(__file__).resolve().parents[1]
-        default_cfg = default_config_path("train_sindy.json")
+        from common.skeleton_config import resolve_skeleton
+
+        sk = resolve_skeleton(getattr(args, "skeleton", None))
+        default_name = "train_sindy_mint.json" if sk.value == "mint" else "train_sindy.json"
+        default_cfg = default_config_path(default_name)
         if default_cfg.is_file():
             cfg_path = str(default_cfg)
     if cfg_path:
@@ -759,6 +769,7 @@ def main() -> None:
                 target_weights=full_cfg.get("target_weights") if cfg_path else None,
                 distributed_cfg=dist_cfg,
                 seed=int(full_cfg.get("seed", 42)) if cfg_path else 42,
+                skeleton=str(getattr(args, "skeleton", "") or full_cfg.get("skeleton", "")),
             )
             if is_main_process():
                 _logger.verbose(json.dumps(metrics, indent=2))

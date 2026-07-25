@@ -8,27 +8,32 @@ from typing import Sequence, Tuple
 import numpy as np
 import torch
 
+from common.skeleton_config import (
+    SkeletonKind,
+    muscle_channel_names as _muscle_channel_names,
+    n_bio_targets,
+    n_muscle_targets,
+    n_sindy_targets,
+    resolve_skeleton,
+)
 from nimble.channels import BIOMECH_COMPONENT_KEYS
 from nimble.guidance import NimbleGuidanceConfig
-from nimble.muscle_activation import muscle_names, opensim_quiet
-from nimble.muscle_b3d import MUSCLE_ACTIVATION_ROWS
 from nimble.physics import physics_from_q
 
-N_BIO_TARGETS = len(BIOMECH_COMPONENT_KEYS)
-N_MUSCLE_TARGETS = int(MUSCLE_ACTIVATION_ROWS)
-N_SINDY_TARGETS = N_BIO_TARGETS + N_MUSCLE_TARGETS
+N_BIO_TARGETS = n_bio_targets()
+N_MUSCLE_TARGETS = n_muscle_targets()
+N_SINDY_TARGETS = n_sindy_targets()
 
 
 @lru_cache(maxsize=1)
 def muscle_channel_names() -> Tuple[str, ...]:
-    """Ordered Rajagopal muscle names (80)."""
-    with opensim_quiet("Off"):
-        return tuple(muscle_names())
+    """Ordered muscle names for the active skeleton."""
+    return _muscle_channel_names(resolve_skeleton())
 
 
 @lru_cache(maxsize=1)
 def sindy_target_keys() -> Tuple[str, ...]:
-    """All SINDy target channel names: 23 bio + 80 muscle."""
+    """All SINDy target channel names: bio + muscle."""
     return tuple(BIOMECH_COMPONENT_KEYS) + muscle_channel_names()
 
 
@@ -56,10 +61,16 @@ def bio_matrix(
     *,
     fps: float,
     guidance_cfg: NimbleGuidanceConfig | None = None,
+    skeleton: str | SkeletonKind | None = None,
 ) -> np.ndarray:
-    """Nimble ``q`` ``[T, ndof]`` → L_bio channels ``[T, C]`` (no IK)."""
+    """``q`` ``[T, ndof]`` → L_bio channels ``[T, C]`` (no IK)."""
     if q.ndim != 2:
         raise ValueError(f"Expected q [T, ndof], got {q.shape}")
+    sk = resolve_skeleton(skeleton)
+    if sk == SkeletonKind.MINT:
+        from mint.physics import bio_matrix_mint
+
+        return bio_matrix_mint(q, fps=fps, guidance_cfg=guidance_cfg)
     t = int(q.shape[0])
     cfg = guidance_cfg or default_physics_cfg(fps=fps, max_frames=t)
     x = torch.from_numpy(q.astype(np.float32))

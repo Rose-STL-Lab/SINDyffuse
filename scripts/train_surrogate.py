@@ -42,14 +42,23 @@ from common.distributed import (
 from common.paths import activation_surrogate_latest_link, default_humanml3d_root, update_latest_symlink
 from common.run_setup import (
     default_config_path,
-    require_nimble_b3d,
-    require_nimble_normalization,
+    require_motion_cache,
+    require_motion_normalization,
     resolve_run_dir,
     resolve_training_data_root,
 )
 from common.run_logging import RunLogger, add_run_log_cli_args, get_run_logger, run_logged_main
+from common.skeleton_config import resolve_skeleton
 from surrogate.dataset import ActivationB3DDataset
+from surrogate.mint_dataset import ActivationMintDataset
 from surrogate.model import build_activation_surrogate
+
+
+def _build_surrogate_dataset(data_root: str, *, skeleton: str | None, **kwargs):
+    sk = resolve_skeleton(skeleton)
+    if sk.value == "mint":
+        return ActivationMintDataset(data_root, **kwargs)
+    return ActivationB3DDataset(data_root, **kwargs)
 
 
 def _set_seed(seed: int) -> None:
@@ -108,34 +117,36 @@ def train_activation_surrogate(
     num_workers: int = 0,
     seed: int = 42,
     distributed_cfg: Optional[Dict[str, Any]] = None,
+    skeleton: str | None = None,
 ) -> Dict[str, Any]:
     use_ddp = init_distributed(distributed_cfg=distributed_cfg)
     seed_all(int(seed))
     data_root = resolve_training_data_root(data_root)
-    require_nimble_b3d(data_root)
-    require_nimble_normalization(data_root)
+    sk = resolve_skeleton(skeleton)
+    require_motion_cache(data_root, skeleton=sk.value)
+    require_motion_normalization(data_root, skeleton=sk.value)
     device = resolve_train_device(device_name)
     if not use_ddp:
         log_gpu_diagnostics()
 
-    train_ds = ActivationB3DDataset(
-        data_root,
-        split=split,
+    ds_kwargs = dict(
         window_size=window_size,
         window_stride=window_stride,
         normalize_q=normalize_q,
         max_motions=max_motions,
-        skip_zero_placeholders=skip_zero_placeholders,
+    )
+    if sk.value == "mint":
+        ds_kwargs["skip_unlabeled"] = skip_zero_placeholders
+        ds_kwargs["skip_zero_placeholders"] = skip_zero_placeholders
+    else:
+        ds_kwargs["skip_zero_placeholders"] = skip_zero_placeholders
+
+    train_ds = _build_surrogate_dataset(
+        data_root, skeleton=sk.value, split=split, **ds_kwargs
     )
     try:
-        val_ds = ActivationB3DDataset(
-            data_root,
-            split=val_split,
-            window_size=window_size,
-            window_stride=window_stride,
-            normalize_q=normalize_q,
-            max_motions=max_motions,
-            skip_zero_placeholders=skip_zero_placeholders,
+        val_ds = _build_surrogate_dataset(
+            data_root, skeleton=sk.value, split=val_split, **ds_kwargs
         )
     except ValueError:
         val_ds = None
@@ -144,7 +155,7 @@ def train_activation_surrogate(
     logger.progress(
         f"train split={split}: windows={len(train_ds)} "
         f"motions_kept={train_ds.num_motions_kept} "
-        f"skipped_zero={train_ds.num_motions_skipped_zero}"
+        f"skipped_zero={getattr(train_ds, 'num_motions_skipped_zero', getattr(train_ds, 'num_motions_skipped', 0))}"
     )
     if val_ds is not None:
         logger.progress(
@@ -416,7 +427,7 @@ def main() -> None:
     parser.add_argument("--lambda_temporal", type=float, default=0.1)
     parser.add_argument("--device", default="auto")
     parser.add_argument("--num_workers", type=int, default=0)
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--skeleton", default="", help="rajagopal|mint (default: SINDYFFUSE_SKELETON env)")
     add_run_log_cli_args(parser)
     args = parser.parse_args()
 
@@ -424,7 +435,10 @@ def main() -> None:
     dist_cfg: Dict[str, Any] = {}
     full_cfg: Dict[str, Any] = {}
     if not cfg_path:
-        default_cfg = default_config_path("train_surrogate.json")
+        default_cfg = default_config_path(
+            "train_surrogate_mint.json" if resolve_skeleton(getattr(args, "skeleton", None)).value == "mint"
+            else "train_surrogate.json"
+        )
         if default_cfg.is_file():
             cfg_path = str(default_cfg)
     if cfg_path:
@@ -473,6 +487,7 @@ def main() -> None:
                 num_workers=int(args.num_workers),
                 seed=int(full_cfg.get("seed", args.seed)) if cfg_path else int(args.seed),
                 distributed_cfg=dist_cfg,
+                skeleton=str(getattr(args, "skeleton", "") or full_cfg.get("skeleton", "")).strip() or None,
             )
             if is_main_process():
                 _logger.verbose(json.dumps(metrics, indent=2))

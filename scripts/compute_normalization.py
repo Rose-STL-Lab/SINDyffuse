@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -188,13 +189,18 @@ def compute_normalization(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Merge shard preprocess manifests and compute Nimble q Mean.npy / Std.npy"
+        description="Compute q-space Mean.npy / Std.npy for Rajagopal B3D or MinT NPZ cache"
     )
     default_root = default_humanml3d_root()
     parser.add_argument(
         "--out_root",
         default=default_root,
-        help="Dataset root containing nimble_b3d/ and shard manifests",
+        help="Dataset root containing motion cache and shard manifests",
+    )
+    parser.add_argument(
+        "--skeleton",
+        default="",
+        help="rajagopal|mint (default: nimble B3D shard merge)",
     )
     parser.add_argument(
         "--num_shards",
@@ -221,6 +227,16 @@ def main() -> None:
     )
     add_run_log_cli_args(parser)
     args = parser.parse_args()
+
+    skeleton = str(getattr(args, "skeleton", "") or os.environ.get("SINDYFFUSE_SKELETON", "")).strip().lower()
+    out_root = Path(str(args.out_root)).expanduser().resolve()
+
+    if skeleton == "mint":
+        from datasets.mint_cache_stats import compute_mint_normalization_stats
+
+        stats = compute_mint_normalization_stats(out_root, split="train")
+        print(json.dumps(stats, indent=2))
+        return
 
     if int(args.num_shards) <= 0:
         args.num_shards = env_int("PREPROCESS_NUM_SHARDS", 1)

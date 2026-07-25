@@ -19,6 +19,7 @@ dependencies:
   - pyvista>=0.43
   - packaging>=23.0
   - tqdm>=4.66
+  - pandas>=2.0
   - pip
   - pytorch>=2.2
   - pytorch-cuda=12.4
@@ -31,3 +32,5 @@ dependencies:
       - ftfy
       - regex
       - wcwidth
+      - musint>=0.3.0
+      - smplx>=0.1.28

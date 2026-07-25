@@ -7,7 +7,16 @@ from typing import Any, Dict
 import torch
 import torch.nn as nn
 
+from common.skeleton_config import motion_ndof, muscle_activation_rows, resolve_skeleton
 from nimble.rajagopal_coord_map import RAJAGOPAL_NIMBLE_DOF_NAMES
+
+
+def _default_input_dim() -> int:
+    return motion_ndof()
+
+
+def _default_output_dim() -> int:
+    return muscle_activation_rows()
 
 
 class ActivationSurrogate(nn.Module):
@@ -16,15 +25,15 @@ class ActivationSurrogate(nn.Module):
     def __init__(
         self,
         *,
-        input_dim: int = len(RAJAGOPAL_NIMBLE_DOF_NAMES),
-        output_dim: int = 80,
+        input_dim: int | None = None,
+        output_dim: int | None = None,
         hidden_dim: int = 256,
         num_layers: int = 3,
         dropout: float = 0.1,
     ):
         super().__init__()
-        self.input_dim = int(input_dim)
-        self.output_dim = int(output_dim)
+        self.input_dim = int(input_dim if input_dim is not None else _default_input_dim())
+        self.output_dim = int(output_dim if output_dim is not None else _default_output_dim())
         layers: list[nn.Module] = []
         in_d = self.input_dim
         for _ in range(int(num_layers) - 1):
@@ -51,8 +60,8 @@ class TransformerActivationSurrogate(nn.Module):
     def __init__(
         self,
         *,
-        input_dim: int = len(RAJAGOPAL_NIMBLE_DOF_NAMES),
-        output_dim: int = 80,
+        input_dim: int | None = None,
+        output_dim: int | None = None,
         d_model: int = 128,
         num_layers: int = 3,
         num_heads: int = 4,
@@ -61,8 +70,8 @@ class TransformerActivationSurrogate(nn.Module):
         max_seq_len: int = 196,
     ):
         super().__init__()
-        self.input_dim = int(input_dim)
-        self.output_dim = int(output_dim)
+        self.input_dim = int(input_dim if input_dim is not None else _default_input_dim())
+        self.output_dim = int(output_dim if output_dim is not None else _default_output_dim())
         self.d_model = int(d_model)
         if self.d_model % int(num_heads) != 0:
             raise ValueError(f"d_model {self.d_model} must be divisible by num_heads {num_heads}")
@@ -96,8 +105,8 @@ class TransformerActivationSurrogate(nn.Module):
 def build_activation_surrogate(
     *,
     model_type: str = "mlp",
-    input_dim: int = len(RAJAGOPAL_NIMBLE_DOF_NAMES),
-    output_dim: int = 80,
+    input_dim: int | None = None,
+    output_dim: int | None = None,
     hidden_dim: int = 256,
     num_layers: int = 3,
     dropout: float = 0.1,
@@ -106,18 +115,20 @@ def build_activation_surrogate(
     max_seq_len: int = 196,
 ) -> nn.Module:
     kind = str(model_type).strip().lower()
+    in_d = int(input_dim if input_dim is not None else _default_input_dim())
+    out_d = int(output_dim if output_dim is not None else _default_output_dim())
     if kind == "mlp":
         return ActivationSurrogate(
-            input_dim=input_dim,
-            output_dim=output_dim,
+            input_dim=in_d,
+            output_dim=out_d,
             hidden_dim=hidden_dim,
             num_layers=num_layers,
             dropout=dropout,
         )
     if kind == "transformer":
         return TransformerActivationSurrogate(
-            input_dim=input_dim,
-            output_dim=output_dim,
+            input_dim=in_d,
+            output_dim=out_d,
             d_model=int(dim_feedforward),
             num_layers=num_layers,
             num_heads=num_heads,

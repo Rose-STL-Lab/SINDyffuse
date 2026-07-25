@@ -13,7 +13,8 @@ import joblib
 import numpy as np
 import torch
 
-from common.paths import nimble_b3d_dir
+from common.paths import motion_cache_dir
+from common.skeleton_config import SkeletonKind, resolve_skeleton
 from nimble.channels import BIOMECH_COMPONENT_KEYS
 from nimble.guidance import NimbleGuidanceConfig
 from nimble.physics import load_model, physics_from_q, physics_from_q_batch
@@ -86,15 +87,22 @@ class LearnedSINDyGuidance:
         bio_physics: NimbleGuidanceConfig | None = None,
         surrogate_checkpoint: str | Path | None = None,
         target_weights: List[float] | None = None,
+        skeleton: str | None = None,
     ):
         _install_numpy_pickle_compat()
         self.sild_dir = Path(sild_dir)
         self.data_root = Path(data_root)
-        cache = nimble_b3d_dir(self.data_root)
+        self._skeleton_kind = resolve_skeleton(skeleton)
+        cache = motion_cache_dir(self.data_root, skeleton=self._skeleton_kind)
         if not cache.is_dir():
-            raise FileNotFoundError(f"SINDy guidance requires Nimble B3D cache at {cache}.")
+            raise FileNotFoundError(
+                f"SINDy guidance requires motion cache at {cache} "
+                f"(skeleton={self._skeleton_kind.value})."
+            )
         self.fps = float(fps)
-        self._sk = load_model().skeleton
+        self._sk = None
+        if self._skeleton_kind == SkeletonKind.RAJAGOPAL:
+            self._sk = load_model().skeleton
         self.bio_physics = bio_physics or NimbleGuidanceConfig(
             max_physics_frames=64,
             physics_on_cpu=False,
@@ -128,7 +136,7 @@ class LearnedSINDyGuidance:
         if self.target_dim != expected_target_dim:
             raise ValueError(
                 f"Checkpoint target_dim={self.target_dim} != {expected_target_dim} "
-                f"(23 bio + 80 muscle); retrain SINDy on joint targets."
+                f"({N_BIO_TARGETS} bio + {N_MUSCLE_TARGETS} muscle); retrain SINDy on joint targets."
             )
 
         tw = parse_target_weights(target_weights, n_targets=self.target_dim)
@@ -161,10 +169,17 @@ class LearnedSINDyGuidance:
         self._clip_model = None
         self._clip_device: Optional[str] = None
 
-        ndof = int(self._sk.getNumDofs())
-        _, _, u_names_ref, c_names_ref = features_from_q_torch(
-            torch.zeros(1, 8, ndof), self._sk, fps=self.fps
-        )
+        ndof = int(self._sk.getNumDofs()) if self._sk is not None else int(self.mean.numel())
+        if self._skeleton_kind == SkeletonKind.MINT:
+            from mint.features import features_from_mint_q_torch
+
+            _, _, u_names_ref, c_names_ref = features_from_mint_q_torch(
+                torch.zeros(1, 8, ndof), fps=self.fps
+            )
+        else:
+            _, _, u_names_ref, c_names_ref = features_from_q_torch(
+                torch.zeros(1, 8, ndof), self._sk, fps=self.fps
+            )
         tcfg = _load_train_config(self.sild_dir)
         self._theta_u_names = list(u_names_ref)
         self._theta_c_names = list(c_names_ref)
@@ -221,10 +236,15 @@ class LearnedSINDyGuidance:
     def _build_theta(self, motion_norm: torch.Tensor) -> torch.Tensor:
         b, t, _ = motion_norm.shape
         denorm = self._denorm_motion(motion_norm)
-        use_fk = str(getattr(self.bio_physics, "fk_backend", "torch")).strip().lower() == "torch"
-        u_t, c_t, _, _ = features_from_q_torch(
-            denorm, self._sk, fps=self.fps, use_torch_fk=use_fk
-        )
+        if self._skeleton_kind == SkeletonKind.MINT:
+            from mint.features import features_from_mint_q_torch
+
+            u_t, c_t, _, _ = features_from_mint_q_torch(denorm, fps=self.fps)
+        else:
+            use_fk = str(getattr(self.bio_physics, "fk_backend", "torch")).strip().lower() == "torch"
+            u_t, c_t, _, _ = features_from_q_torch(
+                denorm, self._sk, fps=self.fps, use_torch_fk=use_fk
+            )
         u_in = u_t[:, :-1, :] if self._theta_include_u else None
         c_in = c_t[:, :-1, :] if self._theta_include_c else None
         theta_flat, _ = self._theta_library.build_torch(
@@ -242,6 +262,13 @@ class LearnedSINDyGuidance:
         """Per-sequence L_bio ``[B, L, C]`` from predicted motion (for guidance MSE)."""
         b, t, _ = motion_norm.shape
         denorm = self._denorm_motion(motion_norm)
+        if self._skeleton_kind == SkeletonKind.MINT:
+            from mint.physics import bio_from_q_torch
+
+            bio_full = bio_from_q_torch(denorm, fps=self.fps)
+            bio = bio_full[:, : t - 1, :]
+            return bio.detach()
+
         dt = 1.0 / max(self.fps, 1e-8)
         comp_list = physics_from_q_batch(
             denorm,
@@ -259,7 +286,7 @@ class LearnedSINDyGuidance:
         return torch.stack(rows, dim=0)
 
     def _actual_targets_from_motion(self, motion_norm: torch.Tensor) -> torch.Tensor:
-        """Actual SINDy targets ``[B, L, 103]`` from predicted motion."""
+        """Actual SINDy targets ``[B, L, target_dim]`` from predicted motion."""
         bio = self._bio_from_motion(motion_norm)
         denorm = self._denorm_motion(motion_norm)
         muscle_full = self._surrogate.predict_activations(denorm)

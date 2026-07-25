@@ -1,0 +1,45 @@
+# Apply: kubectl apply -k deploy/jobs/preprocess-mint
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sindyffuse-preprocess-mint
+  labels:
+    app: sindyffuse-preprocess-mint
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: sindyffuse-preprocess-mint
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: sindyffuse-preprocess
+        image: sindyffuse:latest
+        imagePullPolicy: IfNotPresent
+        workingDir: /mnt/SINDyffuse
+        env:
+        - name: SINDYFFUSE_SKELETON
+          value: "mint"
+        - name: MINT_ROOT
+          value: "/mnt/MinT"
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          source deploy/scripts/job-env.sh
+          python scripts/preprocess_mint.py --skip_existing
+          python scripts/compute_normalization.py --skeleton mint
+        resources:
+          limits:
+            memory: 32Gi
+            cpu: "8"
+          requests:
+            memory: 32Gi
+            cpu: "8"
+        volumeMounts:
+        - name: data
+          mountPath: /mnt
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: sindyffuse
