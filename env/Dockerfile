@@ -36,6 +36,7 @@ COPY env/environment.yaml /mnt/environment.yaml
 
 # mamba (from Miniforge) is faster and uses less peak disk than conda during solves.
 RUN mamba env create -f /mnt/environment.yaml && \
+    ${CONDA_DIR}/envs/sindyffuse/bin/pip install 'numpy>=1.25,<1.26' --force-reinstall --no-deps && \
     mamba clean --all --yes && \
     conda clean --all --yes && \
     rm -rf /opt/conda/pkgs/* /root/.cache/pip
@@ -43,13 +44,14 @@ RUN mamba env create -f /mnt/environment.yaml && \
 # Sanity-check core stack (fail the image build if anything is missing).
 RUN ${CONDA_DIR}/envs/sindyffuse/bin/python -c "\
 import numpy as np; \
+assert np.__version__.startswith('1.25'), np.__version__; \
 import scipy, sklearn, joblib, torch, torchvision, clip; \
 import nimblephysics as nimble; \
 import opensim; \
-assert np.__version__.startswith('1.25'), np.__version__; \
+import smplx; \
 assert hasattr(nimble, 'biomechanics'); \
 assert hasattr(opensim, 'Model'); \
-print('numpy', np.__version__); \
+print('numpy', np.__version__, np.__file__); \
 print('torch', torch.__version__, 'cuda', torch.cuda.is_available()); \
 print('opensim', opensim.GetVersion())"
 
