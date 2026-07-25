@@ -21,7 +21,7 @@ if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
 from common.paths import default_humanml3d_root, default_mint_root, mint_cache_dir
-from common.run_logging import RunLogger, add_run_log_cli_args, dual_tqdm, null_logger, run_log_session
+from common.run_logging import RunLogger, add_run_log_cli_args, dual_tqdm, null_logger, run_logged_main
 from common.skeleton_config import DEFAULT_FPS
 from datasets.hml3d_joints import default_joints_root, load_hml3d_joint_positions
 from datasets.mint_cache_stats import compute_mint_normalization_stats
@@ -126,7 +126,7 @@ def run_preprocess(args: argparse.Namespace, logger: RunLogger | None = None) ->
     ok = err = skip = 0
     num_dofs = None
 
-    with dual_tqdm(total=len(ids), desc="preprocess_mint") as pbar:
+    with dual_tqdm(total=len(ids), desc="preprocess_mint", logger=log) as pbar:
         for sid in ids:
             row = export_motion_to_npz(
                 sid,
@@ -181,8 +181,14 @@ def main() -> None:
     add_run_log_cli_args(parser)
     args = parser.parse_args()
 
-    with run_log_session(args, script_name="preprocess_mint") as logger:
-        run_preprocess(args, logger)
+    run_logged_main(
+        Path(__file__).stem,
+        args.log_dir,
+        lambda logger: run_preprocess(args, logger),
+        argv=sys.argv,
+        no_run_log=bool(args.no_run_log),
+        run_id=str(getattr(args, "run_log_id", "") or "").strip() or None,
+    )
 
 
 if __name__ == "__main__":

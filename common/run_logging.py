@@ -199,6 +199,12 @@ class DualTqdm:
         for bar in self._bars:
             bar.close()
 
+    def __enter__(self) -> DualTqdm:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
 
 def dual_tqdm(
     *,
@@ -286,6 +292,10 @@ def build_run_log_paths(
     run_id: str | None = None,
 ) -> RunLogPaths:
     """Return paths for per-run logs and the ``{script_name}.log`` latest symlink."""
+    if isinstance(log_dir, argparse.Namespace):
+        raise TypeError(
+            "log_dir must be a path string, not argparse.Namespace; pass args.log_dir"
+        )
     directory = Path(log_dir).expanduser().resolve()
     directory.mkdir(parents=True, exist_ok=True)
     safe_name = Path(script_name).stem.strip().replace("/", "_") or "run"
