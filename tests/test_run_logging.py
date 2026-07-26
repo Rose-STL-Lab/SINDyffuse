@@ -10,6 +10,8 @@ import unittest
 import unittest.mock
 from pathlib import Path
 
+import numpy as np
+
 _REPO = Path(__file__).resolve().parent.parent
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
@@ -61,8 +63,12 @@ class RunLoggingTests(unittest.TestCase):
                 joints_root="",
                 num_shards=1,
                 shard_index=0,
+                num_workers=1,
+                opensim_log_level="Off",
+                _run_log_file="",
             )
-            pm.run_preprocess(args, null_logger())
+            with unittest.mock.patch.object(pm, "_check_runtime_dependencies"):
+                pm.run_preprocess(args, null_logger())
 
     def test_run_logged_main_uses_log_dir(self) -> None:
         from common.run_logging import run_logged_main
@@ -125,6 +131,41 @@ class EnvironmentConstraintTests(unittest.TestCase):
                 "Rebuild: mamba env update -f env/environment.yaml --prune"
             ),
         )
+
+
+class PreprocessMintExportTests(unittest.TestCase):
+    def test_export_motion_calls_load_hml3d_joint_positions(self) -> None:
+        import scripts.preprocess_mint as pm
+
+        fake_joints = np.random.randn(10, 22, 3).astype(np.float64)
+        with tempfile.TemporaryDirectory() as td:
+            hml = Path(td) / "hml"
+            hml.mkdir()
+            out = hml / "mint_cache"
+            out.mkdir()
+            with unittest.mock.patch.object(
+                pm,
+                "load_hml3d_joint_positions",
+                return_value=(fake_joints, "joints"),
+            ) as mock_load:
+                with unittest.mock.patch.object(
+                    pm,
+                    "retarget_hml_joints_to_q",
+                    side_effect=RuntimeError("stop-after-load"),
+                ):
+                    row = pm.export_motion_to_npz(
+                        "000001",
+                        hml_root=hml,
+                        out_root=hml,
+                        mint_root=str(hml),
+                        skip_existing=False,
+                    )
+            mock_load.assert_called_once()
+            call_args, call_kwargs = mock_load.call_args
+            self.assertEqual(call_args[0], hml)
+            self.assertEqual(call_args[1], "000001")
+            self.assertEqual(row["status"], "error")
+            self.assertIn("stop-after-load", row.get("error", ""))
 
 
 class PreprocessMintMainTests(unittest.TestCase):
