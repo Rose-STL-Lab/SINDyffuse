@@ -45,7 +45,9 @@ RUN mamba env create -f /mnt/environment.yaml && \
 RUN ${CONDA_DIR}/envs/sindyffuse/bin/python -c "\
 import numpy as np; \
 assert np.__version__.startswith('1.25'), np.__version__; \
-import scipy, sklearn, joblib, torch, torchvision, clip; \
+import scipy; \
+assert tuple(int(x) for x in scipy.__version__.split('.')[:2]) < (1, 14), scipy.__version__; \
+import sklearn, joblib, torch, torchvision, clip; \
 import nimblephysics as nimble; \
 import opensim; \
 import smplx; \

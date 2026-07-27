@@ -67,7 +67,7 @@ docker pull ghcr.io/rose-stl-lab/sindyffuse:latest
 
 Trigger a manual build: **Actions → Docker image → Run workflow**.
 
-After the first publish, open the package on GitHub (**Packages → sindyffuse → Package settings**) and set visibility to **Public** so clusters can pull without credentials.
+After the first publish, open the package on GitHub (**Packages → sindyffuse → Package settings**) and set visibility to **Public** so clusters can pull without credentials. If your organization disables public packages, use a pull secret instead (see [Quick start §2](#2-configure-cluster-settings)).
 
 ### GitHub limits (free accounts)
 
@@ -116,8 +116,29 @@ Edit **`deploy/components/cluster-config/`** (single template for every manifest
 
 | File | Set |
 |------|-----|
-| `kustomization.yaml` | `images.newName`, `images.newTag` |
+| `kustomization.yaml` | `images.newName`, `images.newTag` (default: `ghcr.io/rose-stl-lab/sindyffuse:latest`) |
 | `pvc-patch.yaml`, `pvc-patch-pod.yaml` | `claimName` (PVC name) |
+
+All jobs and the dev pod pull **`ghcr.io/rose-stl-lab/sindyffuse:latest`** from CI. There is no Docker Hub image in this repo's deploy path.
+
+**GHCR auth on Nautilus (required when the org package is private):** create a pull secret once per namespace:
+
+```bash
+# GitHub → Settings → Developer settings → Personal access tokens → read:packages
+kubectl create secret docker-registry ghcr-secret -n ai-md \
+  --docker-server=ghcr.io \
+  --docker-username=YOUR_GITHUB_USER \
+  --docker-password=YOUR_GITHUB_PAT
+```
+
+`cluster-config` already references this secret (`ghcr-pull-secret-patch.yaml`). After creating the secret, delete old jobs and re-apply so nodes pull the CI-built image:
+
+```bash
+kubectl delete job sindyffuse-preprocess-mint -n ai-md --ignore-not-found
+kubectl apply -k deploy/jobs/preprocess-mint/workers -n ai-md
+```
+
+If your organization later allows **Public** visibility on the package, remove the `ghcr-pull-secret-patch.yaml` patches from `cluster-config/kustomization.yaml` so anonymous pulls work without a secret.
 
 To keep local overrides out of git, copy the folder and point a job’s `kustomization.yaml` at your copy:
 

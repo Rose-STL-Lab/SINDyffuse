@@ -1,13 +1,14 @@
-# Cluster template — edit image and PVC for your environment (all jobs + dev pod).
+# Cluster template — edit image + PVC for your environment (all jobs + dev pod).
 #
-#   images.newName / newTag  → container registry (default: ncking/sindyffuse on Nautilus)
+#   images.newName / newTag  → ghcr.io/rose-stl-lab/sindyffuse (CI-built; see deploy/README.md)
 #   pvc-patch*.yaml          → claimName on the sindyffuse PVC
+#   ghcr-pull-secret-patch.yaml → requires ghcr-secret in the namespace (one-time kubectl create)
 apiVersion: kustomize.config.k8s.io/v1alpha1
 kind: Component
 
 images:
   - name: sindyffuse
-    newName: ncking/sindyffuse
+    newName: ghcr.io/rose-stl-lab/sindyffuse
     newTag: latest
 
 patches:
@@ -15,5 +16,11 @@ patches:
     target:
       kind: Job
   - path: pvc-patch-pod.yaml
+    target:
+      kind: Pod
+  - path: ghcr-pull-secret-patch.yaml
+    target:
+      kind: Job
+  - path: ghcr-pull-secret-patch.yaml
     target:
       kind: Pod

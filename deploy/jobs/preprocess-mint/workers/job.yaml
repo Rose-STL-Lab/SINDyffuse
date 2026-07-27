@@ -13,7 +13,7 @@ spec:
   template:
     metadata:
       labels:
-        app: sindyffuse-preprocess-mint
+        app: nick-sindyffuse-preprocess-mint
     spec:
       restartPolicy: Never
       terminationGracePeriodSeconds: 600
@@ -44,10 +44,10 @@ spec:
           python scripts/preprocess_mint.py --skip_normalization --num_workers 1
         resources:
           limits:
-            memory: 16Gi
+            memory: 36Gi
             cpu: "4"
           requests:
-            memory: 16Gi
+            memory: 36Gi
             cpu: "4"
         volumeMounts:
         - name: data
