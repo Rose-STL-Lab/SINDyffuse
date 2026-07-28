@@ -19,7 +19,6 @@ deploy/
     train-surrogate/
     train-sindy/
     train-diffusion/
-      sindy/
   dev/                        # long-running interactive pod
 ```
 
@@ -29,7 +28,7 @@ deploy/
 | `python scripts/compute_normalization.py ...` | `./deploy/scripts/run-normalize-dataset.sh` |
 | `python scripts/train_surrogate.py --config configs/train_surrogate.json` | `kubectl apply -k deploy/jobs/train-surrogate` |
 | `python scripts/train_sindy.py --config configs/train_sindy.json` | `kubectl apply -k deploy/jobs/train-sindy` |
-| `python scripts/train_diffusion.py --config configs/train_diffusion.json` | `kubectl apply -k deploy/jobs/train-diffusion/sindy` |
+| `python scripts/train_diffusion.py --config configs/train_diffusion.json` | `kubectl apply -k deploy/jobs/train-diffusion` |
 
 ## Container image (Docker Hub)
 
@@ -76,7 +75,7 @@ The PVC should contain the repo at `/mnt/SINDyffuse` and HumanML3D at `/mnt/SIND
 
 kubectl apply -k deploy/jobs/train-sindy
 kubectl apply -k deploy/jobs/train-surrogate
-kubectl apply -k deploy/jobs/train-diffusion/sindy
+kubectl apply -k deploy/jobs/train-diffusion
 ```
 
 ## Dev pod
@@ -93,6 +92,6 @@ python scripts/preprocess_mint.py --max_motions 1
 2. `normalize-dataset` (`run-normalize-dataset.sh` or `scripts/compute_normalization.py`)
 3. `train-sindy`
 4. `train-surrogate`
-5. `train-diffusion/sindy`
+5. `train-diffusion`
 
 See the root [README.md](../README.md) for the full local pipeline.

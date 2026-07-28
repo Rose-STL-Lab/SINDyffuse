@@ -112,7 +112,7 @@ kubectl apply -k deploy/jobs/preprocess-dataset
 kubectl apply -k deploy/jobs/normalize-dataset
 kubectl apply -k deploy/jobs/train-surrogate
 kubectl apply -k deploy/jobs/train-sindy
-kubectl apply -k deploy/jobs/train-diffusion/sindy
+kubectl apply -k deploy/jobs/train-diffusion
 
 kubectl apply -k deploy/dev
 kubectl exec -it sindyffuse-dev -- bash -l

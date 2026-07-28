@@ -1,4 +1,4 @@
-# Apply: kubectl apply -k deploy/jobs/train-diffusion/sindy
+# Apply: kubectl apply -k deploy/jobs/train-diffusion
 apiVersion: batch/v1
 kind: Job
 metadata:
