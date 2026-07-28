@@ -10,9 +10,13 @@ import numpy as np
 from nimble.b3d_schema import (
     GUIDANCE_FEATURES,
     MUSCLE_ACTIVATIONS,
+    MUSCLE_ACTIVATION_MASK,
+    SIM_GRF,
     SINDY_FEATURES,
+    unpack_activation_mask,
     unpack_guidance_features,
     unpack_muscle_activations,
+    unpack_sim_grf,
     unpack_sindy_features,
 )
 from nimble.muscle_b3d import MUSCLE_ACTIVATION_ROWS
@@ -96,6 +100,28 @@ def read_sindy_features_frames(
     """``u`` ``[T, U]``, ``c`` ``[T, C]`` from stored sindy_features."""
     raw = read_custom_frames(subj, trial, start_frame, num_frames, SINDY_FEATURES)
     return unpack_sindy_features(raw)
+
+
+def read_sim_grf_frames(
+    subj: Any,
+    trial: int,
+    start_frame: int,
+    num_frames: int,
+) -> np.ndarray:
+    """``[num_frames, 18]`` simulated GRF from Moco contact."""
+    raw = read_custom_frames(subj, trial, start_frame, num_frames, SIM_GRF)
+    return unpack_sim_grf(raw)
+
+
+def read_muscle_activation_mask_frames(
+    subj: Any,
+    trial: int,
+    start_frame: int,
+    num_frames: int,
+) -> np.ndarray:
+    """``[num_frames]`` validity mask (1 = segment solve OK)."""
+    raw = read_custom_frames(subj, trial, start_frame, num_frames, MUSCLE_ACTIVATION_MASK)
+    return unpack_activation_mask(raw)
 
 
 def warn_missing_custom_once(b3d_path: str, name: str) -> None:

@@ -1,9 +1,8 @@
 """OpenSim muscle activations from Nimble Rajagopal ``q``.
 
-Supports three methods: skip (``none``), ``moco_track``, and
-``static_optimization``. Results are cached in B3D as ``muscle_activations``
-``[M, T]``. Non-finite frames are always linearly interpolated before optional
-temporal smoothing.
+Supports three methods: skip (``none``), segmented ``moco_track``, and
+``static_optimization``. MocoTrack uses MinT-style 1.4 s windows with ground
+offset, seam stitching, NaN gaps on failed segments, and a validity mask.
 
 OpenSim solves are **not differentiable**; use cached labels for training.
 """
@@ -41,7 +40,6 @@ class MuscleActivationConfig:
     activation_method: str = "moco_track"
     fps: float = 20.0
     mass_kg: float = 70.0
-    activation_smooth_hz: float = 6.0
     opensim_log_level: str = "Off"
     temp_dir: Optional[str] = None
     keep_temp: bool = False
@@ -83,6 +81,10 @@ class MuscleActivationConfig:
     static_convergence_criterion: float = 1e-4
     static_max_iterations: int = 100
     static_lowpass_cutoff_hz: float = 6.0
+    # MinT-style segmented MocoTrack (always on for moco_track).
+    moco_core_duration_s: float = 1.4
+    moco_buffer_duration_s: float = 0.14
+    moco_stitch_blend_s: float = 0.14
 
 
 def normalize_activation_method(method: str) -> str:
@@ -286,15 +288,6 @@ def add_muscle_activation_cli_args(parser: argparse.ArgumentParser) -> None:
         help="Reject clip when pelvis vertical range exceeds this (m); default 0.8.",
     )
     grp.add_argument(
-        "--activation_smooth_hz",
-        type=float,
-        default=None,
-        help=(
-            "Low-pass muscle activations along time after repair (Hz); "
-            "0 disables. Default: 6."
-        ),
-    )
-    grp.add_argument(
         "--opensim_log_level",
         default="Off",
         choices=("Off", "Critical", "Error", "Warn", "Info", "Debug"),
@@ -303,6 +296,10 @@ def add_muscle_activation_cli_args(parser: argparse.ArgumentParser) -> None:
             "Off also suppresses Rajagopal mesh warnings on the terminal."
         ),
     )
+    seg = parser.add_argument_group("segmented moco")
+    seg.add_argument("--moco_core_duration_s", type=float, default=None)
+    seg.add_argument("--moco_buffer_duration_s", type=float, default=None)
+    seg.add_argument("--moco_stitch_blend_s", type=float, default=None)
 
 
 def _fail_on_high_reserve_from_args(args: argparse.Namespace) -> bool:
@@ -405,11 +402,6 @@ def muscle_activation_config_from_args(
         moco_max_pelvis_ty_range_m=_pick(
             "moco_max_pelvis_ty_range_m", "moco_max_pelvis_ty_range_m"
         ),
-        activation_smooth_hz=float(
-            getattr(args, "activation_smooth_hz", None)
-            if getattr(args, "activation_smooth_hz", None) is not None
-            else base.activation_smooth_hz
-        ),
         opensim_log_level=str(
             getattr(args, "opensim_log_level", base.opensim_log_level)
         ),
@@ -433,6 +425,21 @@ def muscle_activation_config_from_args(
             getattr(args, "static_lowpass_cutoff_hz", None)
             if getattr(args, "static_lowpass_cutoff_hz", None) is not None
             else base.static_lowpass_cutoff_hz
+        ),
+        moco_core_duration_s=float(
+            getattr(args, "moco_core_duration_s", None)
+            if getattr(args, "moco_core_duration_s", None) is not None
+            else base.moco_core_duration_s
+        ),
+        moco_buffer_duration_s=float(
+            getattr(args, "moco_buffer_duration_s", None)
+            if getattr(args, "moco_buffer_duration_s", None) is not None
+            else base.moco_buffer_duration_s
+        ),
+        moco_stitch_blend_s=float(
+            getattr(args, "moco_stitch_blend_s", None)
+            if getattr(args, "moco_stitch_blend_s", None) is not None
+            else base.moco_stitch_blend_s
         ),
     )
 
@@ -535,77 +542,7 @@ def activation_column_for_muscle(label: str, muscle: str) -> bool:
     return lab.endswith(needle) or needle in lab
 
 
-def interpolate_activation_frames(
-    activations: np.ndarray,
-) -> tuple[np.ndarray, Dict[str, int]]:
-    """Linearly interpolate non-finite activation timesteps from finite neighbors."""
-    act = np.asarray(activations, dtype=np.float32).copy()
-    t_len = int(act.shape[0])
-    meta = {
-        "repaired_frame_count": 0,
-        "interpolated_frame_count": 0,
-        "extrapolated_frame_count": 0,
-    }
-    if t_len == 0:
-        return act, meta
-
-    good = np.isfinite(act).all(axis=1)
-    need_repair = ~good
-    meta["repaired_frame_count"] = int(need_repair.sum())
-    for t in np.where(need_repair)[0]:
-        left: int | None = None
-        for i in range(t - 1, -1, -1):
-            if good[i]:
-                left = i
-                break
-        right: int | None = None
-        for i in range(t + 1, t_len):
-            if good[i]:
-                right = i
-                break
-        if left is not None and right is not None:
-            w = float(t - left) / float(right - left)
-            act[t] = (1.0 - w) * act[left] + w * act[right]
-            meta["interpolated_frame_count"] += 1
-        elif left is not None:
-            act[t] = act[left]
-            meta["extrapolated_frame_count"] += 1
-        elif right is not None:
-            act[t] = act[right]
-            meta["extrapolated_frame_count"] += 1
-        else:
-            act[t] = 0.0
-
-    return act, meta
-
-
-def apply_activation_postprocess(
-    activations: np.ndarray,
-    cfg: MuscleActivationConfig,
-) -> tuple[np.ndarray, Dict[str, Any]]:
-    """Interpolate non-finite frames and optionally low-pass the activation trajectory."""
-    from nimble.smoothing import smooth_activation_trajectory
-
-    meta: Dict[str, Any] = {}
-    act = np.asarray(activations, dtype=np.float32)
-    act, repair_meta = interpolate_activation_frames(act)
-    meta.update(repair_meta)
-
-    if float(cfg.activation_smooth_hz) > 0.0:
-        act = smooth_activation_trajectory(
-            act,
-            fps=float(cfg.fps),
-            cutoff_hz=float(cfg.activation_smooth_hz),
-        )
-        meta["activation_smooth_hz"] = float(cfg.activation_smooth_hz)
-
-    if not np.isfinite(act).all():
-        act = np.nan_to_num(act, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
-
-    return act, meta
-
-
-def _storage_to_array(storage: Any) -> Tuple[np.ndarray, List[str]]:
+def _activation_work_dir(cfg: MuscleActivationConfig, *, prefix: str) -> Tuple[Path, bool]:
     """Read OpenSim ``Storage`` into ``[n_rows, n_cols]`` aligned with column labels."""
     labels: List[str] = []
     for i in range(storage.getColumnLabels().size()):
@@ -650,36 +587,6 @@ def _activation_work_dir(cfg: MuscleActivationConfig, *, prefix: str) -> Tuple[P
     return work_dir, not bool(cfg.keep_temp)
 
 
-def _finalize_activation_result(
-    result: MuscleActivationResult,
-    cfg: MuscleActivationConfig,
-    *,
-    method_label: str,
-) -> MuscleActivationResult:
-    activations, repair_meta = apply_activation_postprocess(result.activations, cfg)
-    metadata = dict(result.metadata)
-    metadata.update(repair_meta)
-    return MuscleActivationResult(
-        activations=activations,
-        muscle_names=result.muscle_names,
-        metadata=metadata,
-        forces=result.forces,
-    )
-
-
-def fallback_muscle_activations(
-    num_frames: int,
-    cfg: MuscleActivationConfig,
-    *,
-    num_muscles: int | None = None,
-) -> tuple[np.ndarray, Dict[str, Any]]:
-    """Build a repaired activation trajectory when OpenSim muscle solve fails entirely."""
-    n_muscles = int(num_muscles or len(muscle_names()))
-    placeholder = np.full((int(num_frames), n_muscles), np.nan, dtype=np.float32)
-    activations, meta = apply_activation_postprocess(placeholder, cfg)
-    return activations, meta
-
-
 def compute_muscle_activation(
     q: np.ndarray,
     *,
@@ -707,14 +614,10 @@ def compute_muscle_activation(
         if method == "static_optimization":
             from nimble.static_optimization import run_static_optimization
 
-            result = run_static_optimization(arr, cfg=cfg, work_dir=work_dir)
-            label = "Static optimization"
-        else:
-            from nimble.moco_track import run_moco_track
+            return run_static_optimization(arr, cfg=cfg, work_dir=work_dir)
+        from nimble.moco_track import run_moco_track
 
-            result = run_moco_track(arr, cfg=cfg, work_dir=work_dir)
-            label = "MocoTrack"
-        return _finalize_activation_result(result, cfg, method_label=label)
+        return run_moco_track(arr, cfg=cfg, work_dir=work_dir)
     finally:
         if cleanup:
             import shutil

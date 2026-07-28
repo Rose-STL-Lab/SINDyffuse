@@ -1,8 +1,8 @@
 """OpenSim MocoTrack muscle activations from Nimble Rajagopal ``q``.
 
 Uses ``MocoTrack`` with soft coordinate tracking and foot–ground contact
-(``SmoothSphereHalfSpaceForce`` on foot bodies). Each clip is solved in one
-pass across all frames.
+(``SmoothSphereHalfSpaceForce`` on foot bodies). Clips are solved in MinT-style
+1.4 s segmented windows via ``nimble.moco_segment``.
 """
 
 from __future__ import annotations
@@ -31,6 +31,7 @@ from nimble.rajagopal_model import (
     muscle_names_from_processor,
     unlock_rajagopal_coordinates,
 )
+from nimble.moco_segment import SIM_GRF_COLS
 from nimble.rajagopal_coord_map import (
     build_moco_states_table_processor,
     build_rajagopal_coord_mapping,
@@ -295,6 +296,77 @@ def _is_reserve_control_name(name: str) -> bool:
     return "reserve" in lower and "residual" not in lower
 
 
+def _side_from_contact_force_name(name: str) -> str:
+    lower = str(name).lower()
+    if "_l" in lower or lower.endswith("left"):
+        return "left"
+    return "right"
+
+
+def _extract_sim_grf_from_moco_solution(
+    moco_sol: osim.MocoSolution,
+    moco_model_path: Path,
+    frame_times: np.ndarray,
+    track_cfg: MocoTrackConfig,
+) -> np.ndarray:
+    """Resample simulated GRF from Moco states onto ``frame_times`` (``[T, 18]``)."""
+    n_frames = int(frame_times.shape[0])
+    grf = np.full((n_frames, SIM_GRF_COLS), np.nan, dtype=np.float64)
+    try:
+        model = osim.Model(str(moco_model_path))
+        model.initSystem()
+        state = model.getWorkingState()
+        states_table = moco_sol.exportToStatesTrajectoryTable()
+        n_rows = int(states_table.getNumRows())
+        if n_rows < 1:
+            return grf.astype(np.float32)
+
+        contact_forces: List[Tuple[str, Any]] = []
+        for i in range(model.getForceSet().getSize()):
+            force = model.getForceSet().get(i)
+            if force.getConcreteClassName() != "SmoothSphereHalfSpaceForce":
+                continue
+            ssf = osim.SmoothSphereHalfSpaceForce.safeDownCast(force)
+            if ssf is not None:
+                contact_forces.append((force.getName(), ssf))
+
+        sol_times = np.zeros(n_rows, dtype=np.float64)
+        left_forces = np.zeros((n_rows, 3), dtype=np.float64)
+        right_forces = np.zeros((n_rows, 3), dtype=np.float64)
+        indep = states_table.getIndependentColumn()
+        for row in range(n_rows):
+            states_table.getRowAtIndex(row, state.getY())
+            sol_times[row] = float(indep.get(row))
+            model.realizeAcceleration(state)
+            for name, ssf in contact_forces:
+                vec = osim.Vector()
+                ssf.computeValues(state, vec)
+                n_comp = min(3, int(vec.size()))
+                f = np.array([float(vec.get(j)) for j in range(n_comp)], dtype=np.float64)
+                if f.size < 3:
+                    f = np.pad(f, (0, 3 - f.size))
+                if _side_from_contact_force_name(name) == "left":
+                    left_forces[row] += f
+                else:
+                    right_forces[row] += f
+
+        for ti, t in enumerate(frame_times):
+            lf = np.zeros(3, dtype=np.float64)
+            rf = np.zeros(3, dtype=np.float64)
+            for comp in range(3):
+                lf[comp] = float(np.interp(float(t), sol_times, left_forces[:, comp]))
+                rf[comp] = float(np.interp(float(t), sol_times, right_forces[:, comp]))
+            grf[ti, 0:3] = lf
+            grf[ti, 6:9] = rf
+            grf[ti, 12] = lf[1] + rf[1]
+            grf[ti, 13] = float(np.linalg.norm(lf))
+            grf[ti, 14] = float(np.linalg.norm(rf))
+            grf[ti, 17] = 1.0
+    except Exception:
+        pass
+    return grf.astype(np.float32)
+
+
 def _analyze_moco_reserve_controls(
     moco_sol: osim.MocoSolution,
     frame_times: np.ndarray,
@@ -462,7 +534,8 @@ def _solve_moco_track(
         "max_joint_speed_deg_s": _max_joint_speed_deg_s(q, float(cfg.fps)),
     }
 
-    reserve_by_time = np.zeros(t_len, dtype=np.float64)
+    grf = np.full((t_len, SIM_GRF_COLS), np.nan, dtype=np.float32)
+    moco_sol: osim.MocoSolution | None = None
     try:
         with working_directory(solve_dir.resolve()):
             study = track.initialize()
@@ -481,7 +554,7 @@ def _solve_moco_track(
         activations, parsed_ok = _parse_moco_activation_storage(
             out_sto, muscle_name_list, frame_times
         )
-        reserve_by_time, reserve_meta = _analyze_moco_reserve_controls(
+        _, reserve_meta = _analyze_moco_reserve_controls(
             moco_sol,
             frame_times,
             max_fraction=float(cfg.moco_max_reserve_fraction),
@@ -493,13 +566,20 @@ def _solve_moco_track(
             solve_meta["objective"] = float(moco_sol.getObjective())
         except Exception:
             pass
+        if solve_ok:
+            grf = _extract_sim_grf_from_moco_solution(
+                moco_sol,
+                moco_model_path,
+                frame_times,
+                _track_config(cfg),
+            )
     except Exception as exc:
         activations = np.full((t_len, len(muscle_name_list)), np.nan, dtype=np.float32)
         solve_ok = False
         solve_meta["success"] = False
         solve_meta["error"] = str(exc)
 
-    return activations, solve_ok, solve_meta, out_sto, reserve_by_time
+    return activations, solve_ok, solve_meta, out_sto, grf
 
 
 def run_moco_track(
@@ -508,93 +588,20 @@ def run_moco_track(
     cfg: MuscleActivationConfig,
     work_dir: Path,
 ) -> MuscleActivationResult:
-    """Run MocoTrack across all frames and return activations ``[T, M]``."""
+    """Run segmented MocoTrack and return activations ``[T, M]``."""
     _sweep_repo_root_moco_artifacts()
     arr = np.asarray(q, dtype=np.float64)
     t_len = int(arr.shape[0])
     if t_len < 2:
         raise ValueError(f"Need at least 2 frames for MocoTrack, got {t_len}")
 
-    model_path = rajagopal_model_path()
-    track_cfg = _track_config(cfg)
-    solve_dir = work_dir / "moco_track"
-    solve_dir.mkdir(parents=True, exist_ok=True)
-    mesh_interval = _effective_mesh_interval(cfg, arr)
+    from nimble.moco_segment import run_moco_track_segmented
+    from nimble.physics import load_model
 
-    with opensim_quiet(cfg.opensim_log_level):
-        mapping = build_rajagopal_coord_mapping(model_path=model_path)
-        names_ref = muscle_names()
-        moco_model_path = prepare_rajagopal_moco_track_model(
-            work_dir,
-            model_path=model_path,
-            track_cfg=track_cfg,
-        )
-        activations, solve_ok, solve_meta, _, _reserve_by_time = _solve_moco_track(
-            arr,
-            cfg=cfg,
-            solve_dir=solve_dir,
-            moco_model_path=moco_model_path,
-            mapping=mapping,
-            muscle_name_list=names_ref,
-            mesh_interval=mesh_interval,
-        )
-
-    if activations.shape[0] != t_len:
-        raise RuntimeError(
-            f"Moco activation length {activations.shape[0]} != expected {t_len}"
-        )
-    if activations.shape[1] != len(names_ref):
-        raise RuntimeError(
-            f"Moco muscle count {activations.shape[1]} != expected {len(names_ref)}"
-        )
-
-    obj = solve_meta.get("objective")
-    moco_objective = float(obj) if obj is not None and np.isfinite(float(obj)) else float("nan")
-
-    meta: Dict[str, Any] = {
-        "activation_method": "moco_track",
-        "opensim_version": str(osim.GetVersion()),
-        "moco_version": str(osim.GetMocoVersionAndDate())
-        if hasattr(osim, "GetMocoVersionAndDate")
-        else "",
-        "model_path": str(model_path),
-        "moco_model_path": str(moco_model_path),
-        "num_frames": t_len,
-        "num_muscles": len(names_ref),
-        "fps": float(cfg.fps),
-        "mesh_interval": mesh_interval,
-        "moco_solver_success": bool(solve_meta.get("solver_success", solve_ok)),
-        "moco_objective": moco_objective,
-        "repaired_frame_count": 0,
-        "moco_contact": True,
-        "moco_multi_contact": bool(track_cfg.multi_contact),
-        "moco_contact_bodies": [s.body_name for s in track_cfg.contact_spheres],
-        "moco_adaptive_mesh": bool(cfg.moco_adaptive_mesh),
-        "moco_states_tracking_weight": float(cfg.moco_states_tracking_weight),
-        "moco_states_speed_tracking_weight": float(cfg.moco_states_speed_tracking_weight),
-        "moco_aux_coord_tracking_weight": float(cfg.moco_aux_coord_tracking_weight),
-        "moco_reference_lowpass_hz": float(cfg.moco_reference_lowpass_hz),
-        "moco_apply_tracked_states_to_guess": bool(cfg.moco_apply_tracked_states_to_guess),
-        "moco_minimize_implicit_aux_derivatives": bool(
-            cfg.moco_minimize_implicit_aux_derivatives
-        ),
-        "moco_control_effort_weight": float(cfg.moco_control_effort_weight),
-        "moco_reserve_control_weight": float(cfg.moco_reserve_control_weight),
-        "moco_max_reserve_fraction": float(cfg.moco_max_reserve_fraction),
-        "moco_fail_on_high_reserve": bool(cfg.moco_fail_on_high_reserve),
-        "moco_residual_force": float(cfg.moco_residual_force),
-        "moco_reserve_optimal_force": float(cfg.moco_reserve_optimal_force),
-        "moco_reserve_scale": float(cfg.moco_reserve_scale),
-        "moco_mod_ops": list(_MOCO_MOD_OPS),
-        "moco_solve_details": solve_meta,
-    }
-    if solve_meta.get("solver_status"):
-        meta["moco_solver_status"] = str(solve_meta["solver_status"])
-    if solve_meta.get("solver_iterations") is not None:
-        meta["moco_solver_iterations"] = int(solve_meta["solver_iterations"])
-
-    return MuscleActivationResult(
-        activations=activations,
-        muscle_names=tuple(names_ref),
-        metadata=meta,
+    sk = load_model().skeleton
+    return run_moco_track_segmented(
+        arr,
+        cfg=cfg,
+        work_dir=work_dir,
+        skeleton=sk,
     )

@@ -29,6 +29,10 @@ spec:
           value: "64"
         - name: ACTIVATION_METHOD
           value: "moco_track"
+        - name: MOCO_CORE_DURATION_S
+          value: "1.4"
+        - name: MOCO_BUFFER_DURATION_S
+          value: "0.14"
         - name: MAX_MOTIONS
           value: "0"
         - name: SKIP_EXISTING

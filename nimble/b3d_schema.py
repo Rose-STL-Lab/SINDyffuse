@@ -17,9 +17,13 @@ from nimble.muscle_activation import muscle_names, opensim_quiet
 from nimble.physics import load_model
 from sindy.features import features_from_q
 
+from nimble.moco_segment import SIM_GRF_CHANNEL_NAMES, SIM_GRF_COLS
+
 GUIDANCE_FEATURES = "guidance_features"
 SINDY_FEATURES = "sindy_features"
 MUSCLE_ACTIVATIONS = "muscle_activations"
+SIM_GRF = "sim_grf"
+MUSCLE_ACTIVATION_MASK = "muscle_activation_mask"
 
 # nimblephysics assigns every customValues channel the same per-frame width as the
 # first entry. List muscle activations (80 rows) first; pad shorter channels to 80.
@@ -29,7 +33,12 @@ B3D_CUSTOM_VALUE_NAMES: Tuple[str, ...] = (
     MUSCLE_ACTIVATIONS,
     GUIDANCE_FEATURES,
     SINDY_FEATURES,
+    SIM_GRF,
+    MUSCLE_ACTIVATION_MASK,
 )
+
+SIM_GRF_ROWS = int(SIM_GRF_COLS)
+MUSCLE_ACTIVATION_MASK_ROWS = 1
 
 GUIDANCE_FEATURE_ROWS = len(BIOMECH_COMPONENT_KEYS)
 
@@ -109,19 +118,82 @@ def pad_b3d_custom_matrix(matrix: np.ndarray) -> np.ndarray:
     return out
 
 
+def pack_sim_grf(grf: np.ndarray) -> np.ndarray:
+    """``grf`` ``[T, 18]`` → B3D matrix ``[18, T]`` float64."""
+    arr = np.asarray(grf, dtype=np.float64)
+    if arr.ndim != 2 or arr.shape[1] != SIM_GRF_ROWS:
+        raise ValueError(f"Expected sim_grf [T, {SIM_GRF_ROWS}], got {arr.shape}")
+    return np.ascontiguousarray(arr.T)
+
+
+def unpack_sim_grf(matrix: np.ndarray) -> np.ndarray:
+    """B3D ``[18, T]`` or ``[T, 18]`` → ``[T, 18]`` float32."""
+    arr = np.asarray(matrix, dtype=np.float32)
+    if arr.ndim != 2:
+        raise ValueError(f"Expected 2D sim_grf matrix, got {arr.shape}")
+    storage = B3D_CUSTOM_VALUE_STORAGE_ROWS
+    if arr.shape[1] == storage:
+        return arr[:, :SIM_GRF_ROWS]
+    if arr.shape[0] == storage:
+        return arr[:SIM_GRF_ROWS, :].T
+    if arr.shape[0] == SIM_GRF_ROWS:
+        return arr.T
+    if arr.shape[1] == SIM_GRF_ROWS:
+        return arr
+    raise ValueError(f"Expected sim_grf layout with {SIM_GRF_ROWS} cols, got {arr.shape}")
+
+
+def pack_activation_mask(mask: np.ndarray) -> np.ndarray:
+    """``mask`` ``[T]`` or ``[T, 1]`` → B3D matrix ``[1, T]`` float64."""
+    arr = np.asarray(mask, dtype=np.float64)
+    if arr.ndim == 1:
+        arr = arr.reshape(-1, 1)
+    if arr.ndim != 2 or arr.shape[1] != MUSCLE_ACTIVATION_MASK_ROWS:
+        raise ValueError(
+            f"Expected activation mask [T, {MUSCLE_ACTIVATION_MASK_ROWS}], got {arr.shape}"
+        )
+    return np.ascontiguousarray(arr.T)
+
+
+def unpack_activation_mask(matrix: np.ndarray) -> np.ndarray:
+    """B3D mask storage → ``[T]`` float32."""
+    arr = np.asarray(matrix, dtype=np.float32)
+    if arr.ndim != 2:
+        raise ValueError(f"Expected 2D activation mask matrix, got {arr.shape}")
+    storage = B3D_CUSTOM_VALUE_STORAGE_ROWS
+    if arr.shape[1] == storage:
+        return arr[:, 0]
+    if arr.shape[0] == storage:
+        return arr[0, :]
+    if arr.shape[0] == MUSCLE_ACTIVATION_MASK_ROWS:
+        return arr[0, :]
+    if arr.shape[1] == MUSCLE_ACTIVATION_MASK_ROWS:
+        return arr[:, 0]
+    raise ValueError(
+        f"Expected activation mask with {MUSCLE_ACTIVATION_MASK_ROWS} row(s), got {arr.shape}"
+    )
+
+
 def pack_b3d_trial_custom_values(
     *,
     muscle_activations: np.ndarray,
     guidance_bio: np.ndarray,
     sindy_u: np.ndarray,
     sindy_c: np.ndarray,
+    sim_grf: np.ndarray | None = None,
+    muscle_activation_mask: np.ndarray | None = None,
 ) -> list[np.ndarray]:
-    """Pack all trial customValues (muscle first; guidance/sindy zero-padded to 80 rows)."""
-    return [
+    """Pack all trial customValues (muscle first; shorter channels zero-padded to 80 rows)."""
+    packed: list[np.ndarray] = [
         pack_muscle_activations(muscle_activations),
         pad_b3d_custom_matrix(pack_guidance_features(guidance_bio)),
         pad_b3d_custom_matrix(pack_sindy_features(sindy_u, sindy_c)),
     ]
+    if sim_grf is not None:
+        packed.append(pad_b3d_custom_matrix(pack_sim_grf(sim_grf)))
+    if muscle_activation_mask is not None:
+        packed.append(pad_b3d_custom_matrix(pack_activation_mask(muscle_activation_mask)))
+    return packed
 
 
 def pack_guidance_features(bio: np.ndarray) -> np.ndarray:
@@ -204,5 +276,13 @@ def metadata_custom_values_block() -> dict:
             "c_rows": _sindy_c_rows(),
             "u_names": list(_u_feature_names()),
             "c_names": list(_c_feature_names()),
+        },
+        SIM_GRF: {
+            "rows": SIM_GRF_ROWS,
+            "channel_order": list(SIM_GRF_CHANNEL_NAMES),
+        },
+        MUSCLE_ACTIVATION_MASK: {
+            "rows": MUSCLE_ACTIVATION_MASK_ROWS,
+            "description": "1 = segment Moco solve OK; 0 = failed / gap",
         },
     }

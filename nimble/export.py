@@ -27,23 +27,16 @@ from nimble.muscle_activation import (
     MuscleActivationResult,
     compute_muscle_activation,
     configure_opensim_logging,
-    fallback_muscle_activations,
     muscle_names,
     normalize_activation_method,
     opensim_quiet,
 )
-from nimble.ik import fit_q, postprocess_ik_poses
+from nimble.ik import fit_q
+from nimble.moco_segment import SIM_GRF_COLS
 from nimble.physics import load_model
 from nimble.skeleton_registry import get_spec
-from nimble.smoothing import apply_pose_smoothing_numpy
 from sindy.features import features_from_q
 from sindy.targets import bio_matrix, default_physics_cfg
-
-# Post-IK temporal low-pass (same defaults as diffusion/SINDy guidance physics).
-DEFAULT_SMOOTH_POSES = True
-# Match OpenCap Moco reference filtering (6 Hz) at 20 fps (Nyquist 10 Hz).
-DEFAULT_SMOOTH_CUTOFF_HZ = 6.0
-DEFAULT_SMOOTH_BUTTERWORTH_ORDER = 2
 
 _SKELETON_CACHE: Dict[str, Any] = {}
 
@@ -123,12 +116,23 @@ def export_motion_to_b3d(
     if poses.ndim != 3 or poses.shape[1:] != (22, 3):
         raise ValueError(f"Expected hml3d_positions [T,22,3], got {poses.shape}")
 
-    act_cfg_early = muscle_activation_cfg or MuscleActivationConfig(
-        fps=float(fps), mass_kg=float(mass_kg)
+    act_cfg = replace(
+        muscle_activation_cfg
+        or MuscleActivationConfig(fps=float(fps), mass_kg=float(mass_kg)),
+        fps=float(fps),
+        mass_kg=float(mass_kg),
     )
-    configure_opensim_logging(act_cfg_early.opensim_log_level)
+    if activation_method is not None:
+        act_cfg = replace(
+            act_cfg,
+            activation_method=normalize_activation_method(activation_method),
+        )
+    elif skip_muscle_activation:
+        act_cfg = replace(act_cfg, activation_method="none")
 
-    sk, spec = _get_skeleton(opensim_log_level=act_cfg_early.opensim_log_level)
+    configure_opensim_logging(act_cfg.opensim_log_level)
+
+    sk, spec = _get_skeleton(opensim_log_level=act_cfg.opensim_log_level)
     foot_body_names = tuple(spec.foot_body_names)
     num_input_frames = int(poses.shape[0])
     append_verbose_log(f"{trial_name}: IK fitting start ({num_input_frames} frames)")
@@ -150,35 +154,7 @@ def export_motion_to_b3d(
     if per_frame_solver is not None:
         ik_stats["per_frame_loss"] = per_frame_solver
 
-    poses_q, repair_meta = postprocess_ik_poses(poses_q, ik_stats)
-    ik_stats.update(repair_meta)
-    ik_stats["ik_poor_fit_repaired_frames"] = float(
-        int(ik_stats.get("ik_poor_fit_repaired_frames", 0))
-        + int(repair_meta.get("ik_poor_fit_interpolations", 0))
-        + int(repair_meta.get("ik_failed_frame_interpolations", 0))
-    )
-    failed_interp = int(repair_meta.get("ik_failed_frame_interpolations", 0))
-    poor_interp = int(repair_meta.get("ik_poor_fit_interpolations", 0))
-    if failed_interp or poor_interp:
-        append_verbose_log(
-            f"{trial_name}: IK postprocess "
-            f"failed_interp={failed_interp} poor_interp={poor_interp}"
-        )
-
-    q_time_dof = np.ascontiguousarray(poses_q.T, dtype=np.float32)
-    q_sm, smooth_meta = apply_pose_smoothing_numpy(
-        q_time_dof,
-        fps=float(fps),
-        smooth_poses=DEFAULT_SMOOTH_POSES,
-        smooth_cutoff_hz=DEFAULT_SMOOTH_CUTOFF_HZ,
-        smooth_butterworth_order=DEFAULT_SMOOTH_BUTTERWORTH_ORDER,
-    )
-    poses_q = np.ascontiguousarray(q_sm.T, dtype=np.float64)
-    del q_time_dof, q_sm
-    ik_stats["pose_smoothing_enabled"] = float(bool(smooth_meta.get("enabled", False)))
-    eff_hz = smooth_meta.get("cutoff_hz_effective")
-    if eff_hz is not None:
-        ik_stats["pose_smooth_cutoff_hz"] = float(eff_hz)
+    ik_stats["pose_smoothing_enabled"] = 0.0
 
     poses_q_f32 = np.ascontiguousarray(poses_q, dtype=np.float32)
     del poses_q
@@ -187,20 +163,11 @@ def export_motion_to_b3d(
     num_frames = int(poses_q_f32.shape[1])
     q_traj = np.ascontiguousarray(poses_q_f32.T, dtype=np.float64)
 
-    act_cfg = muscle_activation_cfg or MuscleActivationConfig(
-        fps=float(fps), mass_kg=float(mass_kg)
-    )
-    act_cfg = replace(act_cfg, fps=float(fps), mass_kg=float(mass_kg))
-    if activation_method is not None:
-        act_cfg = replace(
-            act_cfg,
-            activation_method=normalize_activation_method(activation_method),
-        )
-    elif skip_muscle_activation:
-        act_cfg = replace(act_cfg, activation_method="none")
-
     method = str(act_cfg.activation_method)
     ik_stats["activation_method"] = method
+
+    sim_grf_pack: np.ndarray | None = None
+    activation_mask_pack: np.ndarray | None = None
 
     if method == "none":
         ik_stats["muscle_activation_skipped"] = 1.0
@@ -216,26 +183,30 @@ def export_motion_to_b3d(
         t0 = time.perf_counter()
         try:
             act_result = compute_muscle_activation(q_traj, cfg=act_cfg)
-        except Exception:
-            fallback_act, fallback_meta = fallback_muscle_activations(
-                num_frames,
-                act_cfg,
-            )
+        except Exception as exc:
+            n_muscles = len(muscle_names())
             act_result = MuscleActivationResult(
-                activations=fallback_act,
+                activations=np.full((num_frames, n_muscles), np.nan, dtype=np.float32),
                 muscle_names=muscle_names(),
-                metadata={"activation_method": method, **fallback_meta},
+                metadata={
+                    "activation_method": method,
+                    "activation_validity_mask": np.zeros(num_frames, dtype=np.float32),
+                    "error": str(exc),
+                },
+                forces=np.full((num_frames, SIM_GRF_COLS), np.nan, dtype=np.float32),
             )
         ik_stats["muscle_activation_seconds"] = float(time.perf_counter() - t0)
         ik_stats["muscle_activation_computed"] = 1.0
         obj = act_result.metadata.get("moco_objective")
         obj_s = f"{float(obj):.6f}" if obj is not None and np.isfinite(float(obj)) else "n/a"
+        seg_count = act_result.metadata.get("moco_segment_count")
         append_verbose_log(
             f"{trial_name}: {method} done "
             f"seconds={ik_stats['muscle_activation_seconds']:.1f} "
             f"repaired_frames={act_result.metadata.get('repaired_frame_count', 0)} "
             f"objective={obj_s} "
-            f"solver_success={act_result.metadata.get('moco_solver_success')}"
+            f"solver_success={act_result.metadata.get('moco_solver_success')} "
+            f"segments={seg_count if seg_count is not None else 'n/a'}"
         )
         solve_details = act_result.metadata.get("moco_solve_details")
         if isinstance(solve_details, dict):
@@ -256,7 +227,24 @@ def export_motion_to_b3d(
         for key, val in summarize_moco_metadata(act_result.metadata).items():
             if isinstance(val, (int, float)):
                 ik_stats[f"moco_{key}"] = float(val)
+        if act_result.metadata.get("moco_segment_count") is not None:
+            ik_stats["moco_segment_count"] = float(act_result.metadata["moco_segment_count"])
+        if act_result.metadata.get("moco_segment_success_count") is not None:
+            ik_stats["moco_segment_success_count"] = float(
+                act_result.metadata["moco_segment_success_count"]
+            )
+        if act_result.metadata.get("ground_offset_m") is not None:
+            ik_stats["moco_ground_offset_m"] = float(act_result.metadata["ground_offset_m"])
         muscle_act = np.asarray(act_result.activations, dtype=np.float32)
+        if act_result.forces is not None:
+            sim_grf_pack = np.asarray(act_result.forces, dtype=np.float32)
+        elif act_result.metadata.get("sim_grf") is not None:
+            sim_grf_pack = np.asarray(act_result.metadata["sim_grf"], dtype=np.float32)
+        mask = act_result.metadata.get("activation_validity_mask")
+        if mask is not None:
+            activation_mask_pack = np.asarray(mask, dtype=np.float32).reshape(-1)
+        else:
+            activation_mask_pack = np.isfinite(muscle_act).all(axis=1).astype(np.float32)
         del act_result
 
     b3d_subject = nimble.biomechanics.SubjectOnDiskHeader()
@@ -305,6 +293,8 @@ def export_motion_to_b3d(
             guidance_bio=bio,
             sindy_u=u,
             sindy_c=c,
+            sim_grf=sim_grf_pack,
+            muscle_activation_mask=activation_mask_pack,
         )
     )
     del bio, u, c, muscle_act

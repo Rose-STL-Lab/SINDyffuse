@@ -145,6 +145,12 @@ def apply_preprocess_job_env(args) -> None:
         args.skip_normalization = True
     if os.environ.get("OPENSIM_LOG_LEVEL"):
         args.opensim_log_level = os.environ["OPENSIM_LOG_LEVEL"].strip()
+    if os.environ.get("MOCO_CORE_DURATION_S"):
+        args.moco_core_duration_s = float(os.environ["MOCO_CORE_DURATION_S"].strip())
+    if os.environ.get("MOCO_BUFFER_DURATION_S"):
+        args.moco_buffer_duration_s = float(os.environ["MOCO_BUFFER_DURATION_S"].strip())
+    if os.environ.get("MOCO_STITCH_BLEND_S"):
+        args.moco_stitch_blend_s = float(os.environ["MOCO_STITCH_BLEND_S"].strip())
     log_dir = str(getattr(args, "log_dir", "") or "").strip()
     if not log_dir:
         args.log_dir = str(repo_root() / "logs")

@@ -61,15 +61,29 @@ Three muscle-activation modes via `--activation_method`:
 
 By default, Moco runs one motion at a time and `--num_workers` sets Ipopt threads (`0` = auto). Static optimization uses parallel motion workers like IK-only. Optional env `MOCO_NUM_THREADS` overrides auto-detection.
 
-Each `.b3d` stores generalized coordinates plus custom channels: `guidance_features`, `sindy_features`, and `muscle_activations` `[80, T]`. Non-finite activation frames are interpolated during preprocess before optional temporal smoothing.
+Each `.b3d` stores generalized coordinates plus custom channels: `guidance_features`, `sindy_features`, `muscle_activations` `[80, T]`, and (MocoTrack) `sim_grf` `[18, T]` plus `muscle_activation_mask` `[1, T]`.
 
-**MocoTrack** (`moco_track`) — one-pass trajectory optimization with foot contact (20 fps tuned): 0.05 s mesh (1 node/frame), **6 Hz reference + IK low-pass** (OpenCap), **uniform tracking weight 1** on all coordinates except `pelvis_ty` (contact-driven), adaptive refine to 0.02 s, tol 0.01, implicit-muscle auxiliary minimization.
+At **20 fps**, segmented Moco uses **28-frame cores**, **3-frame buffers**, and **34-frame solve windows** (1.4 s / 0.14 s MinT timing).
+
+**MocoTrack** (`moco_track`) — MinT-style segmented trajectory optimization with foot contact: IK → ground offset → 1.4 s Moco windows → seam stitch. Reference coordinates are low-pass filtered at **6 Hz inside Moco** (OpenCap). Failed segments leave **NaN gaps** in activations/GRF; the validity mask marks good frames. No pre-Moco q smoothing, IK frame interpolation, or post-Moco activation gap-filling.
 
 **Static optimization** (`static_optimization`) — per-frame OpenSim static optimization on the same Rajagopal 80-muscle model with DeGroote muscles + reserves (no foot contact). Faster than Moco, lower fidelity.
 
 OpenSim console output is **hidden by default** (`--opensim_log_level Off`).
 
-Useful Moco flags: `--moco_reference_lowpass_hz`, `--moco_states_speed_tracking_weight`, `--moco_aux_coord_tracking_weight`, `--moco_no_reference_lowpass`, `--moco_no_apply_tracked_guess`, `--moco_mesh_interval`, `--moco_states_tracking_weight`, `--moco_max_reserve_fraction`, `--moco_allow_high_reserve`, `--moco_reserve_scale`, `--moco_no_repair`, `--moco_no_adaptive_mesh`, `--moco_min_frames`, `--moco_min_ik_success_fraction`, `--moco_max_pelvis_ty_range_m`, `--opensim_log_level`.
+Useful Moco flags: `--moco_core_duration_s`, `--moco_buffer_duration_s`, `--moco_stitch_blend_s`, `--moco_reference_lowpass_hz`, `--moco_states_speed_tracking_weight`, `--moco_no_reference_lowpass`, `--moco_mesh_interval`, `--moco_max_reserve_fraction`, `--moco_allow_high_reserve`, `--opensim_log_level`.
+
+MinT smoke test (temp dir, self-deletes on success):
+
+```bash
+python scripts/smoke_moco_mint_preprocess.py
+```
+
+Unit tests (no OpenSim):
+
+```bash
+PYTHONPATH=. python3 -m unittest tests.test_moco_segment -v
+```
 
 **Kubernetes (64 worker pods + normalization pod):**
 
