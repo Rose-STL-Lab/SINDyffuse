@@ -13,11 +13,11 @@ import joblib
 import numpy as np
 import torch
 
+from common.biomech import BIOMECH_COMPONENT_KEYS
 from common.paths import motion_cache_dir
-from common.skeleton_config import SkeletonKind, resolve_skeleton
-from nimble.channels import BIOMECH_COMPONENT_KEYS
-from nimble.guidance import NimbleGuidanceConfig
-from nimble.physics import load_model, physics_from_q, physics_from_q_batch
+from common.skeleton_config import motion_ndof
+from osim.features import features_from_mint_q_torch
+from osim.physics import bio_from_q_torch
 from sindy.library import ThetaLibrary, ThetaSpec
 from sindy.model import load_text_to_xi_from_checkpoint, predict_from_xi
 from sindy.targets import (
@@ -28,7 +28,6 @@ from sindy.targets import (
     parse_target_weights,
     sindy_target_keys,
 )
-from sindy.features import features_from_q_torch
 from surrogate.guidance import ActivationSurrogateGuidance, load_activation_surrogate_guidance
 
 
@@ -71,11 +70,7 @@ def _load_train_config(sild_dir: Path) -> Dict[str, Any]:
 
 
 class LearnedSINDyGuidance:
-    """Sparse SINDy model: ``pred = Θ(motion) · Ξ(text)`` trained to match bio + muscle targets.
-
-    Diffusion guidance minimizes MSE between the SINDy prediction and **actual** targets from
-    ``physics_from_q`` (23 bio channels) and the activation surrogate (80 muscle channels).
-    """
+    """Sparse SINDy model: ``pred = Θ(motion) · Ξ(text)`` trained to match bio + muscle targets."""
 
     def __init__(
         self,
@@ -84,30 +79,16 @@ class LearnedSINDyGuidance:
         fps: float = 20.0,
         clip_model_name: str = "ViT-B/32",
         *,
-        bio_physics: NimbleGuidanceConfig | None = None,
         surrogate_checkpoint: str | Path | None = None,
         target_weights: List[float] | None = None,
-        skeleton: str | None = None,
     ):
         _install_numpy_pickle_compat()
         self.sild_dir = Path(sild_dir)
         self.data_root = Path(data_root)
-        self._skeleton_kind = resolve_skeleton(skeleton)
-        cache = motion_cache_dir(self.data_root, skeleton=self._skeleton_kind)
+        cache = motion_cache_dir(self.data_root)
         if not cache.is_dir():
-            raise FileNotFoundError(
-                f"SINDy guidance requires motion cache at {cache} "
-                f"(skeleton={self._skeleton_kind.value})."
-            )
+            raise FileNotFoundError(f"SINDy guidance requires motion cache at {cache}.")
         self.fps = float(fps)
-        self._sk = None
-        if self._skeleton_kind == SkeletonKind.RAJAGOPAL:
-            self._sk = load_model().skeleton
-        self.bio_physics = bio_physics or NimbleGuidanceConfig(
-            max_physics_frames=64,
-            physics_on_cpu=False,
-            fk_backend="torch",
-        )
 
         ckpt = torch.load(self.sild_dir / "text_to_xi.pt", map_location="cpu")
         self.num_experts = int(ckpt.get("num_experts", 1))
@@ -169,17 +150,10 @@ class LearnedSINDyGuidance:
         self._clip_model = None
         self._clip_device: Optional[str] = None
 
-        ndof = int(self._sk.getNumDofs()) if self._sk is not None else int(self.mean.numel())
-        if self._skeleton_kind == SkeletonKind.MINT:
-            from mint.features import features_from_mint_q_torch
-
-            _, _, u_names_ref, c_names_ref = features_from_mint_q_torch(
-                torch.zeros(1, 8, ndof), fps=self.fps
-            )
-        else:
-            _, _, u_names_ref, c_names_ref = features_from_q_torch(
-                torch.zeros(1, 8, ndof), self._sk, fps=self.fps
-            )
+        ndof = int(self.mean.numel()) if self.mean.numel() else motion_ndof()
+        _, _, u_names_ref, c_names_ref = features_from_mint_q_torch(
+            torch.zeros(1, 8, ndof), fps=self.fps
+        )
         tcfg = _load_train_config(self.sild_dir)
         self._theta_u_names = list(u_names_ref)
         self._theta_c_names = list(c_names_ref)
@@ -236,15 +210,7 @@ class LearnedSINDyGuidance:
     def _build_theta(self, motion_norm: torch.Tensor) -> torch.Tensor:
         b, t, _ = motion_norm.shape
         denorm = self._denorm_motion(motion_norm)
-        if self._skeleton_kind == SkeletonKind.MINT:
-            from mint.features import features_from_mint_q_torch
-
-            u_t, c_t, _, _ = features_from_mint_q_torch(denorm, fps=self.fps)
-        else:
-            use_fk = str(getattr(self.bio_physics, "fk_backend", "torch")).strip().lower() == "torch"
-            u_t, c_t, _, _ = features_from_q_torch(
-                denorm, self._sk, fps=self.fps, use_torch_fk=use_fk
-            )
+        u_t, c_t, _, _ = features_from_mint_q_torch(denorm, fps=self.fps)
         u_in = u_t[:, :-1, :] if self._theta_include_u else None
         c_in = c_t[:, :-1, :] if self._theta_include_c else None
         theta_flat, _ = self._theta_library.build_torch(
@@ -262,28 +228,9 @@ class LearnedSINDyGuidance:
         """Per-sequence L_bio ``[B, L, C]`` from predicted motion (for guidance MSE)."""
         b, t, _ = motion_norm.shape
         denorm = self._denorm_motion(motion_norm)
-        if self._skeleton_kind == SkeletonKind.MINT:
-            from mint.physics import bio_from_q_torch
-
-            bio_full = bio_from_q_torch(denorm, fps=self.fps)
-            bio = bio_full[:, : t - 1, :]
-            return bio.detach()
-
-        dt = 1.0 / max(self.fps, 1e-8)
-        comp_list = physics_from_q_batch(
-            denorm,
-            guidance_cfg=self.bio_physics,
-            dt=float(dt),
-            fps=self.fps,
-        )
-        rows: List[torch.Tensor] = []
-        for comp in comp_list:
-            cols = [comp[k].reshape(-1) for k in self.bio_channel_names]
-            bio = torch.stack(cols, dim=-1)
-            if bio.shape[0] > t - 1:
-                bio = bio[: t - 1]
-            rows.append(bio.detach())
-        return torch.stack(rows, dim=0)
+        bio_full = bio_from_q_torch(denorm, fps=self.fps)
+        bio = bio_full[:, : t - 1, :]
+        return bio.detach()
 
     def _actual_targets_from_motion(self, motion_norm: torch.Tensor) -> torch.Tensor:
         """Actual SINDy targets ``[B, L, target_dim]`` from predicted motion."""

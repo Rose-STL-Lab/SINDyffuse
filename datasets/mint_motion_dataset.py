@@ -11,7 +11,7 @@ import torch
 from torch.utils.data import Dataset
 
 from common.paths import humanml3d_text_dir, mint_cache_dir
-from mint.cache_schema import KEY_Q, load_cache_metadata, read_motion_cache
+from osim.cache_schema import KEY_Q, load_cache_metadata, read_motion_cache
 
 
 class MintMotionDataset(Dataset):

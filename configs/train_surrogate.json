@@ -1,5 +1,6 @@
 {
   "seed": 42,
+  "skeleton": "mint",
   "distributed": {
     "enabled": "auto",
     "backend": "nccl",

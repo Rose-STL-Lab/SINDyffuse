@@ -12,8 +12,8 @@ from torch.utils.data import Dataset
 from common.paths import mint_cache_dir
 from common.skeleton_config import MINT_MUSCLE_COUNT
 from datasets.splits import load_split_ids
-from mint.cache_schema import KEY_HAS_LABELS, KEY_MUSCLE, KEY_Q, cache_has_labels, read_motion_cache
-from mint.muscle_schema import validate_activation_matrix
+from osim.cache_schema import KEY_HAS_LABELS, KEY_MUSCLE, KEY_Q, cache_has_labels, read_motion_cache
+from osim.muscle_schema import validate_activation_matrix
 
 
 class ActivationMintDataset(Dataset):

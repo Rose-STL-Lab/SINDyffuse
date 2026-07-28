@@ -1,4 +1,4 @@
-"""Train text→Xi SINDy model on Nimble L_bio + muscle activation targets."""
+"""Train text→Xi SINDy model on MinT L_bio + muscle activation targets."""
 
 from __future__ import annotations
 
@@ -45,13 +45,12 @@ from common.distributed import (
 from common.paths import (
     default_humanml3d_root,
     humanml3d_text_dir,
-    nimble_b3d_dir,
     sindy_latest_link,
     update_latest_symlink,
 )
-from common.run_setup import default_config_path, require_nimble_b3d, resolve_run_dir, resolve_training_data_root
+from common.run_setup import default_config_path, require_motion_cache, resolve_run_dir, resolve_training_data_root
 from common.run_logging import RunLogger, add_run_log_cli_args, get_run_logger, run_logged_main
-from nimble.channels import BIOMECH_COMPONENT_KEYS
+from common.biomech import BIOMECH_COMPONENT_KEYS
 
 from sindy.dataset import SindyWindowDataset, prepare_lazy_sindy_data
 from sindy.targets import (
@@ -373,7 +372,6 @@ def train(
     target_weights: Sequence[float] | None = None,
     distributed_cfg: Optional[Dict[str, Any]] = None,
     seed: int = 42,
-    skeleton: str | None = None,
 ) -> Dict[str, Any]:
     use_ddp = init_distributed(distributed_cfg=distributed_cfg)
     if not use_ddp:
@@ -382,8 +380,7 @@ def train(
     data_root = resolve_training_data_root(data_root)
     from common.run_setup import require_motion_cache
 
-    sk = skeleton or __import__("os").environ.get("SINDYFFUSE_SKELETON", "mint")
-    require_motion_cache(data_root, skeleton=sk)
+    require_motion_cache(data_root)
     root = Path(data_root)
     bio_keys = list(BIOMECH_COMPONENT_KEYS)
     muscle_keys = list(muscle_channel_names())
@@ -409,7 +406,6 @@ def train(
             log_every=bio_log_every,
             skip_zero_placeholders=skip_zero_placeholders,
             zero_atol=zero_atol,
-            skeleton=sk,
         )
         n, t, _u_dim = u.shape
         u_in = u[:, :-1, :] if include_u else None
@@ -448,7 +444,6 @@ def train(
             log_every=bio_log_every,
             skip_zero_placeholders=skip_zero_placeholders,
             zero_atol=zero_atol,
-            skeleton=sk,
         )
         if target_dim != N_SINDY_TARGETS:
             raise ValueError(f"Expected target_dim {N_SINDY_TARGETS}, got {target_dim}")
@@ -654,7 +649,7 @@ def _apply_json_config(args: argparse.Namespace, config_path: str) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Train SINDy text→Xi on Nimble L_bio targets")
+    parser = argparse.ArgumentParser(description="Train SINDy text→Xi on MinT L_bio targets")
     parser.add_argument(
         "--config",
         default="",
@@ -693,11 +688,10 @@ def main() -> None:
     parser.add_argument("--clip_text_batch_size", type=int, default=128)
     parser.add_argument("--device", default="auto")
     parser.add_argument("--bio_log_every", type=int, default=50)
-    parser.add_argument("--skeleton", default="", help="rajagopal|mint")
     parser.add_argument(
         "--preload",
         action="store_true",
-        help="Load all B3D windows into RAM before training (default: read on demand)",
+        help="Load all NPZ windows into RAM before training (default: read on demand)",
     )
     add_run_log_cli_args(parser)
     args = parser.parse_args()
@@ -705,11 +699,7 @@ def main() -> None:
     dist_cfg: Dict[str, Any] = {}
     full_cfg: Dict[str, Any] = {}
     if not cfg_path:
-        from common.skeleton_config import resolve_skeleton
-
-        sk = resolve_skeleton(getattr(args, "skeleton", None))
-        default_name = "train_sindy_mint.json" if sk.value == "mint" else "train_sindy.json"
-        default_cfg = default_config_path(default_name)
+        default_cfg = default_config_path("train_sindy.json")
         if default_cfg.is_file():
             cfg_path = str(default_cfg)
     if cfg_path:
@@ -769,18 +759,11 @@ def main() -> None:
                 target_weights=full_cfg.get("target_weights") if cfg_path else None,
                 distributed_cfg=dist_cfg,
                 seed=int(full_cfg.get("seed", 42)) if cfg_path else 42,
-                skeleton=str(getattr(args, "skeleton", "") or full_cfg.get("skeleton", "")),
             )
             if is_main_process():
                 _logger.verbose(json.dumps(metrics, indent=2))
         finally:
             cleanup_distributed()
-        try:
-            from nimble.physics import clear_cache
-
-            clear_cache()
-        except Exception:
-            pass
         sys.exit(0)
 
     rank = get_rank() if is_distributed() else None

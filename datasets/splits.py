@@ -1,9 +1,8 @@
-"""HumanML3D split lists and B3D kinematics pass helpers."""
+"""HumanML3D split lists."""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 _SPLIT_FILES = ("train.txt", "val.txt", "test.txt")
 
@@ -38,14 +37,3 @@ def shard_motion_ids(ids: list[str], shard_index: int, num_shards: int) -> list[
     if i < 0 or i >= n:
         raise ValueError(f"shard_index must be in [0, {n}), got {i}")
     return ids[i::n]
-
-
-def kinematics_pass_index(subj: Any, trial: int) -> int:
-    import nimblephysics as nimble
-
-    n = int(subj.getTrialNumProcessingPasses(trial))
-    for i in range(n):
-        ptype = str(subj.getProcessingPassType(i)).upper()
-        if "KINEMATICS" in ptype:
-            return i
-    return 0

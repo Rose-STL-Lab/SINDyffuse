@@ -1,4 +1,4 @@
-"""L_bio + muscle activation targets from Nimble q / B3D for SINDy training."""
+"""L_bio + muscle activation targets from MinT q for SINDy training."""
 
 from __future__ import annotations
 
@@ -6,19 +6,15 @@ from functools import lru_cache
 from typing import Sequence, Tuple
 
 import numpy as np
-import torch
 
+from common.biomech import BIOMECH_COMPONENT_KEYS
 from common.skeleton_config import (
-    SkeletonKind,
     muscle_channel_names as _muscle_channel_names,
     n_bio_targets,
     n_muscle_targets,
     n_sindy_targets,
-    resolve_skeleton,
 )
-from nimble.channels import BIOMECH_COMPONENT_KEYS
-from nimble.guidance import NimbleGuidanceConfig
-from nimble.physics import physics_from_q
+from osim.physics import BioPhysicsConfig, bio_matrix_mint
 
 N_BIO_TARGETS = n_bio_targets()
 N_MUSCLE_TARGETS = n_muscle_targets()
@@ -27,8 +23,8 @@ N_SINDY_TARGETS = n_sindy_targets()
 
 @lru_cache(maxsize=1)
 def muscle_channel_names() -> Tuple[str, ...]:
-    """Ordered muscle names for the active skeleton."""
-    return _muscle_channel_names(resolve_skeleton())
+    """Ordered muscle names for the MinT skeleton."""
+    return _muscle_channel_names()
 
 
 @lru_cache(maxsize=1)
@@ -41,48 +37,20 @@ def default_physics_cfg(
     *,
     fps: float = 20.0,
     max_frames: int | None = None,
-) -> NimbleGuidanceConfig:
+) -> BioPhysicsConfig:
     """Physics config for L_bio extraction."""
     t_max = 64 if max_frames is None else int(max_frames)
-    return NimbleGuidanceConfig(
-        max_physics_frames=t_max,
-        physics_on_cpu=True,
-        smooth_poses=True,
-        smooth_cutoff_hz=6.0,
-        mass_kg=70.0,
-        g_mps2=9.81,
-        contact_height_thresh_m=0.06,
-        contact_speed_thresh_mps=1.2,
-    )
+    return BioPhysicsConfig(max_physics_frames=t_max)
 
 
 def bio_matrix(
     q: np.ndarray,
     *,
     fps: float,
-    guidance_cfg: NimbleGuidanceConfig | None = None,
-    skeleton: str | SkeletonKind | None = None,
+    guidance_cfg: BioPhysicsConfig | None = None,
 ) -> np.ndarray:
-    """``q`` ``[T, ndof]`` → L_bio channels ``[T, C]`` (no IK)."""
-    if q.ndim != 2:
-        raise ValueError(f"Expected q [T, ndof], got {q.shape}")
-    sk = resolve_skeleton(skeleton)
-    if sk == SkeletonKind.MINT:
-        from mint.physics import bio_matrix_mint
-
-        return bio_matrix_mint(q, fps=fps, guidance_cfg=guidance_cfg)
-    t = int(q.shape[0])
-    cfg = guidance_cfg or default_physics_cfg(fps=fps, max_frames=t)
-    x = torch.from_numpy(q.astype(np.float32))
-    with torch.no_grad():
-        comp = physics_from_q(
-            x, guidance_cfg=cfg, dt=1.0 / max(float(fps), 1e-8), fps=float(fps)
-        )
-    cols = [comp[k].reshape(-1).cpu().numpy() for k in BIOMECH_COMPONENT_KEYS]
-    bio = np.stack(cols, axis=-1).astype(np.float32)
-    if bio.shape[0] != t:
-        bio = bio[:t]
-    return bio
+    """``q`` ``[T, ndof]`` → L_bio channels ``[T, C]``."""
+    return bio_matrix_mint(q, fps=fps, guidance_cfg=guidance_cfg)
 
 
 def targets_for_theta(bio: np.ndarray) -> np.ndarray:
@@ -95,7 +63,7 @@ def targets_for_theta(bio: np.ndarray) -> np.ndarray:
 
 
 def build_sindy_targets(bio: np.ndarray, activations: np.ndarray) -> np.ndarray:
-    """Concat bio ``[T, 23]`` and muscle activations ``[T, 80]`` → ``[T-1, 103]``."""
+    """Concat bio and muscle activations → ``[T-1, n_targets]``."""
     bio_arr = np.asarray(bio, dtype=np.float32)
     act_arr = np.asarray(activations, dtype=np.float32)
     if bio_arr.ndim != 2 or bio_arr.shape[1] != N_BIO_TARGETS:

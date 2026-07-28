@@ -5,9 +5,6 @@ Layout (default)::
     <repo>/datasets/HumanML3D/          # dataset root (texts, splits, raw motion)
         new_joints/ | new_joint_vecs/
         Mean.npy, Std.npy               # HumanML3D 263-D normalization (source only)
-        nimble_b3d/                   # offline IK cache + q-space training artifacts (Rajagopal)
-            {motion_id}.b3d
-            Mean.npy, Std.npy           # Nimble q normalization for training
         mint_cache/                   # MinT OpenSim q + 402 muscle activations (npz)
             {motion_id}.npz
             Mean.npy, Std.npy
@@ -18,13 +15,11 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-# Subdirectory under the HumanML3D root for per-motion Nimble B3D exports.
-NIMBLE_B3D_SUBDIR = "nimble_b3d"
+# Subdirectory under the HumanML3D root for per-motion MinT NPZ exports.
 MINT_CACHE_SUBDIR = "mint_cache"
 
 __all__ = [
     "MINT_CACHE_SUBDIR",
-    "NIMBLE_B3D_SUBDIR",
     "cleanup_preprocess_manifests",
     "default_datasets_dir",
     "default_humanml3d_root",
@@ -32,7 +27,6 @@ __all__ = [
     "humanml3d_text_dir",
     "mint_cache_dir",
     "motion_cache_dir",
-    "nimble_b3d_dir",
     "repo_root",
     "resolve_data_root",
     "resolve_repo_path",
@@ -59,12 +53,6 @@ def default_humanml3d_root() -> str:
     return str(default_datasets_dir() / "HumanML3D")
 
 
-def nimble_b3d_dir(data_root: str | Path, *, subdir: str | None = None) -> Path:
-    """Path to per-motion B3D cache (default ``nimble_b3d/`` under the dataset root)."""
-    name = str(subdir).strip() if subdir else NIMBLE_B3D_SUBDIR
-    return Path(data_root).expanduser().resolve() / name
-
-
 def mint_cache_dir(data_root: str | Path, *, subdir: str | None = None) -> Path:
     """Path to per-motion MinT NPZ cache (default ``mint_cache/`` under the dataset root)."""
     name = str(subdir).strip() if subdir else MINT_CACHE_SUBDIR
@@ -81,22 +69,11 @@ def default_mint_root() -> str:
 def motion_cache_dir(
     data_root: str | Path,
     *,
-    skeleton: str | None = None,
     subdir: str | None = None,
 ) -> Path:
-    """Resolve motion cache directory for the active skeleton."""
-    from common.skeleton_config import SkeletonKind, cache_subdir, resolve_skeleton
-
-    sk = resolve_skeleton(skeleton)
-    if subdir:
-        name = str(subdir).strip()
-    elif sk == SkeletonKind.MINT:
-        name = MINT_CACHE_SUBDIR
-    else:
-        name = NIMBLE_B3D_SUBDIR
-    if sk == SkeletonKind.MINT or name == MINT_CACHE_SUBDIR:
-        return mint_cache_dir(data_root, subdir=name)
-    return nimble_b3d_dir(data_root, subdir=name)
+    """Resolve motion cache directory."""
+    name = str(subdir).strip() if subdir else MINT_CACHE_SUBDIR
+    return mint_cache_dir(data_root, subdir=name)
 
 
 def humanml3d_text_dir(data_root: str | Path) -> Path:

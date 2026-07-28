@@ -1,4 +1,4 @@
-# SINDyffuse: diffusion + SINDy + Nimble physics + OpenSim (future experiments).
+# SINDyffuse: diffusion + SINDy + OpenSim (MinT pipeline).
 # OpenSim 4.5.2 (py311np125) requires numpy 1.25.x; SINDyffuse stays on numpy 1.x (<2).
 name: sindyffuse
 channels:
@@ -28,7 +28,6 @@ dependencies:
   - pip:
       # OpenSim 4.5.2 requires numpy 1.25.x; pip deps must not upgrade to numpy 2.x.
       - "numpy>=1.25,<1.26"
-      - nimblephysics
       - polyscope>=2.3.0
       - clip @ git+https://github.com/openai/CLIP.git
       - ftfy

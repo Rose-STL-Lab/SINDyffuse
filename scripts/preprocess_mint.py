@@ -51,11 +51,11 @@ from common.skeleton_config import DEFAULT_FPS
 from datasets.hml3d_joints import default_joints_root, load_hml3d_joint_positions
 from datasets.mint_cache_stats import compute_mint_normalization_stats
 from datasets.splits import all_motion_ids, shard_motion_ids
-from mint.cache_schema import write_cache_metadata, write_motion_cache
-from mint.features import features_from_mint_q
-from mint.label_lookup import lookup_hml_motion
-from mint.physics import bio_matrix_mint
-from mint.retarget import retarget_hml_joints_to_q
+from osim.cache_schema import write_cache_metadata, write_motion_cache
+from osim.features import features_from_mint_q
+from osim.label_lookup import lookup_hml_motion
+from osim.physics import bio_matrix_mint
+from osim.retarget import retarget_hml_joints_to_q
 
 if TYPE_CHECKING:
     WorkItem = tuple[
@@ -93,7 +93,7 @@ def _check_runtime_dependencies() -> None:
 
 
 def _mint_worker_init(log_level: str) -> None:
-    from nimble.muscle_activation import configure_opensim_logging
+    from osim.logging import configure_opensim_logging
 
     global _WORKER_OPENSIM_LOG_LEVEL
     _WORKER_OPENSIM_LOG_LEVEL = str(log_level)
@@ -179,7 +179,7 @@ def _process_one_mint(args: WorkItem) -> dict:
         joints_root_s,
         verbose_log_path,
     ) = args
-    from nimble.muscle_activation import configure_opensim_logging
+    from osim.logging import configure_opensim_logging
 
     configure_opensim_logging(_WORKER_OPENSIM_LOG_LEVEL)
     if verbose_log_path:

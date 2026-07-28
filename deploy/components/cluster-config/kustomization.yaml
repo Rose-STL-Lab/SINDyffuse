@@ -1,14 +1,13 @@
-# Cluster template — edit image + PVC for your environment (all jobs + dev pod).
+# Cluster template — edit image and PVC for your environment (all jobs + dev pod).
 #
-#   images.newName / newTag  → ghcr.io/rose-stl-lab/sindyffuse (CI-built; see deploy/README.md)
+#   images.newName / newTag  → Docker Hub image (default: ncking/sindyffuse on Nautilus)
 #   pvc-patch*.yaml          → claimName on the sindyffuse PVC
-#   ghcr-pull-secret-patch.yaml → requires ghcr-secret in the namespace (one-time kubectl create)
 apiVersion: kustomize.config.k8s.io/v1alpha1
 kind: Component
 
 images:
   - name: sindyffuse
-    newName: ghcr.io/rose-stl-lab/sindyffuse
+    newName: ncking/sindyffuse
     newTag: latest
 
 patches:
@@ -18,9 +17,15 @@ patches:
   - path: pvc-patch-pod.yaml
     target:
       kind: Pod
-  - path: ghcr-pull-secret-patch.yaml
-    target:
+  - target:
       kind: Job
-  - path: ghcr-pull-secret-patch.yaml
-    target:
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Always
+  - target:
       kind: Pod
+    patch: |-
+      - op: replace
+        path: /spec/containers/0/imagePullPolicy
+        value: Always

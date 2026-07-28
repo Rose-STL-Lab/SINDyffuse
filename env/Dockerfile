@@ -1,7 +1,7 @@
 FROM nvidia/cuda:13.1.2-cudnn-runtime-ubuntu24.04
 
 LABEL org.opencontainers.image.source=https://github.com/Rose-STL-Lab/SINDyffuse
-LABEL org.opencontainers.image.description="SINDyffuse: diffusion + SINDy + Nimble/OpenSim physics"
+LABEL org.opencontainers.image.description="SINDyffuse: diffusion + SINDy + OpenSim physics"
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CONDA_DIR=/opt/conda

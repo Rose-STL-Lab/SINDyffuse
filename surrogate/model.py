@@ -7,8 +7,7 @@ from typing import Any, Dict
 import torch
 import torch.nn as nn
 
-from common.skeleton_config import motion_ndof, muscle_activation_rows, resolve_skeleton
-from nimble.rajagopal_coord_map import RAJAGOPAL_NIMBLE_DOF_NAMES
+from common.skeleton_config import motion_ndof, muscle_activation_rows
 
 
 def _default_input_dim() -> int:
@@ -20,7 +19,7 @@ def _default_output_dim() -> int:
 
 
 class ActivationSurrogate(nn.Module):
-    """Map Rajagopal ``q`` windows ``[B, T, D]`` → activations ``[B, T, M]``."""
+    """Map MinT ``q`` windows ``[B, T, D]`` → activations ``[B, T, M]``."""
 
     def __init__(
         self,

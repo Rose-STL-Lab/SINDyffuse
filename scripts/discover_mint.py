@@ -12,7 +12,7 @@ _REPO = Path(__file__).resolve().parent.parent
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
-from mint.discovery import run_discovery, write_discovery_report
+from osim.discovery import run_discovery, write_discovery_report
 
 
 def main() -> None:

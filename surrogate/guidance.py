@@ -85,9 +85,7 @@ def load_activation_surrogate_guidance(
         import numpy as np
 
         from common.paths import motion_cache_dir
-        from common.skeleton_config import resolve_skeleton
-
-        cache = motion_cache_dir(data_root, skeleton=resolve_skeleton())
+        cache = motion_cache_dir(data_root)
         mean_p, std_p = cache / "Mean.npy", cache / "Std.npy"
         if mean_p.is_file() and std_p.is_file():
             mean_q = torch.from_numpy(np.load(mean_p).astype(np.float32))

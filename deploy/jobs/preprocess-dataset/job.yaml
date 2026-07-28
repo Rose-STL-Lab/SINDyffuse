@@ -1,0 +1,56 @@
+# Apply: kubectl apply -k deploy/jobs/preprocess-dataset
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sindyffuse-preprocess-dataset
+  labels:
+    app: sindyffuse-preprocess-dataset
+spec:
+  parallelism: 128
+  completions: 128
+  completionMode: Indexed
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: sindyffuse-preprocess-dataset
+    spec:
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 300
+      containers:
+      - name: sindyffuse-preprocess-dataset
+        image: sindyffuse:latest
+        imagePullPolicy: IfNotPresent
+        workingDir: /mnt/SINDyffuse
+        env:
+        - name: PREPROCESS_NUM_SHARDS
+          value: "128"
+        - name: MINT_ROOT
+          value: "/mnt/MinT"
+        - name: SMPLH_MODEL_PATH
+          value: "/mnt/models/smplh"
+        - name: MAX_MOTIONS
+          value: "0"
+        - name: SKIP_EXISTING
+          value: "1"
+        - name: SINDYFFUSE_RUN_LOG_ID
+          value: "RUN_LOG_ID_PLACEHOLDER"
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          source deploy/scripts/job-env.sh
+          python scripts/preprocess_mint.py --skip_normalization --num_workers 1
+        resources:
+          limits:
+            memory: 2Gi
+            cpu: "1"
+          requests:
+            memory: 2Gi
+            cpu: "1"
+        volumeMounts:
+        - name: data
+          mountPath: /mnt
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: sindyffuse

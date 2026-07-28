@@ -11,7 +11,6 @@ from common.paths import (
     default_humanml3d_root,
     mint_cache_dir,
     motion_cache_dir,
-    nimble_b3d_dir,
     repo_root,
     resolve_data_root,
     resolve_repo_path,
@@ -24,13 +23,13 @@ PINNED_OUT_DIR_ENV = "SINDYFFUSE_TRAIN_OUT_DIR"
 __all__ = [
     "PINNED_OUT_DIR_ENV",
     "default_config_path",
+    "env_flag",
+    "env_int",
     "new_run_dir",
     "require_mint_cache",
     "require_mint_normalization",
     "require_motion_cache",
     "require_motion_normalization",
-    "require_nimble_b3d",
-    "require_nimble_normalization",
     "require_sindy_checkpoint",
     "require_surrogate_checkpoint",
     "resolve_run_dir",
@@ -51,8 +50,8 @@ def new_run_dir(family: str, *, guidance: str | None = None) -> Path:
         return results_dir() / "activation_surrogate" / "runs" / ts
     if family == "diffusion":
         mode = str(guidance or "").strip().lower()
-        if mode not in {"none", "sindy", "nimble"}:
-            raise ValueError(f"diffusion runs require guidance=none|sindy|nimble, got {guidance!r}")
+        if mode not in {"none", "sindy"}:
+            raise ValueError(f"diffusion runs require guidance=none|sindy, got {guidance!r}")
         return results_dir() / "diffusion" / mode / "runs" / ts
     raise ValueError(f"unknown run family: {family!r}")
 
@@ -81,25 +80,6 @@ def resolve_training_data_root(data_root: str | Path | None) -> str:
     return resolve_data_root(str(data_root).strip() if data_root else None)
 
 
-def require_nimble_b3d(data_root: str | Path) -> Path:
-    cache = nimble_b3d_dir(data_root)
-    if not cache.is_dir():
-        raise FileNotFoundError(
-            f"Nimble B3D cache required at {cache}. Run scripts/preprocess_nimble.py first."
-        )
-    return cache
-
-
-def require_nimble_normalization(data_root: str | Path) -> None:
-    cache = require_nimble_b3d(data_root)
-    mean_path = cache / "Mean.npy"
-    std_path = cache / "Std.npy"
-    if not mean_path.is_file() or not std_path.is_file():
-        raise FileNotFoundError(
-            f"Missing {mean_path} or {std_path}. Run scripts/compute_normalization.py first."
-        )
-
-
 def require_mint_cache(data_root: str | Path) -> Path:
     cache = mint_cache_dir(data_root)
     if not cache.is_dir():
@@ -116,27 +96,16 @@ def require_mint_normalization(data_root: str | Path) -> None:
     if not mean_path.is_file() or not std_path.is_file():
         raise FileNotFoundError(
             f"Missing {mean_path} or {std_path}. "
-            "Run scripts/compute_normalization.py --skeleton mint."
+            "Run scripts/compute_normalization.py."
         )
 
 
-def require_motion_cache(data_root: str | Path, *, skeleton: str | None = None) -> Path:
-    from common.skeleton_config import SkeletonKind, resolve_skeleton
-
-    sk = resolve_skeleton(skeleton)
-    if sk == SkeletonKind.MINT:
-        return require_mint_cache(data_root)
-    return require_nimble_b3d(data_root)
+def require_motion_cache(data_root: str | Path) -> Path:
+    return require_mint_cache(data_root)
 
 
-def require_motion_normalization(data_root: str | Path, *, skeleton: str | None = None) -> None:
-    from common.skeleton_config import SkeletonKind, resolve_skeleton
-
-    sk = resolve_skeleton(skeleton)
-    if sk == SkeletonKind.MINT:
-        require_mint_normalization(data_root)
-    else:
-        require_nimble_normalization(data_root)
+def require_motion_normalization(data_root: str | Path) -> None:
+    require_mint_normalization(data_root)
 
 
 def require_sindy_checkpoint() -> Path:
@@ -177,11 +146,9 @@ def env_flag(name: str, default: bool = False) -> bool:
 
 
 def apply_preprocess_job_env(args) -> None:
-    """Apply Kubernetes job env vars to ``preprocess_nimble.py`` CLI args."""
+    """Apply Kubernetes job env vars to preprocess CLI args."""
     if os.environ.get("PREPROCESS_NUM_SHARDS"):
         args.num_shards = env_int("PREPROCESS_NUM_SHARDS", int(getattr(args, "num_shards", 1)))
-    if os.environ.get("ACTIVATION_METHOD"):
-        args.activation_method = os.environ["ACTIVATION_METHOD"].strip()
     if os.environ.get("MAX_MOTIONS"):
         args.max_motions = env_int("MAX_MOTIONS", 0)
     if "SKIP_EXISTING" in os.environ:

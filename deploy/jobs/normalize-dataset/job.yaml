@@ -1,50 +1,43 @@
-# Apply: kubectl apply -k deploy/jobs/train-sindy
+# Apply: kubectl apply -k deploy/jobs/normalize-dataset
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: sindyffuse-sindy-train
+  name: sindyffuse-normalize-dataset
   labels:
-    app: sindyffuse-sindy-train
+    app: sindyffuse-normalize-dataset
 spec:
   backoffLimit: 0
   template:
     metadata:
       labels:
-        app: sindyffuse-sindy-train
+        app: sindyffuse-normalize-dataset
     spec:
       restartPolicy: Never
+      terminationGracePeriodSeconds: 300
       containers:
-      - name: sindyffuse-sindy
+      - name: sindyffuse-normalize-dataset
         image: sindyffuse:latest
         imagePullPolicy: IfNotPresent
         workingDir: /mnt/SINDyffuse
         env:
-        - name: NPROC_PER_NODE
-          value: "1"
+        - name: SINDYFFUSE_RUN_LOG_ID
+          value: "RUN_LOG_ID_PLACEHOLDER"
         command: ["/bin/bash", "-c"]
         args:
         - |
           source deploy/scripts/job-env.sh
-          python scripts/train_sindy.py --config configs/train_sindy.json --preload
+          python scripts/compute_normalization.py
         resources:
           limits:
-            nvidia.com/gpu: 1
-            memory: 64Gi
-            cpu: "16"
+            memory: 2Gi
+            cpu: "1"
           requests:
-            nvidia.com/gpu: 1
-            memory: 64Gi
-            cpu: "16"
+            memory: 2Gi
+            cpu: "1"
         volumeMounts:
         - name: data
           mountPath: /mnt
-        - name: dshm
-          mountPath: /dev/shm
       volumes:
       - name: data
         persistentVolumeClaim:
           claimName: sindyffuse
-      - name: dshm
-        emptyDir:
-          medium: Memory
-          sizeLimit: 64Gi

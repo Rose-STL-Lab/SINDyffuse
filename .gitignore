@@ -17,8 +17,9 @@ datasets/*
 !datasets/*.py
 
 # Preprocess / OpenSim temp artifacts
-datasets/HumanML3D/nimble_b3d/
 logs/
+eval/tmp/*
+!eval/tmp/.gitkeep
 delete_this_to_stop_optimization__*.txt
 moco_track_segment_*_tracked_states.sto
 sindyffuse_so_*/

@@ -37,7 +37,7 @@ from common.distributed import (
     wrap_ddp,
 )
 from common.io import load_json, save_json
-from common.paths import diffusion_latest_link, nimble_b3d_dir, resolve_data_root, resolve_repo_path, update_latest_symlink
+from common.paths import diffusion_latest_link, mint_cache_dir, resolve_data_root, resolve_repo_path, update_latest_symlink
 from common.run_setup import (
     default_config_path,
     require_motion_cache,
@@ -54,7 +54,6 @@ from diffusion.config import GuidanceMode
 from diffusion.workers import num_workers
 from diffusion.registry import get_dataset
 from diffusion.model import DiffusionTransformer, GaussianDiffusionSchedule
-from nimble.guidance import build_nimble_guidance
 from sindy.guidance import LearnedSINDyGuidance
 
 
@@ -82,15 +81,8 @@ def _prepare_diffusion_config(
     else:
         data_cfg["data_root"] = resolve_training_data_root(data_cfg.get("data_root"))
 
-    from common.skeleton_config import SkeletonKind, resolve_skeleton
-
-    sk = resolve_skeleton(data_cfg.get("skeleton"))
-    if str(data_cfg.get("dataset", "")).strip().lower() == "mint" or sk == SkeletonKind.MINT:
-        data_cfg["dataset"] = "mint"
-        data_cfg.setdefault("skeleton", "mint")
-    else:
-        data_cfg.setdefault("dataset", "nimble")
-        data_cfg.setdefault("skeleton", "rajagopal")
+    data_cfg["dataset"] = "mint"
+    data_cfg.setdefault("skeleton", "mint")
     for key in ("sindy_checkpoint_dir", "surrogate_checkpoint_dir"):
         raw = str(train_cfg.get(key, "")).strip()
         if raw:
@@ -101,9 +93,8 @@ def _prepare_diffusion_config(
 def _validate_diffusion_inputs(cfg: dict) -> GuidanceMode:
     data_cfg = cfg.get("data", {}) or {}
     data_root = resolve_data_root(data_cfg.get("data_root"))
-    skeleton = str(data_cfg.get("skeleton", "")).strip()
-    require_motion_cache(data_root, skeleton=skeleton or None)
-    require_motion_normalization(data_root, skeleton=skeleton or None)
+    require_motion_cache(data_root)
+    require_motion_normalization(data_root)
     mode = GuidanceMode(str(cfg.get("train", {}).get("guidance", "sindy")).strip().lower())
     if mode == GuidanceMode.SINDY:
         require_sindy_checkpoint()
@@ -114,14 +105,6 @@ def _validate_diffusion_inputs(cfg: dict) -> GuidanceMode:
 def train(config_path: str, out_dir: str, *, preload: bool = False) -> None:
     cfg = load_json(config_path)
     dist_cfg = cfg.get("distributed") if isinstance(cfg.get("distributed"), dict) else {}
-    _g_pre = str((cfg.get("train") or {}).get("guidance", "")).strip().lower()
-    if _g_pre == "nimble" and int(np.__version__.split(".", maxsplit=1)[0]) >= 2:
-        get_run_logger().progress(
-            f"ERROR: numpy {np.__version__} is incompatible with nimblephysics marker IK "
-            f"(segfault). Rebuild conda env: conda env update -n sindyffuse -f environment.yaml --prune"
-        )
-        sys.exit(1)
-
     use_ddp = init_distributed(distributed_cfg=dist_cfg)
     if not use_ddp:
         log_gpu_diagnostics()
@@ -130,20 +113,12 @@ def train(config_path: str, out_dir: str, *, preload: bool = False) -> None:
     model_cfg = cfg.get("model", {})
     train_cfg = cfg.get("train", {})
 
-    dataset_name = str(data_cfg.get("dataset", "nimble"))
+    dataset_name = "mint"
     data_root = resolve_data_root(data_cfg.get("data_root"))
-    from common.skeleton_config import SkeletonKind, resolve_skeleton
-    from common.paths import mint_cache_dir, nimble_b3d_dir
-
-    sk = resolve_skeleton(data_cfg.get("skeleton"))
-    if dataset_name.lower() == "mint" or sk == SkeletonKind.MINT:
-        dataset_name = "mint"
-        cache = mint_cache_dir(data_root)
-    else:
-        cache = nimble_b3d_dir(data_root)
+    cache = mint_cache_dir(data_root)
     if not cache.is_dir():
         raise FileNotFoundError(
-            f"Motion cache required at {cache}. Run preprocess_mint.py or preprocess_nimble.py first."
+            f"Motion cache required at {cache}. Run preprocess_mint.py first."
         )
     _preload = bool(preload or data_cfg.get("preload", False))
     train_ds = get_dataset(
@@ -222,16 +197,11 @@ def train(config_path: str, out_dir: str, *, preload: bool = False) -> None:
     _g = str(train_cfg.get("guidance", "sindy")).strip().lower()
     guidance_mode = GuidanceMode(_g)
     lambda_sindy = float(train_cfg.get("lambda_sindy", 0.1))
-    lambda_nimble = float(train_cfg.get("lambda_nimble", 0.1))
-    nimble_cfg = train_cfg.get("nimble_guidance") or {}
-    if not isinstance(nimble_cfg, dict):
-        nimble_cfg = {}
     sindy_dir_raw = str(train_cfg.get("sindy_checkpoint_dir", "")).strip()
     sindy_dir = str(resolve_repo_path(sindy_dir_raw)) if sindy_dir_raw else ""
     surrogate_dir_raw = str(train_cfg.get("surrogate_checkpoint_dir", "")).strip()
     surrogate_dir = str(resolve_repo_path(surrogate_dir_raw)) if surrogate_dir_raw else ""
     sindy_guidance = None
-    nimble_guidance = None
     if guidance_mode == GuidanceMode.SINDY:
         if not sindy_dir:
             raise ValueError("Default guidance=sindy requires train.sindy_checkpoint_dir")
@@ -243,14 +213,6 @@ def train(config_path: str, out_dir: str, *, preload: bool = False) -> None:
             fps=float(data_cfg.get("fps", 20.0)),
             clip_model_name=clip_model_name,
             surrogate_checkpoint=surrogate_dir,
-            skeleton=str(data_cfg.get("skeleton", "")),
-        )
-    elif guidance_mode == GuidanceMode.NIMBLE:
-        nimble_guidance = build_nimble_guidance(
-            data_root=data_root,
-            fps=float(data_cfg.get("fps", 20.0)),
-            nimble_cfg=nimble_cfg if isinstance(nimble_cfg, dict) else {},
-            window_frames=int(data_cfg.get("window_size", 64)),
         )
 
     log_main(
@@ -261,14 +223,6 @@ def train(config_path: str, out_dir: str, *, preload: bool = False) -> None:
     )
     if guidance_mode == GuidanceMode.SINDY:
         log_main(f"[train] lambda_sindy={lambda_sindy} sindy_dir={sindy_dir!r} surrogate_dir={surrogate_dir!r}")
-    if guidance_mode == GuidanceMode.NIMBLE:
-        log_main(
-            f"[train] lambda_nimble={lambda_nimble} "
-            f"nimble.time_reduce={nimble_guidance.nimble_settings.time_reduce if nimble_guidance else 'n/a'} "
-            f"nimble.robust={nimble_guidance.nimble_settings.robust if nimble_guidance else 'n/a'} "
-            f"nimble.t_weight={nimble_guidance.nimble_settings.t_weight_schedule if nimble_guidance else 'n/a'} "
-            f"nimble.max_frames={nimble_guidance.nimble_settings.max_physics_frames if nimble_guidance else 'n/a'}"
-        )
 
     out = Path(out_dir)
     if is_main_process():
@@ -317,10 +271,6 @@ def train(config_path: str, out_dir: str, *, preload: bool = False) -> None:
                     x0_pred, captions=text_in, device=device
                 )
                 loss_guidance = float(lambda_sindy) * raw_guide
-            elif guidance_mode == GuidanceMode.NIMBLE and nimble_guidance is not None:
-                raw_guide, guide_stats = nimble_guidance.loss_and_stats(x0_pred)
-                t_weight = nimble_guidance.guidance_weight(t=t, total_timesteps=int(sched.timesteps))
-                loss_guidance = float(lambda_nimble) * t_weight * raw_guide
 
             loss = loss_diff + loss_guidance
             opt.zero_grad(set_to_none=True)
@@ -340,16 +290,6 @@ def train(config_path: str, out_dir: str, *, preload: bool = False) -> None:
                         f" sindy_bio={guide_stats.get('sindy_bio_mse', 0.0):.4f}"
                         f" sindy_muscle={guide_stats.get('sindy_muscle_mse', 0.0):.4f}"
                         f" guide_scalar={guide_stats.get('sindy_guidance_scalar', 0.0):.4f}"
-                    )
-                if guidance_mode == GuidanceMode.NIMBLE and guide_stats:
-                    msg += (
-                        f" nimble_vel={guide_stats.get('nimble_vel', 0.0):.4f}"
-                        f" nimble_acc={guide_stats.get('nimble_acc', 0.0):.4f}"
-                        f" nimble_tau={guide_stats.get('nimble_torque', 0.0):.4f}"
-                        f" nimble_jerk={guide_stats.get('nimble_jerk', 0.0):.4f}"
-                        f" nimble_eff={guide_stats.get('nimble_effort', 0.0):.4f}"
-                        f" nimble_contact_gap={guide_stats.get('nimble_contact_gap', 0.0):.4f}"
-                        f" guide_scalar={guide_stats.get('nimble_guidance_scalar', 0.0):.4f}"
                     )
                 get_run_logger().progress(msg)
             if step % save_every == 0 and is_main_process():
@@ -390,7 +330,7 @@ def main() -> None:
     parser.add_argument(
         "--guidance",
         default="",
-        choices=["", "none", "sindy", "nimble"],
+        choices=["", "none", "sindy"],
         help="Override train.guidance from config",
     )
     parser.add_argument(
@@ -401,7 +341,7 @@ def main() -> None:
     parser.add_argument(
         "--preload",
         action="store_true",
-        help="Load q trajectories into RAM before training (default: read B3D on demand)",
+        help="Load q trajectories into RAM before training (default: read NPZ on demand)",
     )
     add_run_log_cli_args(parser)
     args = parser.parse_args()

@@ -2,17 +2,15 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: sindyffuse-diffusion-train-sindy
+  name: sindyffuse-diffusion-sindy
   labels:
-    app: sindyffuse-diffusion-train-sindy
-    guidance: sindy
+    app: sindyffuse-diffusion-sindy
 spec:
   backoffLimit: 0
   template:
     metadata:
       labels:
-        app: sindyffuse-diffusion-train-sindy
-        guidance: sindy
+        app: sindyffuse-diffusion-sindy
     spec:
       restartPolicy: Never
       containers:
@@ -27,7 +25,7 @@ spec:
         args:
         - |
           source deploy/scripts/job-env.sh
-          python scripts/train_diffusion.py --guidance sindy --preload
+          python scripts/train_diffusion.py --config configs/train_diffusion.json --preload
         resources:
           limits:
             nvidia.com/gpu: 1

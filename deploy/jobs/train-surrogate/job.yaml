@@ -25,7 +25,7 @@ spec:
         args:
         - |
           source deploy/scripts/job-env.sh
-          python scripts/train_surrogate.py
+          python scripts/train_surrogate.py --config configs/train_surrogate.json
         resources:
           limits:
             nvidia.com/gpu: 1

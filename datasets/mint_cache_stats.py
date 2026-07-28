@@ -11,7 +11,7 @@ import numpy as np
 from common.paths import mint_cache_dir
 from common.skeleton_config import DEFAULT_FPS
 from datasets.splits import load_split_ids
-from mint.cache_schema import KEY_Q, load_cache_metadata, write_cache_metadata
+from osim.cache_schema import KEY_Q, load_cache_metadata, write_cache_metadata
 
 
 def compute_mint_normalization_stats(

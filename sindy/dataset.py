@@ -11,7 +11,6 @@ from sklearn.preprocessing import StandardScaler
 from torch.utils.data import Dataset
 
 from sindy.library import ThetaLibrary, ThetaSpec
-from common.skeleton_config import SkeletonKind, resolve_skeleton
 from sindy.windows import SindyWindowIndex, compute_window_arrays, fit_window_scalers, make_theta_spec
 
 
@@ -57,7 +56,7 @@ class SindyWindowDataset(Dataset):
     def __getitem__(self, idx: int) -> dict:
         entry = self.index.entries[int(idx)]
         u, c, y, _, _ = compute_window_arrays(
-            entry.b3d_path,
+            entry.cache_path,
             entry.start_frame,
             self.window_size,
             fps=self.fps,
@@ -95,34 +94,21 @@ def prepare_lazy_sindy_data(
     log_every: int = 50,
     skip_zero_placeholders: bool = True,
     zero_atol: float = 1e-8,
-    skeleton: str | None = None,
 ) -> Tuple[SindyWindowIndex, StandardScaler, StandardScaler, List[str], List[str], List[str], int, ThetaSpec]:
     """Build window index and fit scalers with a single streaming pass."""
-    sk = resolve_skeleton(skeleton)
-    if sk == SkeletonKind.MINT:
-        index = SindyWindowIndex.build_mint(
-            data_root,
-            split,
-            window_size=window_size,
-            window_stride=window_stride,
-            max_samples=max_samples,
-            skip_zero_placeholders=skip_zero_placeholders,
-            zero_atol=zero_atol,
-        )
-    else:
-        index = SindyWindowIndex.build(
-            data_root,
-            split,
-            window_size=window_size,
-            window_stride=window_stride,
-            max_samples=max_samples,
-            skip_zero_placeholders=skip_zero_placeholders,
-            zero_atol=zero_atol,
-        )
+    index = SindyWindowIndex.build(
+        data_root,
+        split,
+        window_size=window_size,
+        window_stride=window_stride,
+        max_samples=max_samples,
+        skip_zero_placeholders=skip_zero_placeholders,
+        zero_atol=zero_atol,
+    )
     print(f"[sindy/data] lazy mode: {len(index.entries)} windows indexed", flush=True)
     first = index.entries[0]
     _u, _c, _y, u_names, c_names = compute_window_arrays(
-        first.b3d_path,
+        first.cache_path,
         first.start_frame,
         window_size,
         fps=fps,
