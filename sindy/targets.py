@@ -28,7 +28,7 @@ def muscle_channel_names() -> Tuple[str, ...]:
 
 @lru_cache(maxsize=1)
 def sindy_target_keys() -> Tuple[str, ...]:
-    """All SINDy target channel names: 23 bio + 80 muscle."""
+    """All SINDy target channel names: L_bio + 80 muscle."""
     return tuple(BIOMECH_COMPONENT_KEYS) + muscle_channel_names()
 
 
@@ -84,7 +84,7 @@ def targets_for_theta(bio: np.ndarray) -> np.ndarray:
 
 
 def build_sindy_targets(bio: np.ndarray, activations: np.ndarray) -> np.ndarray:
-    """Concat bio ``[T, 23]`` and muscle activations ``[T, 80]`` → ``[T-1, 103]``."""
+    """Concat bio ``[T, C_bio]`` and muscle activations ``[T, 80]`` → ``[T-1, C_bio+80]``."""
     bio_arr = np.asarray(bio, dtype=np.float32)
     act_arr = np.asarray(activations, dtype=np.float32)
     if bio_arr.ndim != 2 or bio_arr.shape[1] != N_BIO_TARGETS:

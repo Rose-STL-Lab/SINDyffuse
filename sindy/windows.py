@@ -172,16 +172,6 @@ def compute_window_arrays(
         if compute_bio:
             bio = read_guidance_features_frames(subj, trial, int(start_frame), int(window_size))
             act = read_muscle_activations_frames(subj, trial, int(start_frame), int(window_size))
-            # #region agent log
-            if bio.shape[0] != act.shape[0]:
-                import json, time
-                _log = {"sessionId": "69d422", "runId": "pre-fix", "hypothesisId": "H1", "location": "sindy/windows.py:compute_window_arrays", "message": "bio/act length mismatch before build_sindy_targets", "data": {"b3d_path": str(b3d_path), "start_frame": int(start_frame), "window_size": int(window_size), "bio_shape": list(bio.shape), "act_shape": list(act.shape), "u_shape": list(u.shape), "c_shape": list(c.shape)}, "timestamp": int(time.time() * 1000)}
-                try:
-                    with open("/mnt/.cursor/debug-69d422.log", "a") as _f:
-                        _f.write(json.dumps(_log) + "\n")
-                except Exception:
-                    pass
-            # #endregion
             y = build_sindy_targets(bio, act)
         else:
             y = np.zeros((max(0, window_size - 1), N_SINDY_TARGETS), dtype=np.float32)

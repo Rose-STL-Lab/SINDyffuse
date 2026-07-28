@@ -8,26 +8,18 @@ import numpy as np
 import torch
 
 from nimble.contact import estimate_contact_from_feet
+from nimble.dof_groups import LIMIT_GROUP_SPECS, SYMMETRY_PAIRS
+from nimble.inverse_dynamics import (
+    id_group_norms,
+    id_power_total,
+    id_symmetry_scalars,
+    joint_torques_torch,
+)
 from nimble.ops import finite_diff, safe_norm
 from nimble.rajagopal_kin import COM_KEYPOINT_INDICES, IDX_FOOT_L, IDX_FOOT_R
 
-# All channels in L_bio (each is a per-frame magnitude / penalty scalar).
-BIOMECH_COMPONENT_KEYS: Tuple[str, ...] = (
-    # DOF (Rajagopal q)
-    "vel",
-    "acc",
-    "torque",
-    "torque_rate",
-    "jerk",
-    "effort",
-    "joint_limit",
-    "kinetic_q",
-    "torque_power",
-    # CoM (pose kinematics)
-    "com_speed",
-    "com_acc",
-    "com_jerk",
-    # Contact / GRF (pose + foot FK from q)
+# L_bio v2: biomechanics + gait (40 channels). Schema version 2 in B3D metadata.
+CONTACT_CHANNEL_KEYS: Tuple[str, ...] = (
     "contact_gap",
     "contact_wrench",
     "grf_left",
@@ -35,18 +27,66 @@ BIOMECH_COMPONENT_KEYS: Tuple[str, ...] = (
     "grf_vertical",
     "grf_weight_deficit",
     "foot_slip",
-    # Pose-space proxies
-    "pose_vel",
-    "pose_acc",
-    "ang_momentum",
 )
 
+ID_CHANNEL_KEYS: Tuple[str, ...] = (
+    "id_pelvis",
+    "id_hip_r",
+    "id_leg_r",
+    "id_hip_l",
+    "id_leg_l",
+    "id_lumbar",
+    "id_arm_r",
+    "id_arm_l",
+)
+
+LIMIT_CHANNEL_KEYS: Tuple[str, ...] = tuple(name for name, _ in LIMIT_GROUP_SPECS)
+
+GAIT_CHANNEL_KEYS: Tuple[str, ...] = (
+    "sym_hip_flex",
+    "sym_hip_add",
+    "sym_hip_rot",
+    "sym_knee",
+    "sym_ankle",
+    "sym_mtp",
+    "foot_clearance_l",
+    "foot_clearance_r",
+)
+
+DERIVED_CHANNEL_KEYS: Tuple[str, ...] = (
+    "id_power_total",
+    "id_sym_hip",
+    "id_sym_knee",
+    "id_sym_ankle",
+    "grf_asymmetry",
+    "contact_power",
+    "limit_margin_min",
+    "support_width",
+)
+
+BIOMECH_COMPONENT_KEYS: Tuple[str, ...] = (
+    CONTACT_CHANNEL_KEYS
+    + ID_CHANNEL_KEYS
+    + LIMIT_CHANNEL_KEYS
+    + GAIT_CHANNEL_KEYS
+    + DERIVED_CHANNEL_KEYS
+)
+
+L_BIO_SCHEMA_VERSION = 2
+
 DEFAULT_BIOMECH_WEIGHT: float = 0.05
+DEFAULT_ID_BIOMECH_WEIGHT: float = 0.02
 
 
 def default_biomech_weights(override: float | None = None) -> Dict[str, float]:
     w = float(DEFAULT_BIOMECH_WEIGHT if override is None else override)
-    return {k: w for k in BIOMECH_COMPONENT_KEYS}
+    out = {k: w for k in BIOMECH_COMPONENT_KEYS}
+    for key in ID_CHANNEL_KEYS:
+        out[key] = float(DEFAULT_ID_BIOMECH_WEIGHT)
+    for key in DERIVED_CHANNEL_KEYS:
+        if key.startswith("id_"):
+            out[key] = float(DEFAULT_ID_BIOMECH_WEIGHT)
+    return out
 
 
 def weight_config_key(component: str) -> str:
@@ -125,6 +165,57 @@ def _sigmoid_gate(x: torch.Tensor, center: float, sharpness: float) -> torch.Ten
     return torch.sigmoid((float(center) - x) * float(sharpness))
 
 
+def build_limit_channels(
+    fq: torch.Tensor,
+    q_lo: np.ndarray,
+    q_hi: np.ndarray,
+) -> Dict[str, torch.Tensor]:
+    """Grouped joint-limit violation magnitudes ``[T, 1]`` (9 channels)."""
+    lo = torch.as_tensor(q_lo, dtype=fq.dtype, device=fq.device).view(1, -1)
+    hi = torch.as_tensor(q_hi, dtype=fq.dtype, device=fq.device).view(1, -1)
+    out: Dict[str, torch.Tensor] = {}
+    for name, sl in LIMIT_GROUP_SPECS:
+        chunk = fq[:, sl]
+        lo_g = lo[:, sl]
+        hi_g = hi[:, sl]
+        over = torch.relu(chunk - hi_g) + torch.relu(lo_g - chunk)
+        out[name] = safe_norm(over, dim=1)
+    return out
+
+
+def limit_margin_min_scalar(
+    fq: torch.Tensor,
+    q_lo: np.ndarray,
+    q_hi: np.ndarray,
+) -> torch.Tensor:
+    """Minimum distance to any joint limit ``[T, 1]``."""
+    lo = torch.as_tensor(q_lo, dtype=fq.dtype, device=fq.device).view(1, -1)
+    hi = torch.as_tensor(q_hi, dtype=fq.dtype, device=fq.device).view(1, -1)
+    margin_lo = fq - lo
+    margin_hi = hi - fq
+    margin = torch.minimum(margin_lo, margin_hi)
+    return margin.min(dim=1, keepdim=True).values
+
+
+def build_symmetry_channels(fq: torch.Tensor) -> Dict[str, torch.Tensor]:
+    """Left-right joint angle symmetry ``[T, 1]`` (6 channels)."""
+    out: Dict[str, torch.Tensor] = {}
+    for name, idx_l, idx_r in SYMMETRY_PAIRS:
+        out[name] = torch.abs(fq[:, idx_l : idx_l + 1] - fq[:, idx_r : idx_r + 1])
+    return out
+
+
+def build_clearance_channels(keypoints: torch.Tensor) -> Dict[str, torch.Tensor]:
+    """Swing-foot clearance above ground ``[T, 1]`` (2 channels)."""
+    foot_left = keypoints[:, IDX_FOOT_L, :]
+    foot_right = keypoints[:, IDX_FOOT_R, :]
+    ground_y = torch.minimum(foot_left[:, 1], foot_right[:, 1]).min()
+    return {
+        "foot_clearance_l": (foot_left[:, 1:2] - ground_y).clamp(min=0.0),
+        "foot_clearance_r": (foot_right[:, 1:2] - ground_y).clamp(min=0.0),
+    }
+
+
 def _estimate_grf_lr_torch(
     foot_left: torch.Tensor,
     foot_right: torch.Tensor,
@@ -136,7 +227,7 @@ def _estimate_grf_lr_torch(
     speed_thresh_mps: float,
     dt: float,
     gate_sharpness: float = 15.0,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     left_vel = finite_diff(foot_left, float(dt))
     right_vel = finite_diff(foot_right, float(dt))
     ground_y = torch.minimum(foot_left[:, 1], foot_right[:, 1]).min()
@@ -150,31 +241,30 @@ def _estimate_grf_lr_torch(
     r_con = _sigmoid_gate(right_h, height_thresh_m, gate_sharpness) * _sigmoid_gate(
         right_spd, speed_thresh_mps, gate_sharpness
     )
+    contact_lr = torch.stack([l_con, r_con], dim=1)
     any_c = torch.clamp(l_con + r_con, max=1.0).unsqueeze(1)
     g_vec = torch.tensor([0.0, -float(g_mps2), 0.0], dtype=foot_left.dtype, device=foot_left.device)
     f_total = float(mass_kg) * (com_acc - g_vec.view(1, 3))
     f_total = f_total * any_c
     f_y = torch.relu(f_total[:, 1:2])
     f_total = torch.cat([f_total[:, 0:1], f_y, f_total[:, 2:3]], dim=1)
-    denom = torch.clamp(l_con.unsqueeze(1) + r_con.unsqueeze(1), min=1e-3)
-    f_l = f_total * l_con.unsqueeze(1) / denom
-    f_r = f_total * r_con.unsqueeze(1) / denom
-    return f_l, f_r, f_total[:, 1:2]
+    denom = torch.clamp(contact_lr.sum(dim=1, keepdim=True), min=1e-3)
+    f_l = f_total * contact_lr[:, 0:1] / denom
+    f_r = f_total * contact_lr[:, 1:2] / denom
+    return f_l, f_r, f_total[:, 1:2], contact_lr, left_vel, right_vel
 
 
-def build_channels(
+def build_contact_channels(
     keypoints: torch.Tensor,
     fq: torch.Tensor,
     *,
     sk: Any,
     foot_indices: Tuple[int, int],
-    q_lo: np.ndarray,
-    q_hi: np.ndarray,
     dt: float,
     guidance_cfg: Any,
     use_torch_fk: bool = False,
 ) -> Dict[str, torch.Tensor]:
-    """Differentiable biomechanical scalars ``[T, 1]`` from Rajagopal keypoints and ``q``."""
+    """Contact / GRF biomechanics ``[T, 1]`` (7 channels)."""
     mass_kg = float(guidance_cfg.mass_kg)
     g_mps2 = float(guidance_cfg.g_mps2)
     h_thresh = float(guidance_cfg.contact_height_thresh_m)
@@ -182,32 +272,10 @@ def build_channels(
     gate_sharp = float(getattr(guidance_cfg, "contact_gate_sharpness", 15.0))
     mg = float(mass_kg * g_mps2)
 
-    qdot = finite_diff(fq, dt)
-    qddot = finite_diff(qdot, dt)
-    torque_vec = finite_diff(qddot, dt)
-    torque_rate_vec = finite_diff(torque_vec, dt)
-
-    vel = safe_norm(qdot)
-    acc = safe_norm(qddot)
-    torque = safe_norm(torque_vec)
-    torque_rate = safe_norm(torque_rate_vec)
-    jerk = safe_norm(finite_diff(torque_vec, dt))
-    effort = torch.abs(torque_vec).sum(dim=1, keepdim=True)
-    kinetic_q = 0.5 * (qdot * qdot).sum(dim=1, keepdim=True)
-    torque_power = torch.abs((torque_vec * qdot).sum(dim=1, keepdim=True))
-
-    lo = torch.as_tensor(q_lo, dtype=fq.dtype, device=fq.device).view(1, -1)
-    hi = torch.as_tensor(q_hi, dtype=fq.dtype, device=fq.device).view(1, -1)
-    over = torch.relu(fq - hi) + torch.relu(lo - fq)
-    joint_limit = safe_norm(over, dim=1)
-
     com_idx = list(COM_KEYPOINT_INDICES)
     com_pos = keypoints[:, com_idx, :].mean(dim=1)
     com_vel = finite_diff(com_pos, dt)
     com_acc = finite_diff(com_vel, dt)
-    com_speed = safe_norm(com_vel, dim=1)
-    com_acc_l2 = safe_norm(com_acc, dim=1)
-    com_jerk = safe_norm(finite_diff(com_acc, dt), dim=1)
 
     foot_left = keypoints[:, IDX_FOOT_L, :]
     foot_right = keypoints[:, IDX_FOOT_R, :]
@@ -226,7 +294,7 @@ def build_channels(
     kin_gap = 1.0 - contact_feats["inferred_contact_active_lr"][:, :2].mean(dim=1, keepdim=True)
 
     foot_l, foot_r = _foot_positions_torch(sk, foot_indices, fq, use_torch_fk=use_torch_fk)
-    f_l, f_r, f_vert = _estimate_grf_lr_torch(
+    f_l, f_r, f_vert, contact_lr, left_vel, right_vel = _estimate_grf_lr_torch(
         foot_l,
         foot_r,
         com_acc,
@@ -239,45 +307,134 @@ def build_channels(
     )
     grf_left = safe_norm(f_l, dim=1)
     grf_right = safe_norm(f_r, dim=1)
-    grf_vertical = f_vert
-    grf_weight_deficit = torch.abs(grf_vertical - mg)
+    grf_weight_deficit = torch.abs(f_vert - mg)
     physics_gap = 1.0 - torch.clamp((grf_left + grf_right) / max(0.03 * mg, 1e-3), min=0.0, max=1.0)
     contact_gap = 0.5 * (kin_gap + physics_gap)
-
-    left_vel = finite_diff(foot_l, float(dt))
-    right_vel = finite_diff(foot_r, float(dt))
     foot_slip = contact_feats["inferred_contact_active_lr"][:, 0:1] * torch.linalg.norm(
         left_vel[:, [0, 2]], dim=1, keepdim=True
     ) + contact_feats["inferred_contact_active_lr"][:, 1:2] * torch.linalg.norm(
         right_vel[:, [0, 2]], dim=1, keepdim=True
     )
 
-    flat = keypoints.reshape(int(keypoints.shape[0]), -1)
-    pose_vel = safe_norm(finite_diff(flat, dt))
-    pose_acc = safe_norm(finite_diff(finite_diff(flat, dt), dt))
-    ang_momentum = safe_norm(flat * finite_diff(flat, dt), dim=1)
-
     return {
-        "vel": vel,
-        "acc": acc,
-        "torque": torque,
-        "torque_rate": torque_rate,
-        "jerk": jerk,
-        "effort": effort,
-        "joint_limit": joint_limit,
-        "kinetic_q": kinetic_q,
-        "torque_power": torque_power,
-        "com_speed": com_speed,
-        "com_acc": com_acc_l2,
-        "com_jerk": com_jerk,
         "contact_gap": contact_gap,
         "contact_wrench": contact_wrench,
         "grf_left": grf_left,
         "grf_right": grf_right,
-        "grf_vertical": grf_vertical,
+        "grf_vertical": f_vert,
         "grf_weight_deficit": grf_weight_deficit,
         "foot_slip": foot_slip,
-        "pose_vel": pose_vel,
-        "pose_acc": pose_acc,
-        "ang_momentum": ang_momentum,
+        "_f_l": f_l,
+        "_f_r": f_r,
+        "_contact_lr": contact_lr,
+        "_left_vel": left_vel,
+        "_right_vel": right_vel,
     }
+
+
+def build_id_channels(
+    fq: torch.Tensor,
+    *,
+    sk: Any,
+    foot_indices: Tuple[int, int],
+    dt: float,
+) -> Tuple[Dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
+    """ID group torque norms (8 channels) plus raw ``tau`` and ``qdot`` for derived features."""
+    tau, qdot = joint_torques_torch(fq, sk=sk, foot_indices=foot_indices, dt=float(dt))
+    out = id_group_norms(tau)
+    return out, tau, qdot
+
+
+def build_derived_channels(
+    *,
+    tau: torch.Tensor,
+    qdot: torch.Tensor,
+    contact: Dict[str, torch.Tensor],
+    fq: torch.Tensor,
+    q_lo: np.ndarray,
+    q_hi: np.ndarray,
+    foot_l: torch.Tensor,
+    foot_r: torch.Tensor,
+) -> Dict[str, torch.Tensor]:
+    """Derived biomechanics/gait scalars (8 channels)."""
+    f_l = contact["_f_l"]
+    f_r = contact["_f_r"]
+    contact_lr = contact["_contact_lr"]
+    left_vel = contact["_left_vel"]
+    right_vel = contact["_right_vel"]
+
+    grf_left = contact["grf_left"]
+    grf_right = contact["grf_right"]
+    denom = grf_left + grf_right + 1e-3
+    grf_asymmetry = torch.abs(grf_left - grf_right) / denom
+
+    contact_power = (
+        contact_lr[:, 0:1]
+        * (f_l * left_vel).sum(dim=1, keepdim=True).clamp(min=0.0)
+        + contact_lr[:, 1:2] * (f_r * right_vel).sum(dim=1, keepdim=True).clamp(min=0.0)
+    )
+
+    double_support = (contact_lr[:, 0] > 0.5) & (contact_lr[:, 1] > 0.5)
+    lateral_sep = torch.linalg.norm(foot_l[:, [0, 2]] - foot_r[:, [0, 2]], dim=1, keepdim=True)
+    support_width = lateral_sep * double_support.unsqueeze(1).to(lateral_sep.dtype)
+
+    out: Dict[str, torch.Tensor] = {
+        "id_power_total": id_power_total(tau, qdot),
+        "grf_asymmetry": grf_asymmetry,
+        "contact_power": contact_power,
+        "limit_margin_min": limit_margin_min_scalar(fq, q_lo, q_hi),
+        "support_width": support_width,
+    }
+    out.update(id_symmetry_scalars(tau))
+    return out
+
+
+def build_channels(
+    keypoints: torch.Tensor,
+    fq: torch.Tensor,
+    *,
+    sk: Any,
+    foot_indices: Tuple[int, int],
+    q_lo: np.ndarray,
+    q_hi: np.ndarray,
+    dt: float,
+    guidance_cfg: Any,
+    use_torch_fk: bool = False,
+) -> Dict[str, torch.Tensor]:
+    """All L_bio biomechanical scalars ``[T, 1]`` (40 channels)."""
+    contact = build_contact_channels(
+        keypoints,
+        fq,
+        sk=sk,
+        foot_indices=foot_indices,
+        dt=float(dt),
+        guidance_cfg=guidance_cfg,
+        use_torch_fk=use_torch_fk,
+    )
+    foot_l, foot_r = _foot_positions_torch(sk, foot_indices, fq, use_torch_fk=use_torch_fk)
+
+    out: Dict[str, torch.Tensor] = {}
+    for key in CONTACT_CHANNEL_KEYS:
+        out[key] = contact[key]
+
+    id_out, tau, qdot = build_id_channels(
+        fq, sk=sk, foot_indices=foot_indices, dt=float(dt)
+    )
+    out.update(id_out)
+    out.update(build_limit_channels(fq, q_lo, q_hi))
+    out.update(build_symmetry_channels(fq))
+    out.update(build_clearance_channels(keypoints))
+    out.update(
+        build_derived_channels(
+            tau=tau,
+            qdot=qdot,
+            contact=contact,
+            fq=fq,
+            q_lo=q_lo,
+            q_hi=q_hi,
+            foot_l=foot_l,
+            foot_r=foot_r,
+        )
+    )
+
+    return {k: out[k] for k in BIOMECH_COMPONENT_KEYS}

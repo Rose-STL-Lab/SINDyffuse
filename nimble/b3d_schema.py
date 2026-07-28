@@ -7,7 +7,7 @@ from typing import List, Tuple
 
 import numpy as np
 
-from nimble.channels import BIOMECH_COMPONENT_KEYS
+from nimble.channels import BIOMECH_COMPONENT_KEYS, L_BIO_SCHEMA_VERSION
 from nimble.muscle_b3d import (
     MUSCLE_ACTIVATION_ROWS,
     pack_muscle_activations,
@@ -268,6 +268,7 @@ def metadata_custom_values_block() -> dict:
         },
         GUIDANCE_FEATURES: {
             "rows": GUIDANCE_FEATURE_ROWS,
+            "l_bio_schema_version": int(L_BIO_SCHEMA_VERSION),
             "channel_order": list(BIOMECH_COMPONENT_KEYS),
         },
         SINDY_FEATURES: {

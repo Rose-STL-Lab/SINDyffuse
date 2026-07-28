@@ -112,7 +112,7 @@ def prepare_lazy_sindy_data(
         first.start_frame,
         window_size,
         fps=fps,
-    )[:4]
+    )
     spec = make_theta_spec(theta_tier, include_u, include_c, u_names)
     index, theta_scaler, y_scaler, u_names, c_names, feature_names, target_dim = fit_window_scalers(
         index,

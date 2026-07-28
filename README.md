@@ -4,7 +4,7 @@ Text-conditioned human motion diffusion with **SINDy** biomechanics targets and 
 
 HumanML3D joint trajectories are retargeted to the Rajagopal 2015 musculoskeletal model, cached as Nimble B3D files, and used to train:
 
-1. **SINDy** — text → sparse coefficients for **103 targets** (23 L_bio + 80 muscle activations)  
+1. **SINDy** — text → sparse coefficients for **120 targets** (40 L_bio + 80 muscle activations)  
 2. **Activation surrogate** — fast `q` → 80 muscle activations (OpenSim labels at preprocess)  
 3. **Diffusion** — text → motion with SINDy guidance (`loss_diff + lambda_sindy * loss_sindy`)  
 
@@ -110,7 +110,7 @@ python scripts/preprocess_nimble.py --max_motions 8 --num_shards 4 --shard_index
 python scripts/compute_normalization.py --num_shards 4
 ```
 
-After upgrading the B3D schema (e.g. adding `muscle_activations`), **re-run preprocess** without `--skip_existing` on old caches.
+After upgrading the B3D schema (e.g. L_bio v2 with 40 `guidance_features` rows), **re-run preprocess** without `--skip_existing` on old caches.
 
 ### 2. Train SINDy
 
@@ -120,7 +120,7 @@ Requires B3D cache with **muscle activations** (preprocess with `moco_track` or 
 python scripts/train_sindy.py --output results/sindy
 ```
 
-Config: `configs/train_sindy.json`. Joint model predicts **103 channels** (23 bio + 80 muscles) from text-conditioned sparse `Ξ(text)`. Ground-truth targets come from cached `guidance_features` and `muscle_activations`. Old `target_dim=23` checkpoints are incompatible.
+Config: `configs/train_sindy.json`. Joint model predicts **120 channels** (40 L_bio + 80 muscles) from text-conditioned sparse `Ξ(text)`. Ground-truth targets come from cached `guidance_features` and `muscle_activations`. Old `target_dim=102` checkpoints are incompatible. Re-preprocess B3D after L_bio schema v2 changes (`l_bio_schema_version: 2`, 40 guidance rows).
 
 ### 3. Train activation surrogate
 

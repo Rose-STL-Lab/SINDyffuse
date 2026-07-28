@@ -73,7 +73,7 @@ class LearnedSINDyGuidance:
     """Sparse SINDy model: ``pred = Θ(motion) · Ξ(text)`` trained to match bio + muscle targets.
 
     Diffusion guidance minimizes MSE between the SINDy prediction and **actual** targets from
-    ``physics_from_q`` (23 bio channels) and the activation surrogate (80 muscle channels).
+    ``physics_from_q`` (L_bio channels) and the activation surrogate (80 muscle channels).
     """
 
     def __init__(
@@ -128,7 +128,7 @@ class LearnedSINDyGuidance:
         if self.target_dim != expected_target_dim:
             raise ValueError(
                 f"Checkpoint target_dim={self.target_dim} != {expected_target_dim} "
-                f"(23 bio + 80 muscle); retrain SINDy on joint targets."
+                f"(L_bio + 80 muscle); retrain SINDy on joint targets."
             )
 
         tw = parse_target_weights(target_weights, n_targets=self.target_dim)
@@ -259,7 +259,7 @@ class LearnedSINDyGuidance:
         return torch.stack(rows, dim=0)
 
     def _actual_targets_from_motion(self, motion_norm: torch.Tensor) -> torch.Tensor:
-        """Actual SINDy targets ``[B, L, 103]`` from predicted motion."""
+        """Actual SINDy targets ``[B, L, N_SINDY_TARGETS]`` from predicted motion."""
         bio = self._bio_from_motion(motion_norm)
         denorm = self._denorm_motion(motion_norm)
         muscle_full = self._surrogate.predict_activations(denorm)
