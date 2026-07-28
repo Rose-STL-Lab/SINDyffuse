@@ -1,0 +1,47 @@
+{
+  "baselines_dir": "baselines",
+  "repos": [
+    {
+      "dir": "motion-diffusion-model",
+      "url": "https://github.com/GuyTevet/motion-diffusion-model.git",
+      "method": "MDM",
+      "setup": "mdm"
+    },
+    {
+      "dir": "motion-latent-diffusion",
+      "url": "https://github.com/ChenFengYe/motion-latent-diffusion.git",
+      "method": "MLD",
+      "setup": "mld"
+    },
+    {
+      "dir": "T2M-GPT",
+      "url": "https://github.com/Mael-zys/T2M-GPT.git",
+      "method": "T2M-GPT",
+      "setup": "t2m_gpt"
+    },
+    {
+      "dir": "text-to-motion",
+      "url": "https://github.com/EricGuo5513/text-to-motion.git",
+      "method": "T2M",
+      "setup": "t2m"
+    },
+    {
+      "dir": "MotionDiffuse",
+      "url": "https://github.com/mingyuan-zhang/MotionDiffuse.git",
+      "method": "MotionDiffuse",
+      "setup": "motiondiffuse"
+    },
+    {
+      "dir": "ReMoDiffuse",
+      "url": "https://github.com/mingyuan-zhang/ReMoDiffuse.git",
+      "method": "ReMoDiffuse",
+      "setup": "remodiffuse"
+    },
+    {
+      "dir": "StableMoFusion",
+      "url": "https://github.com/Linketic/StableMoFusion.git",
+      "method": "StableMoFusion",
+      "setup": "stablemofusion"
+    }
+  ]
+}
