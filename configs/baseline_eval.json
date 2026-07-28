@@ -1,0 +1,49 @@
+{
+  "split": "test",
+  "batch_size": 32,
+  "diversity_times": 300,
+  "seed": 42,
+  "include_ground_truth": false,
+  "methods": [
+    {
+      "name": "SINDyffuse",
+      "motion_dir": "results/eval/generated",
+      "format": "hml263"
+    },
+    {
+      "name": "MDM",
+      "motion_dir": "baselines/motion-diffusion-model/outputs",
+      "format": "hml263"
+    },
+    {
+      "name": "T2M",
+      "motion_dir": "baselines/text-to-motion/outputs",
+      "format": "hml263"
+    },
+    {
+      "name": "MotionDiffuse",
+      "motion_dir": "baselines/MotionDiffuse/outputs",
+      "format": "hml263"
+    },
+    {
+      "name": "MLD",
+      "motion_dir": "baselines/motion-latent-diffusion/outputs",
+      "format": "hml263"
+    },
+    {
+      "name": "ReMoDiffuse",
+      "motion_dir": "baselines/ReMoDiffuse/outputs",
+      "format": "hml263"
+    },
+    {
+      "name": "T2M-GPT",
+      "motion_dir": "baselines/T2M-GPT/outputs",
+      "format": "hml263"
+    },
+    {
+      "name": "StableMoFusion",
+      "motion_dir": "baselines/StableMoFusion/outputs",
+      "format": "hml263"
+    }
+  ]
+}

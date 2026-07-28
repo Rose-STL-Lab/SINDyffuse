@@ -1,0 +1,60 @@
+{
+  "output_root": "results/eval/ablation",
+  "diffusion_checkpoint": "results/diffusion/sindy/latest/last.pt",
+  "sindy_checkpoint_dir": "results/sindy/latest",
+  "surrogate_checkpoint_dir": "results/activation_surrogate/latest",
+  "num_samples_per_caption": 1,
+  "max_motions": 0,
+  "eval": {
+    "split": "test",
+    "batch_size": 32,
+    "diversity_times": 300,
+    "seed": 42
+  },
+  "variants": [
+    {
+      "name": "none",
+      "guidance": "none",
+      "opt_steps": 0,
+      "cfg_scale": 2.5,
+      "checkpoint": "results/diffusion/none/latest/last.pt"
+    },
+    {
+      "name": "sindy",
+      "guidance": "sindy",
+      "opt_steps": 0,
+      "cfg_scale": 2.5,
+      "checkpoint": "results/diffusion/sindy/latest/last.pt"
+    },
+    {
+      "name": "sindy_opt10",
+      "guidance": "sindy",
+      "opt_steps": 10,
+      "opt_lr": 0.001,
+      "cfg_scale": 2.5,
+      "checkpoint": "results/diffusion/sindy/latest/last.pt"
+    },
+    {
+      "name": "sindy_opt50",
+      "guidance": "sindy",
+      "opt_steps": 50,
+      "opt_lr": 0.001,
+      "cfg_scale": 2.5,
+      "checkpoint": "results/diffusion/sindy/latest/last.pt"
+    },
+    {
+      "name": "sindy_cfg1",
+      "guidance": "sindy",
+      "opt_steps": 0,
+      "cfg_scale": 1.0,
+      "checkpoint": "results/diffusion/sindy/latest/last.pt"
+    },
+    {
+      "name": "sindy_cfg4",
+      "guidance": "sindy",
+      "opt_steps": 0,
+      "cfg_scale": 4.0,
+      "checkpoint": "results/diffusion/sindy/latest/last.pt"
+    }
+  ]
+}

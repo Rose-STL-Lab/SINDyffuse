@@ -7,6 +7,9 @@ __pycache__/
 
 # Training outputs and checkpoints
 results/
+
+# Cloned baseline repos, checkpoints, and generated baseline motions
+baselines/
 *.pt
 *.pth
 wandb/

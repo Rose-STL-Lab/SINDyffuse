@@ -20,6 +20,8 @@ MINT_CACHE_SUBDIR = "mint_cache"
 
 __all__ = [
     "MINT_CACHE_SUBDIR",
+    "baselines_dir",
+    "baseline_output_dir",
     "cleanup_preprocess_manifests",
     "default_datasets_dir",
     "default_humanml3d_root",
@@ -105,6 +107,19 @@ def resolve_repo_path(path: str | Path) -> Path:
 
 def results_dir() -> Path:
     return repo_root() / "results"
+
+
+def baselines_dir() -> Path:
+    """Root for cloned baseline repos and their pre-trained checkpoints."""
+    explicit = os.environ.get("SINDYFFUSE_BASELINES_DIR", "").strip()
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    return repo_root() / "baselines"
+
+
+def baseline_output_dir(repo_name: str) -> Path:
+    """Directory where a baseline method writes generated motions for eval."""
+    return baselines_dir() / repo_name / "outputs"
 
 
 def sindy_latest_link() -> Path:
