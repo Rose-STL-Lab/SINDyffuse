@@ -123,14 +123,18 @@ def resolve_preprocess_parallelism(
 
     ``moco_track``: concurrent Moco solves; threads per solve from ``num_workers``.
 
-    When ``num_shards > 1`` (K8s distributed), in-pod parallelism is 1 for all methods;
-    cluster-level parallelism comes from the shard count.
+    When ``num_shards > 1`` (K8s distributed), motion-level parallelism stays at 1;
+    shard count provides cluster-wide parallelism. ``moco_track`` still uses
+    ``num_workers`` (or auto-detected cgroup CPUs) for Ipopt/OpenMP threads per motion.
     """
-    if int(num_shards) > 1:
-        return 1, 1
-
     auto = detect_usable_cpus()
     method = "none" if skip_muscle_activation else str(activation_method)
+    if int(num_shards) > 1:
+        if method == "moco_track":
+            threads = max(1, int(num_workers)) if int(num_workers) > 0 else auto
+            return 1, threads
+        return 1, 1
+
     if method == "none":
         pool = max(1, int(num_workers)) if int(num_workers) > 0 else auto
         return pool, 1

@@ -7,8 +7,8 @@ metadata:
     app: sindyffuse-preprocess-moco-track
     activation-method: moco-track
 spec:
-  parallelism: 64
-  completions: 64
+  parallelism: 180
+  completions: 180
   completionMode: Indexed
   backoffLimit: 0
   template:
@@ -26,7 +26,7 @@ spec:
         workingDir: /mnt/SINDyffuse
         env:
         - name: PREPROCESS_NUM_SHARDS
-          value: "64"
+          value: "180"
         - name: ACTIVATION_METHOD
           value: "moco_track"
         - name: MOCO_CORE_DURATION_S
@@ -43,14 +43,14 @@ spec:
         args:
         - |
           source deploy/scripts/job-env.sh
-          python scripts/preprocess_nimble.py --skip_normalization --num_workers 1
+          python scripts/preprocess_nimble.py --skip_normalization --num_workers 0
         resources:
           limits:
-            memory: 2Gi
-            cpu: "1"
+            memory: 8Gi
+            cpu: "8"
           requests:
-            memory: 2Gi
-            cpu: "1"
+            memory: 8Gi
+            cpu: "8"
         volumeMounts:
         - name: data
           mountPath: /mnt
