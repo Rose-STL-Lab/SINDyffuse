@@ -542,7 +542,7 @@ def activation_column_for_muscle(label: str, muscle: str) -> bool:
     return lab.endswith(needle) or needle in lab
 
 
-def _activation_work_dir(cfg: MuscleActivationConfig, *, prefix: str) -> Tuple[Path, bool]:
+def _storage_to_array(storage: Any) -> Tuple[np.ndarray, List[str]]:
     """Read OpenSim ``Storage`` into ``[n_rows, n_cols]`` aligned with column labels."""
     labels: List[str] = []
     for i in range(storage.getColumnLabels().size()):
