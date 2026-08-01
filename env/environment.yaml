@@ -30,4 +30,4 @@ dependencies:
       - clip @ git+https://github.com/openai/CLIP.git
       - ftfy
       - regex
-      - wcwidth
+      - musint>=0.1

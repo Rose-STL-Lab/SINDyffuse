@@ -43,71 +43,59 @@ Run entry points from the repo root:
 cd /path/to/SINDyffuse
 ```
 
-### 1. Preprocess (IK + OpenSim MocoTrack + feature cache)
+### 1. Preprocess (four-job MinT-style pipeline)
+
+Production preprocessing is **four sequential jobs** sharing the same Python scripts for local runs and Kubernetes indexed jobs:
+
+| Job | Script | Purpose |
+|-----|--------|---------|
+| 1 — IK | `scripts/preprocess_ik.py` | joints → `q`, SINDy/guidance features, zero activations |
+| 2 — Path fit | `scripts/fit_rajagopal_function_paths.py` | one-time `FunctionBasedPathSet.xml` from sampled IK B3D |
+| 3 — MocoTrack | `scripts/preprocess_moco.py` | muscle activations + GRF + validity mask (reads IK B3D, no IK redo) |
+| 4 — Norm | `scripts/compute_normalization.py` | merge moco manifests → `Mean.npy` / `Std.npy` |
 
 ```bash
-python scripts/preprocess_nimble.py --max_motions 1
-# Terminal: tqdm + errors only; verbose details in logs/preprocess_nimble_<timestamp>.log
-# (--log_dir, --no_run_log on all main scripts)
+python scripts/preprocess_ik.py --max_motions 5
+python scripts/calibrate_ik_gates.py --num_shards 1
+python scripts/fit_rajagopal_function_paths.py --sample_motions 50
+python scripts/preprocess_moco.py --max_motions 5
+python scripts/compute_normalization.py --num_shards 1 --wait
 ```
 
-Three muscle-activation modes via `--activation_method`:
+`scripts/preprocess_nimble.py` remains as a **deprecated** local wrapper (IK then Moco). Prefer the split scripts above.
 
-| Method | CLI | Speed | Fidelity |
-|--------|-----|-------|----------|
-| Skip | `none` or `--skip_muscle_activation` | Fastest (IK only) | No activations |
-| MocoTrack | `moco_track` (default) | Slowest | Highest |
-| Static opt | `static_optimization` | Middle | Lower |
+**MinT-aligned Moco defaults:** `mesh_interval=0.02`, `convergence_tolerance=1e-3`, `max_iterations=3000`, `adaptive_mesh=False`. Segment success is **Ipopt success ∧ parsed activations** only (no reserve QC). Manifest statuses: `ik_ok` / `ik_failed` (Job 1), `ok` / `moco_failed` / `moco_skipped` (Job 3).
 
-By default, Moco runs one motion at a time and `--num_workers` sets Ipopt threads (`0` = auto). Static optimization uses parallel motion workers like IK-only. Optional env `MOCO_NUM_THREADS` overrides auto-detection.
+By default, Moco K8s pods run **one segment at a time with all CPUs** (`MOCO_PARALLEL_SEGMENTS=1`). Optional `--moco_parallel_segments 6` on fat local nodes after pilot.
 
 Each `.b3d` stores generalized coordinates plus custom channels: `guidance_features`, `sindy_features`, `muscle_activations` `[80, T]`, and (MocoTrack) `sim_grf` `[18, T]` plus `muscle_activation_mask` `[1, T]`.
 
 At **20 fps**, segmented Moco uses **28-frame cores**, **3-frame buffers**, and **34-frame solve windows** (1.4 s / 0.14 s MinT timing).
 
-**MocoTrack** (`moco_track`) — MinT-style segmented trajectory optimization with foot contact: IK → ground offset → 1.4 s Moco windows → seam stitch. Reference coordinates are low-pass filtered at **6 Hz inside Moco** (OpenCap). Failed segments leave **NaN gaps** in activations/GRF; the validity mask marks good frames. No pre-Moco q smoothing, IK frame interpolation, or post-Moco activation gap-filling.
+**MocoTrack** — MinT-style segmented trajectory optimization with foot contact: ground offset → 1.4 s Moco windows → seam stitch. Reference coordinates are low-pass filtered at **6 Hz**. Failed segments leave **NaN gaps**; the validity mask marks good frames. Training uses gap-aware window indexing (`nimble/gap_utils.py`).
 
-**Static optimization** (`static_optimization`) — per-frame OpenSim static optimization on the same Rajagopal 80-muscle model with DeGroote muscles + reserves (no foot contact). Faster than Moco, lower fidelity.
+**Static optimization** (`static_optimization`) — still available via deprecated `preprocess_nimble.py --activation_method static_optimization`.
 
 OpenSim console output is **hidden by default** (`--opensim_log_level Off`).
 
-Useful Moco flags: `--moco_core_duration_s`, `--moco_buffer_duration_s`, `--moco_stitch_blend_s`, `--moco_reference_lowpass_hz`, `--moco_states_speed_tracking_weight`, `--moco_no_reference_lowpass`, `--moco_mesh_interval`, `--moco_max_reserve_fraction`, `--moco_allow_high_reserve`, `--opensim_log_level`.
+Useful Moco flags: `--moco_core_duration_s`, `--moco_buffer_duration_s`, `--moco_stitch_blend_s`, `--moco_reference_lowpass_hz`, `--moco_states_speed_tracking_weight`, `--moco_no_reference_lowpass`, `--moco_mesh_interval`, `--moco_parallel_segments`, `--opensim_log_level`.
 
-MinT smoke test (temp dir, self-deletes on success):
+**Kubernetes:**
 
 ```bash
-python scripts/smoke_moco_mint_preprocess.py
+kubectl delete job sindyffuse-preprocess-moco-track -n ai-md   # before redeploy
+kubectl apply -k deploy/jobs/preprocess-nimble/ik
+kubectl apply -k deploy/jobs/fit-function-paths
+kubectl apply -k deploy/jobs/preprocess-nimble/moco-track
+kubectl apply -k deploy/jobs/preprocess-nimble/normalization
 ```
 
-Unit tests (no OpenSim):
+Local sharded test:
 
 ```bash
-PYTHONPATH=. python3 -m unittest tests.test_moco_segment -v
-```
-
-**Kubernetes (64 worker pods + normalization pod):**
-
-```bash
-# Edit deploy/components/cluster-config/ for your image and PVC first — see deploy/README.md
-./deploy/scripts/run-preprocess-nimble.sh static-optimization
-./deploy/scripts/run-preprocess-nimble.sh none              # IK-only
-./deploy/scripts/run-preprocess-nimble.sh moco-track
-```
-
-Local runs are unchanged (no sharding by default):
-
-```bash
-python scripts/preprocess_nimble.py --max_motions 1 \
-  --opensim_log_level Warn
-```
-
-Distributed local test (optional):
-
-```bash
-python scripts/preprocess_nimble.py --max_motions 8 --num_shards 4 --shard_index 0 \
-  --skip_normalization --activation_method none
-# repeat shard_index 1..3, then:
-python scripts/compute_normalization.py --num_shards 4
+python scripts/preprocess_ik.py --max_motions 8 --num_shards 4 --shard_index 0 --skip_normalization
+python scripts/preprocess_moco.py --max_motions 8 --num_shards 4 --shard_index 0 --skip_normalization --num_workers 0
+python scripts/compute_normalization.py --num_shards 4 --wait
 ```
 
 After upgrading the B3D schema (e.g. L_bio v2 with 40 `guidance_features` rows), **re-run preprocess** without `--skip_existing` on old caches.
@@ -120,7 +108,7 @@ Requires B3D cache with **muscle activations** (preprocess with `moco_track` or 
 python scripts/train_sindy.py --output results/sindy
 ```
 
-Config: `configs/train_sindy.json`. Joint model predicts **120 channels** (40 L_bio + 80 muscles) from text-conditioned sparse `Ξ(text)`. Ground-truth targets come from cached `guidance_features` and `muscle_activations`. Old `target_dim=102` checkpoints are incompatible. Re-preprocess B3D after L_bio schema v2 changes (`l_bio_schema_version: 2`, 40 guidance rows).
+Config: `configs/train_sindy.json` (2000 epochs, batch 64, lr 1e-3; lowest validation MSE checkpoint). Joint model predicts **120 channels** (40 L_bio + 80 muscles) from text-conditioned sparse `Ξ(text)`.
 
 ### 3. Train activation surrogate
 
@@ -128,7 +116,7 @@ Config: `configs/train_sindy.json`. Joint model predicts **120 channels** (40 L_
 python scripts/train_surrogate.py --config configs/train_surrogate.json --output results/activation_surrogate
 ```
 
-Config: `configs/train_surrogate.json`. Default architecture is a **temporal transformer** (fidelity-first). Training uses L1 on all frames in each window (plus optional temporal regularization via `lambda_temporal`). Motions whose cached `muscle_activations` are all-zero placeholders are skipped by default (`skip_zero_placeholders=1`).
+Config: `configs/train_surrogate.json` (500 epochs, batch 32, lr 1e-3; lowest validation L1 checkpoint). Temporal transformer architecture; L1 plus `lambda_temporal=0.15`.
 
 ### 4. Train diffusion
 
@@ -147,6 +135,32 @@ python scripts/generate_motion.py --checkpoint results/diffusion/latest.pt \
   --sindy_checkpoint_dir results/sindy/latest \
   --surrogate_checkpoint_dir results/activation_surrogate/latest
 ```
+
+### 6. Evaluate
+
+Requires generated motions as NPZ files (`motion` array `[T, 37]`) under `--generations_dir`, plus HumanML3D B3D cache for biomechanical metrics.
+
+```bash
+python scripts/evaluate_motion.py \
+  --generations_dir results/eval/generations \
+  --data_root /path/to/HumanML3D \
+  --split test \
+  --out_json results/eval/metrics.json
+```
+
+For text-alignment metrics (R-Precision, FID, MM-Dist, Diversity), provide precomputed embeddings from the standard HumanML3D/T2M evaluator:
+
+```bash
+python scripts/evaluate_motion.py \
+  --generations_dir results/eval/generations \
+  --data_root /path/to/HumanML3D \
+  --motion_embeddings /path/to/gen_emb.npy \
+  --text_embeddings /path/to/text_emb.npy \
+  --reference_motion_embeddings /path/to/ref_emb.npy \
+  --out_json results/eval/metrics.json
+```
+
+Config: `configs/evaluate.json` (32 samples per caption, 1000 bootstrap replicates).
 
 ## Kubernetes
 
@@ -167,27 +181,32 @@ kubectl exec -it sindyffuse-dev -- bash -l
 
 See [deploy/README.md](deploy/README.md) for image build, storage setup, and the full job list.
 
-**Container image:** GitHub Actions publishes `ghcr.io/rose-stl-lab/sindyffuse:latest` from `env/Dockerfile` (GHCR container storage is currently free; see deploy docs for size notes).
+**Container image:** Build locally with `env/Dockerfile` (`docker build -f env/Dockerfile .`). No public registry URL is provided for review.
 
 ## Project layout
 
 | Path | Role |
 |------|------|
-| `scripts/preprocess_nimble.py` | HumanML3D → Nimble B3D cache |
+| `scripts/preprocess_ik.py` | Job 1: HumanML3D → IK B3D cache |
+| `scripts/preprocess_moco.py` | Job 3: MocoTrack on IK B3D cache |
+| `scripts/fit_rajagopal_function_paths.py` | Job 2: function-based muscle paths |
+| `scripts/calibrate_ik_gates.py` | FK gate calibration from IK manifests |
+| `scripts/preprocess_nimble.py` | Deprecated wrapper (IK + Moco) |
 | `scripts/compute_normalization.py` | Merge shard manifests; compute `Mean.npy` / `Std.npy` |
 | `scripts/train_sindy.py` | Train SINDy text→Xi model |
 | `scripts/train_surrogate.py` | Train q→activation surrogate |
 | `scripts/train_diffusion.py` | Train text-conditioned diffusion |
 | `scripts/generate_motion.py` | Sample motion from trained diffusion |
+| `scripts/evaluate_motion.py` | HumanML3D evaluation metrics |
+| `eval/` | Metric computation and aggregation |
 | `env/environment.yaml` | Conda environment |
-| `env/Dockerfile` | Container image (`docker build -f env/Dockerfile .`; CI publishes to GHCR) |
+| `env/Dockerfile` | Container image (local build) |
 | `deploy/` | Kubernetes job manifests (see `deploy/README.md`) |
 | `nimble/` | IK, B3D I/O, OpenSim muscle activation, Rajagopal guidance |
 | `surrogate/` | Differentiable activation surrogate (ML) |
 | `sindy/` | SINDy library, dataset, training |
 | `diffusion/` | Text-conditioned motion diffusion |
 | `datasets/` | HumanML3D loaders (Python only; data is local) |
-| `tests/` | Smoke tests |
 
 ## Tests
 
@@ -197,11 +216,7 @@ cd /path/to/SINDyffuse
 PYTHONPATH=. python3 -m unittest discover -s tests -v
 ```
 
-OpenSim-backed tests (`test_muscle_activation`) require the `sindyffuse` conda env. Full-body Moco is **opt-in** (slow):
-
-```bash
-RUN_MOCO_SMOKE=1 PYTHONPATH=. python3 -m unittest tests.test_muscle_activation -v
-```
+OpenSim-backed tests require the `sindyffuse` conda env.
 
 ## Troubleshooting
 

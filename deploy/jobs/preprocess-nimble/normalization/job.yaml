@@ -21,14 +21,14 @@ spec:
         workingDir: /mnt/SINDyffuse
         env:
         - name: PREPROCESS_NUM_SHARDS
-          value: "64"
+          value: "180"
         - name: SINDYFFUSE_RUN_LOG_ID
           value: "RUN_LOG_ID_PLACEHOLDER"
         command: ["/bin/bash", "-c"]
         args:
         - |
           source deploy/scripts/job-env.sh
-          python scripts/compute_normalization.py
+          python scripts/compute_normalization.py --wait --num_shards 180
         resources:
           limits:
             memory: 2Gi

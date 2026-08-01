@@ -29,11 +29,11 @@ spec:
       requests:
         cpu: "16"
         memory: 32Gi
-        nvidia.com/gpu: 2
+        nvidia.com/gpu: 0
       limits:
         cpu: "16"
         memory: 32Gi
-        nvidia.com/gpu: 2
+        nvidia.com/gpu: 0
     volumeMounts:
     - name: data
       mountPath: /mnt

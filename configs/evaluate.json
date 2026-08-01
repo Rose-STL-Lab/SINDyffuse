@@ -1,0 +1,11 @@
+{
+  "seed": 42,
+  "split": "test",
+  "num_samples": 32,
+  "fps": 20.0,
+  "bootstrap_replicates": 1000,
+  "mass_kg": 70.0,
+  "contact_height_thresh_m": 0.06,
+  "contact_speed_thresh_mps": 1.2,
+  "r_precision_pool_size": 32
+}

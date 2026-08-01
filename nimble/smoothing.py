@@ -1,49 +1,32 @@
-"""Pose smoothing before kinematic derivatives (Torch FIR + SciPy ``firwin`` kernel design)."""
-
 from __future__ import annotations
-
 from typing import Any, Dict
-
 import numpy as np
 import torch
 import torch.nn.functional as F
-from scipy import signal as sp_signal  # type: ignore[import-untyped]
-
+from scipy import signal as sp_signal
 
 def sample_rate_hz(fps: int, sampling_frequency: float | None) -> float:
     return float(sampling_frequency if sampling_frequency is not None else fps)
-
-
-# Rajagopal / OpenSim: DOFs 0–2 are pelvis rotations; 3–5 are translations; 6+ are joint angles.
 _PELVIS_ROT_DOF_SLICE = slice(0, 3)
 _PELVIS_TRANS_DOF_SLICE = slice(3, 6)
 
-
 def unwrap_pose_angles(poses: np.ndarray) -> np.ndarray:
-    """Remove ``2π`` jumps along time on rotational DOFs (not pelvis translations)."""
     x = np.asarray(poses, dtype=np.float64)
     if x.ndim != 2 or x.shape[0] < 2:
         return x
     out = x.copy()
     if out.shape[1] > _PELVIS_ROT_DOF_SLICE.stop:
-        out[:, _PELVIS_ROT_DOF_SLICE] = np.unwrap(
-            out[:, _PELVIS_ROT_DOF_SLICE], axis=0
-        )
+        out[:, _PELVIS_ROT_DOF_SLICE] = np.unwrap(out[:, _PELVIS_ROT_DOF_SLICE], axis=0)
     if out.shape[1] > _PELVIS_TRANS_DOF_SLICE.stop:
-        out[:, _PELVIS_TRANS_DOF_SLICE.stop :] = np.unwrap(
-            out[:, _PELVIS_TRANS_DOF_SLICE.stop :], axis=0
-        )
+        out[:, _PELVIS_TRANS_DOF_SLICE.stop:] = np.unwrap(out[:, _PELVIS_TRANS_DOF_SLICE.stop:], axis=0)
     return out
-
 
 def effective_pose_smooth_cutoff_hz(cutoff_hz: float, sample_rate_hz: float) -> float:
     nyq = 0.5 * sample_rate_hz
     cap = nyq * 0.499
-    return float(np.clip(cutoff_hz, 0.1, max(cap - 1e-3, 0.25 * nyq)))
-
+    return float(np.clip(cutoff_hz, 0.1, max(cap - 0.001, 0.25 * nyq)))
 
 def _fir_num_taps(sample_rate_hz: float, cutoff_hz: float, butterworth_order: int) -> int:
-    """Odd-length FIR tap count from sample rate, cutoff, and legacy order knob."""
     sr = float(sample_rate_hz)
     fc = float(max(cutoff_hz, 0.1))
     order = int(max(1, butterworth_order))
@@ -53,65 +36,32 @@ def _fir_num_taps(sample_rate_hz: float, cutoff_hz: float, butterworth_order: in
         num_taps += 1
     return num_taps
 
-
-def apply_pose_smoothing_torch(
-    poses: torch.Tensor,
-    *,
-    fps: int,
-    sampling_frequency: float | None,
-    smooth_poses: bool,
-    smooth_cutoff_hz: float,
-    smooth_butterworth_order: int,
-) -> tuple[torch.Tensor, Dict[str, Any]]:
-    """Low-pass along time via grouped ``conv1d`` (reflect padding, FIR from ``firwin``)."""
+def apply_pose_smoothing_torch(poses: torch.Tensor, *, fps: int, sampling_frequency: float | None, smooth_poses: bool, smooth_cutoff_hz: float, smooth_butterworth_order: int) -> tuple[torch.Tensor, Dict[str, Any]]:
     sr = sample_rate_hz(fps, sampling_frequency)
-    meta: Dict[str, Any] = {
-        "enabled": bool(smooth_poses),
-        "method": "none",
-        "cutoff_hz_requested": float(smooth_cutoff_hz),
-        "cutoff_hz_effective": None,
-        "sample_rate_hz": float(sr),
-        "butterworth_order": int(smooth_butterworth_order),
-    }
+    meta: Dict[str, Any] = {'enabled': bool(smooth_poses), 'method': 'none', 'cutoff_hz_requested': float(smooth_cutoff_hz), 'cutoff_hz_effective': None, 'sample_rate_hz': float(sr), 'butterworth_order': int(smooth_butterworth_order)}
     if not smooth_poses or poses.shape[0] < 2:
-        meta["enabled"] = bool(smooth_poses and poses.shape[0] >= 2)
-        return poses, meta
-
+        meta['enabled'] = bool(smooth_poses and poses.shape[0] >= 2)
+        return (poses, meta)
     eff_fc = effective_pose_smooth_cutoff_hz(smooth_cutoff_hz, sr)
-    meta["cutoff_hz_effective"] = float(eff_fc)
-    meta["method"] = "fir_firwin_conv1d"
-
+    meta['cutoff_hz_effective'] = float(eff_fc)
+    meta['method'] = 'fir_firwin_conv1d'
     num_taps = _fir_num_taps(sr, eff_fc, smooth_butterworth_order)
     pad = (num_taps - 1) // 2
     t_frames = int(poses.shape[0])
     if t_frames <= 2 * pad:
-        meta["enabled"] = False
-        meta["method"] = "skipped_short_clip"
-        return poses, meta
-
+        meta['enabled'] = False
+        meta['method'] = 'skipped_short_clip'
+        return (poses, meta)
     w_np = sp_signal.firwin(num_taps, eff_fc, fs=sr)
     w_t = torch.as_tensor(w_np, dtype=poses.dtype, device=poses.device).view(1, 1, -1)
-
-    # ``poses`` has time on axis 0; the rest (DOFs, keypoints*3, ...) are
-    # treated as independent channels and convolved along time separately.
-    # ``conv1d`` expects ``[B, C, L]`` with each channel on its own row and
-    # time on the L axis. The natural memory layout of ``[T, ...]`` puts
-    # different channels adjacent at each time step, so we MUST transpose
-    # time to the L axis -- a raw ``reshape(1, -1, T)`` (the historical
-    # implementation) interleaves channels into the time axis and silently
-    # corrupts the signal (it scrambled pelvis q in every produced B3D file).
     orig_shape = tuple(poses.shape)
-    # Flatten everything except time into a single channel dimension.
     x_flat = poses.reshape(t_frames, -1)
     n_channels = int(x_flat.shape[1])
-    # Transpose [T, C] -> [C, T], add batch dim -> [1, C, T].
     x = x_flat.transpose(0, 1).contiguous().unsqueeze(0)
     weight = w_t.expand(n_channels, 1, num_taps)
     pad = (num_taps - 1) // 2
-    xpad = F.pad(x, (pad, pad), mode="reflect")
+    xpad = F.pad(x, (pad, pad), mode='reflect')
     y = F.conv1d(xpad, weight, bias=None, stride=1, padding=0, groups=n_channels)
-    # [1, C, T] -> [T, C] -> original shape.
     y = y.squeeze(0).transpose(0, 1).contiguous()
     smoothed = y.reshape(orig_shape)
-    return smoothed, meta
-
+    return (smoothed, meta)

@@ -1,0 +1,43 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sindyffuse-fit-function-paths
+  labels:
+    app: sindyffuse-fit-function-paths
+spec:
+  parallelism: 1
+  completions: 1
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: sindyffuse-fit-function-paths
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: fit-function-paths
+        image: sindyffuse:latest
+        imagePullPolicy: IfNotPresent
+        workingDir: /mnt/SINDyffuse
+        env:
+        - name: PATH_FIT_SAMPLE_MOTIONS
+          value: "50"
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          source deploy/scripts/job-env.sh
+          python scripts/fit_rajagopal_function_paths.py --sample_motions ${PATH_FIT_SAMPLE_MOTIONS}
+        resources:
+          limits:
+            memory: 8Gi
+            cpu: "4"
+          requests:
+            memory: 8Gi
+            cpu: "4"
+        volumeMounts:
+        - name: data
+          mountPath: /mnt
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: sindyffuse
