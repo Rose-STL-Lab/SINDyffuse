@@ -50,13 +50,13 @@ Production preprocessing is **four sequential jobs** sharing the same Python scr
 | Job | Script | Purpose |
 |-----|--------|---------|
 | 1 — IK | `scripts/preprocess_ik.py` | joints → `q`, SINDy/guidance features, zero activations |
-| 2 — Path fit | `scripts/fit_rajagopal_function_paths.py` | one-time `FunctionBasedPathSet.xml` from sampled IK B3D |
+| 2 — Path fit | `scripts/fit_rajagopal_function_paths.py` | one-time `FunctionBasedPathSet.xml` from 200 stratified IK B3D samples |
 | 3 — MocoTrack | `scripts/preprocess_moco.py` | muscle activations + GRF + validity mask (reads IK B3D, no IK redo) |
 | 4 — Norm | `scripts/compute_normalization.py` | merge moco manifests → `Mean.npy` / `Std.npy` |
 
 ```bash
 python scripts/preprocess_ik.py --max_motions 5
-python scripts/fit_rajagopal_function_paths.py --sample_motions 50
+python scripts/fit_rajagopal_function_paths.py --sample_motions 200
 python scripts/preprocess_moco.py --max_motions 5
 python scripts/compute_normalization.py --num_shards 1 --wait
 ```

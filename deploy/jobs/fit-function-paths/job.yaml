@@ -21,7 +21,7 @@ spec:
         workingDir: /mnt/SINDyffuse
         env:
         - name: PATH_FIT_SAMPLE_MOTIONS
-          value: "50"
+          value: "200"
         command: ["/bin/bash", "-c"]
         args:
         - |
