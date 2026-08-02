@@ -56,13 +56,14 @@ Production preprocessing is **four sequential jobs** sharing the same Python scr
 
 ```bash
 python scripts/preprocess_ik.py --max_motions 5
-python scripts/calibrate_ik_gates.py --num_shards 1
 python scripts/fit_rajagopal_function_paths.py --sample_motions 50
 python scripts/preprocess_moco.py --max_motions 5
 python scripts/compute_normalization.py --num_shards 1 --wait
 ```
 
 `scripts/preprocess_nimble.py` remains as a **deprecated** local wrapper (IK then Moco). Prefer the split scripts above.
+
+**IK quality gates (Job 1 only):** fixed MinT mint-analysis translational threshold — max/mean mapped joint position error **≤ 0.02 m**, all frames must converge (`success_ratio = 1`), plus structural checks (valid `q`, ≥ 2 frames). Failed motions are `ik_failed` in the manifest; Moco skips them via prior status only (no FK re-filter at Moco).
 
 **MinT-aligned Moco defaults:** `mesh_interval=0.02`, `convergence_tolerance=1e-3`, `max_iterations=3000`, `adaptive_mesh=False`. Segment success is **Ipopt success ∧ parsed activations** only (no reserve QC). Manifest statuses: `ik_ok` / `ik_failed` (Job 1), `ok` / `moco_failed` / `moco_skipped` (Job 3).
 
@@ -190,7 +191,6 @@ See [deploy/README.md](deploy/README.md) for image build, storage setup, and the
 | `scripts/preprocess_ik.py` | Job 1: HumanML3D → IK B3D cache |
 | `scripts/preprocess_moco.py` | Job 3: MocoTrack on IK B3D cache |
 | `scripts/fit_rajagopal_function_paths.py` | Job 2: function-based muscle paths |
-| `scripts/calibrate_ik_gates.py` | FK gate calibration from IK manifests |
 | `scripts/preprocess_nimble.py` | Deprecated wrapper (IK + Moco) |
 | `scripts/compute_normalization.py` | Merge shard manifests; compute `Mean.npy` / `Std.npy` |
 | `scripts/train_sindy.py` | Train SINDy text→Xi model |

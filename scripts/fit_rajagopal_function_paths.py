@@ -1,6 +1,7 @@
 from __future__ import annotations
 import argparse
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -9,13 +10,18 @@ _REPO = Path(__file__).resolve().parent.parent
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 from common.paths import default_humanml3d_root, nimble_b3d_dir, repo_root
+from common.preprocess_runner import load_stage_manifest_index
 from datasets.nimble_dataset import read_q_segment
 from datasets.splits import all_motion_ids
 from nimble.muscle_activation import opensim_quiet
 from nimble.rajagopal_coord_map import build_rajagopal_coord_mapping, write_coordinates_mot
 from nimble.rajagopal_model import function_based_path_set_path, prepare_unlocked_rajagopal_base
 
-def _sample_motion_ids(out_root: Path, sample_motions: int) -> list[str]:
+def _sample_motion_ids(out_root: Path, sample_motions: int, *, num_shards: int=1) -> list[str]:
+    ik_index = load_stage_manifest_index(out_root, num_shards, stage='ik')
+    ok_ids = sorted(mid for mid, row in ik_index.items() if row.get('status') == 'ik_ok')
+    if ok_ids:
+        return ok_ids[:sample_motions] if sample_motions > 0 else ok_ids
     b3d_dir = nimble_b3d_dir(out_root)
     if b3d_dir.is_dir():
         ids = sorted(p.stem for p in b3d_dir.glob('*.b3d') if p.is_file())
@@ -24,9 +30,9 @@ def _sample_motion_ids(out_root: Path, sample_motions: int) -> list[str]:
     ids = all_motion_ids(out_root)
     return ids[:sample_motions] if sample_motions > 0 else ids[:50]
 
-def fit_function_paths(*, out_root: Path, sample_motions: int=50, fps: float=20.0) -> dict:
+def fit_function_paths(*, out_root: Path, sample_motions: int=50, fps: float=20.0, num_shards: int=1) -> dict:
     import opensim as osim
-    ids = _sample_motion_ids(out_root, sample_motions)
+    ids = _sample_motion_ids(out_root, sample_motions, num_shards=num_shards)
     if not ids:
         raise RuntimeError('No motions available for path fitting')
     out_xml = function_based_path_set_path()
@@ -65,9 +71,10 @@ def main() -> None:
     parser.add_argument('--out_root', default=default_humanml3d_root())
     parser.add_argument('--sample_motions', type=int, default=50)
     parser.add_argument('--fps', type=float, default=20.0)
+    parser.add_argument('--num_shards', type=int, default=int(os.environ.get('PREPROCESS_NUM_SHARDS', '1') or 1))
     args = parser.parse_args()
     out_root = Path(args.out_root).expanduser().resolve()
-    result = fit_function_paths(out_root=out_root, sample_motions=int(args.sample_motions), fps=float(args.fps))
+    result = fit_function_paths(out_root=out_root, sample_motions=int(args.sample_motions), fps=float(args.fps), num_shards=int(args.num_shards))
     print(json.dumps(result, indent=2))
 
 if __name__ == '__main__':

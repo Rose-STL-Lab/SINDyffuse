@@ -17,6 +17,7 @@ from common.cpu import configure_compute_threads, resolve_k8s_shard, resolve_pre
 from common.paths import NIMBLE_B3D_SUBDIR, default_humanml3d_root, humanml3d_text_dir, nimble_b3d_dir
 from common.run_logging import DualTqdm, RunLogger, dual_tqdm, null_logger
 from datasets.splits import all_motion_ids, shard_motion_ids
+from nimble.activation_gates import manifest_gate_reason
 
 def symlink_metadata(hml_root: Path, out_root: Path) -> None:
     if hml_root.resolve() == out_root.resolve():
@@ -76,8 +77,7 @@ def print_motion_progress(row: dict, *, logger: RunLogger) -> None:
     if status == 'skipped':
         return
     if status not in {'ok', 'ik_ok'}:
-        err = row.get('error', row.get('moco_skipped_reason', 'failed'))
-        logger.warn(f'{mid}: {err}')
+        logger.warn(f'{mid}: {manifest_gate_reason(row)}')
         return
     ik = row.get('ik_stats') or {}
     seg_ok = ik.get('moco_segment_success_count')
@@ -174,6 +174,5 @@ def add_common_preprocess_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument('--num_shards', type=int, default=1)
     parser.add_argument('--shard_index', type=int, default=-1)
     parser.add_argument('--skip_normalization', action='store_true')
-    parser.add_argument('--ik_gate_config', default='')
     parser.add_argument('--num_workers', type=int, default=0)
     parser.add_argument('--opensim_log_level', default='Off')

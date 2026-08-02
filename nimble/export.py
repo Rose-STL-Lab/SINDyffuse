@@ -7,10 +7,10 @@ import numpy as np
 import nimblephysics as nimble
 from nimble.b3d_schema import B3D_CUSTOM_VALUE_NAMES, pack_b3d_trial_custom_values
 from nimble.muscle_b3d import MUSCLE_ACTIVATION_ROWS
-from nimble.activation_gates import IkGateConfig, activation_valid_fraction, derive_moco_manifest_status, evaluate_ik_gate, evaluate_moco_preflight_gate, load_ik_gate_config, summarize_moco_metadata
+from nimble.activation_gates import IkGateConfig, activation_valid_fraction, derive_moco_manifest_status, evaluate_ik_gate, evaluate_moco_preflight_gate, summarize_moco_metadata
 from common.run_logging import append_verbose_log
 from nimble.muscle_activation import MuscleActivationConfig, MuscleActivationResult, compute_muscle_activation, configure_opensim_logging, muscle_names, normalize_activation_method, opensim_quiet
-from nimble.ik import fit_q
+from nimble.ik import clear_body_ik_cache, fit_q
 from nimble.moco_segment import SIM_GRF_COLS
 from nimble.physics import load_model
 from nimble.skeleton_registry import get_spec
@@ -23,6 +23,7 @@ _SKELETON_CACHE: Dict[str, Any] = {}
 def clear_export_caches() -> None:
     import gc
     _SKELETON_CACHE.clear()
+    clear_body_ik_cache()
     from nimble.b3d_schema import clear_b3d_schema_caches
     from nimble.physics import clear_cache
     clear_b3d_schema_caches()
@@ -114,7 +115,7 @@ def export_ik_to_b3d(hml3d_positions: np.ndarray, output_b3d_path: str | Path, *
     poses_q_f32 = np.ascontiguousarray(poses_q, dtype=np.float32)
     del poses_q
     q_traj = np.ascontiguousarray(poses_q_f32.T, dtype=np.float64)
-    merged_gate = gate_cfg or IkGateConfig()
+    merged_gate = gate_cfg or IkGateConfig.default()
     ik_ok, ik_reason = evaluate_ik_gate(ik_stats, q=q_traj, gate_cfg=merged_gate)
     manifest_status = 'ik_ok' if ik_ok else 'ik_failed'
     if not ik_ok:
@@ -143,7 +144,7 @@ def _read_poses_from_b3d(b3d_path: Path, *, trial: int=0) -> Tuple[np.ndarray, i
         pass
     return (poses_q_f32, tlen, mass_kg, height_m)
 
-def patch_b3d_moco(b3d_path: str | Path, *, trial_name: str, act_cfg: MuscleActivationConfig, gate_cfg: IkGateConfig | None=None, ik_manifest_status: str | None=None, ik_stats: Dict[str, Any] | None=None) -> Tuple[Dict[str, float], int, Dict[str, str], str]:
+def patch_b3d_moco(b3d_path: str | Path, *, trial_name: str, act_cfg: MuscleActivationConfig, ik_manifest_status: str | None=None, ik_stats: Dict[str, Any] | None=None) -> Tuple[Dict[str, float], int, Dict[str, str], str]:
     configure_opensim_logging(act_cfg.opensim_log_level)
     sk, spec = _get_skeleton(opensim_log_level=act_cfg.opensim_log_level)
     path = Path(b3d_path)
@@ -154,8 +155,7 @@ def patch_b3d_moco(b3d_path: str | Path, *, trial_name: str, act_cfg: MuscleActi
     kin = kinematics_pass_index(subj, 0)
     q_traj = read_q_frames(subj, 0, 0, num_frames, kin=kin).astype(np.float64)
     stats: Dict[str, Any] = dict(ik_stats or {})
-    merged_gate = (gate_cfg or load_ik_gate_config(out_root=path.parent.parent)).merge_cli(act_cfg)
-    allowed, reason = evaluate_moco_preflight_gate(ik_manifest_status=ik_manifest_status, q=q_traj, ik_stats=stats, gate_cfg=merged_gate)
+    allowed, reason = evaluate_moco_preflight_gate(ik_manifest_status=ik_manifest_status, q=q_traj)
     method = normalize_activation_method(act_cfg.activation_method)
     stats['activation_method'] = method
     sim_grf_pack: np.ndarray | None = None
@@ -212,5 +212,5 @@ def export_motion_to_b3d(hml3d_positions: np.ndarray, output_b3d_path: str | Pat
     ik_stats, num_dofs, meta_strings, ik_status = export_ik_to_b3d(hml3d_positions, output_b3d_path, trial_name=trial_name, fps=fps, mass_kg=mass_kg, height_m=height_m, gate_cfg=gate_cfg, opensim_log_level=act_cfg.opensim_log_level)
     if normalize_activation_method(act_cfg.activation_method) == 'none':
         return (ik_stats, num_dofs, meta_strings)
-    moco_stats, num_dofs, meta_strings, _ = patch_b3d_moco(output_b3d_path, trial_name=trial_name, act_cfg=act_cfg, gate_cfg=gate_cfg, ik_manifest_status=ik_status, ik_stats=ik_stats)
+    moco_stats, num_dofs, meta_strings, _ = patch_b3d_moco(output_b3d_path, trial_name=trial_name, act_cfg=act_cfg, ik_manifest_status=ik_status, ik_stats=ik_stats)
     return (moco_stats, num_dofs, meta_strings)

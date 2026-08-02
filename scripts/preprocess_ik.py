@@ -11,13 +11,12 @@ from common.run_setup import apply_preprocess_job_env
 from common.run_logging import add_run_log_cli_args, null_logger, run_log_session
 from datasets.hml3d_joints import default_joints_root, load_hml3d_joint_positions
 from datasets.nimble_dataset import compute_nimble_normalization_stats
-from nimble.activation_gates import load_ik_gate_config
 from nimble.export import clear_export_caches, export_ik_to_b3d
 from nimble.muscle_activation import configure_opensim_logging, opensim_quiet
 from common.paths import nimble_b3d_dir
 
 def _process_one_ik(item: tuple) -> dict:
-    sid, hml_root_s, out_root_s, skip_existing, joint_source, joints_root_s, verbose_log_path, fps, mass_kg, height_m, gate_cfg_path = item
+    sid, hml_root_s, out_root_s, skip_existing, joint_source, joints_root_s, verbose_log_path, fps, mass_kg, height_m = item
     if verbose_log_path:
         os.environ['SINDYFFUSE_VERBOSE_LOG'] = str(verbose_log_path)
     out_b3d = nimble_b3d_dir(Path(out_root_s)) / f'{sid}.b3d'
@@ -27,14 +26,17 @@ def _process_one_ik(item: tuple) -> dict:
         joints, _ = load_hml3d_joint_positions(Path(hml_root_s), sid, joint_source=joint_source, joints_root=Path(joints_root_s) if joints_root_s else None)
     except FileNotFoundError:
         return {'id': sid, 'status': 'error', 'error': 'missing or invalid motion'}
-    gate_cfg = load_ik_gate_config(gate_cfg_path or None, out_root=out_root_s)
     try:
         with opensim_quiet('Off'):
-            stats, num_dofs, meta_strings, manifest_status = export_ik_to_b3d(joints, out_b3d, trial_name=sid, fps=float(fps), mass_kg=float(mass_kg), height_m=float(height_m), gate_cfg=gate_cfg)
+            stats, num_dofs, meta_strings, manifest_status = export_ik_to_b3d(joints, out_b3d, trial_name=sid, fps=float(fps), mass_kg=float(mass_kg), height_m=float(height_m))
     except Exception as exc:
         return {'id': sid, 'status': 'error', 'error': str(exc)}
     clear_export_caches()
     row = {'id': sid, 'status': manifest_status, 'path': str(out_b3d), 'num_dofs': int(num_dofs), 'ik_stats': stats}
+    if manifest_status == 'ik_failed':
+        reason = meta_strings.get('ik_gate_reason')
+        if reason:
+            row['ik_gate_reason'] = reason
     if meta_strings:
         row['meta'] = meta_strings
     return row
@@ -45,9 +47,8 @@ def run_preprocess_ik(args: argparse.Namespace, logger) -> None:
     if not joints_root_s:
         jr = default_joints_root(hml_root)
         joints_root_s = str(jr) if jr else ''
-    gate_cfg_path = str(getattr(args, 'ik_gate_config', '') or '').strip()
     verbose = str(getattr(args, '_run_log_file', '') or '').strip()
-    work = [(sid, str(hml_root), str(out_root), bool(args.skip_existing), str(args.joint_source), joints_root_s, verbose, float(args.fps), float(args.mass_kg), float(args.height_m), gate_cfg_path) for sid in ids]
+    work = [(sid, str(hml_root), str(out_root), bool(args.skip_existing), str(args.joint_source), joints_root_s, verbose, float(args.fps), float(args.mass_kg), float(args.height_m)) for sid in ids]
     configure_opensim_logging(str(args.opensim_log_level))
     from common.cpu import resolve_preprocess_parallelism
     motion_workers, _ = resolve_preprocess_parallelism(int(args.num_workers), activation_method='none', skip_muscle_activation=True, num_shards=num_shards)

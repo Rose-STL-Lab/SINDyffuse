@@ -115,6 +115,21 @@ def _run_ik_pass(poses: np.ndarray, skeleton: Any, cache: _JointIkCache, *, scal
                 held_frames += 1
     return (poses_q, fk_loss, solver_err, success, held_frames)
 
+def _joint_tracking_errors(poses: np.ndarray, skeleton: Any, cache: _JointIkCache, poses_q: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    t_frames = int(poses_q.shape[1])
+    max_err = np.full(t_frames, np.nan, dtype=np.float64)
+    mean_err = np.full(t_frames, np.nan, dtype=np.float64)
+    joints_list = list(cache.joints)
+    n_targets = len(cache.hml_indices)
+    for t in range(t_frames):
+        skeleton.setPositions(np.asarray(poses_q[:, t], dtype=np.float64).reshape(-1))
+        target_xyz = np.array([poses[t, int(j), :] for j in cache.hml_indices], dtype=np.float64)
+        flat = np.asarray(skeleton.getJointWorldPositions(joints_list), dtype=np.float64).reshape(n_targets, 3)
+        joint_err = np.linalg.norm(flat - target_xyz, axis=1)
+        max_err[t] = float(np.max(joint_err))
+        mean_err[t] = float(np.mean(joint_err))
+    return (max_err, mean_err)
+
 def _scale_bones_to_first_frame(skeleton: Any, poses: np.ndarray, cache: _JointIkCache, *, line_search: bool, log_output: bool) -> None:
     if poses.shape[0] == 0:
         return
@@ -161,11 +176,16 @@ def fit_q(hml3d_positions: np.ndarray, skeleton: Any, *, scale_bodies: bool=Fals
         final_solver = fwd_solver
     poses_q, filled_frames = fill_invalid_pose_frames(final_q)
     held_frames = fwd_held + filled_frames
+    max_joint_err, mean_joint_err = _joint_tracking_errors(poses, skeleton, cache, poses_q)
     finite_solver = final_solver[np.isfinite(final_solver)]
     success = int(finite_solver.size)
-    stats: Dict[str, Any] = {'total_frames': float(t_frames), 'success_count': float(success), 'failed_frames': float(t_frames - success), 'success_ratio': float(success / max(t_frames, 1)), 'held_frames': float(held_frames), 'filled_invalid_frames': float(filled_frames), 'bidirectional': float(bool(bidirectional)), 'bidi_chose_backward': float(chose_bwd), 'per_frame_loss': final_solver.tolist(), 'per_frame_fk_loss': final_fk.tolist()}
+    stats: Dict[str, Any] = {'total_frames': float(t_frames), 'success_count': float(success), 'failed_frames': float(t_frames - success), 'success_ratio': float(success / max(t_frames, 1)), 'held_frames': float(held_frames), 'filled_invalid_frames': float(filled_frames), 'bidirectional': float(bool(bidirectional)), 'bidi_chose_backward': float(chose_bwd), 'per_frame_loss': final_solver.tolist(), 'per_frame_fk_loss': final_fk.tolist(), 'per_frame_max_joint_position_error_m': max_joint_err.tolist(), 'per_frame_mean_joint_position_error_m': mean_joint_err.tolist()}
     solver_stats = _aggregate_err_stats(final_solver, 'ik_error')
     stats.update(solver_stats)
     stats.update({k.replace('ik_error', 'fit_joints_loss'): v for k, v in solver_stats.items()})
     stats.update(_aggregate_err_stats(final_fk, 'fk_loss'))
+    finite_max = max_joint_err[np.isfinite(max_joint_err)]
+    finite_mean = mean_joint_err[np.isfinite(mean_joint_err)]
+    stats['max_joint_position_error_m'] = float(np.max(finite_max)) if finite_max.size else 0.0
+    stats['mean_joint_position_error_m'] = float(np.mean(finite_mean)) if finite_mean.size else 0.0
     return (poses_q, stats)
