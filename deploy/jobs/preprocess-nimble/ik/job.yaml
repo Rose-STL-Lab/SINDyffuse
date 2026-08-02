@@ -7,10 +7,10 @@ metadata:
     app: sindyffuse-preprocess-ik
     activation-method: ik
 spec:
-  parallelism: 64
-  completions: 64
+  parallelism: 180
+  completions: 180
   completionMode: Indexed
-  backoffLimit: 0
+  backoffLimit: 64
   template:
     metadata:
       labels:
@@ -26,11 +26,9 @@ spec:
         workingDir: /mnt/SINDyffuse
         env:
         - name: PREPROCESS_NUM_SHARDS
-          value: "64"
+          value: "180"
         - name: MAX_MOTIONS
           value: "0"
-        - name: SKIP_EXISTING
-          value: "1"
         - name: SINDYFFUSE_RUN_LOG_ID
           value: "RUN_LOG_ID_PLACEHOLDER"
         command: ["/bin/bash", "-c"]

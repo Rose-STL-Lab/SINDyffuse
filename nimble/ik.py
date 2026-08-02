@@ -52,7 +52,7 @@ def fill_invalid_pose_frames(poses_q: np.ndarray, *, atol: float=1e-06) -> Tuple
             last_valid = out[:, t].copy()
     return (out, filled)
 
-def fit_q(hml3d_positions: np.ndarray, skeleton: Any, *, scale_bodies: bool=False, line_search: bool=True, log_output: bool=False, ik_mapping: Tuple[Tuple[str, int], ...] | None=None, bidirectional: bool=True, scale_first_frame: bool=True) -> Tuple[np.ndarray, Dict[str, Any]]:
+def _get_joint_ik_cache(skeleton: Any, *, ik_mapping: Tuple[Tuple[str, int], ...] | None=None) -> _JointIkCache:
     mapping = tuple(ik_mapping) if ik_mapping is not None else HML3D_IK
     key = (id(skeleton), mapping)
     if key not in _JOINT_IK_CACHE:

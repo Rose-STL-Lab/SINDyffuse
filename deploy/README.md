@@ -82,6 +82,34 @@ docker build -f env/Dockerfile -t ghcr.io/rose-stl-lab/sindyffuse:latest .
 docker push ghcr.io/rose-stl-lab/sindyffuse:latest   # requires GHCR login
 ```
 
+## Nautilus (NRP) compliance
+
+Apply jobs to your namespace (not stored in repo manifests):
+
+```bash
+kubectl apply -k deploy/jobs/preprocess-nimble/ik -n YOUR_NAMESPACE
+```
+
+Checklist aligned with [NRP cluster policies](https://nrp.ai/documentation/userdocs/start/policies/):
+
+| Rule | Our setup |
+|------|-----------|
+| **limits within 20% of requests** | All jobs use **limits = requests** (Guaranteed QoS) |
+| **> ~100 pods: limit = request** | Moco (180 shards): 10 CPU / 16Gi limits = requests ✓ |
+| **1 CPU + 2Gi exemption** | IK workers (64 × 1 CPU, 2Gi): exempt from utilization violation checks ✓ |
+| **Batch jobs, not sleep infinity** | Jobs run Python scripts to completion ✓ |
+| **No GPUs on CPU-only preprocess** | Preprocess jobs request CPU/memory only ✓ |
+| **PVC** | `rook-cephfs`, `ReadWriteMany` (standard Nautilus CephFS) ✓ |
+| **Large parallel submits** | 180 moco pods is a large footprint; coordinate with namespace admins if scheduling is slow |
+
+**backoffLimit:** Indexed preprocess jobs retry failed shard pods a limited number of times before the Job fails (IK/none/static: 32; moco: 64). Single-pod jobs (normalization, path-fit): 3.
+
+**SKIP_EXISTING:** Not set in job manifests (default: reprocess all motions). To skip existing B3D files on retry, set env `SKIP_EXISTING=1` at apply time or add it to your local overlay.
+
+**Image:** `deploy/components/cluster-config` rewrites `sindyffuse:latest` → `ncking/sindyffuse:latest`. Every job kustomization must include that component (ik, moco-track, fit-function-paths, normalization, etc.).
+
+Edit **`deploy/components/cluster-config/`** for registry tag and PVC name for your environment.
+
 ## Quick start
 
 ### 1. Use the published image (or build locally)
@@ -196,7 +224,7 @@ Default resources: 8–32 CPU, 32–64Gi memory. Edit `deploy/dev/pod.yaml` to a
 
 All manifests assume the PVC is mounted at `/mnt` with the repo at `/mnt/SINDyffuse` (`workingDir` on every pod/job). HumanML3D lives at `/mnt/SINDyffuse/datasets/HumanML3D`.
 
-Only **preprocess** is orchestrated via [`deploy/scripts/run-preprocess-nimble.sh`](scripts/run-preprocess-nimble.sh). Optional env: `PREPROCESS_NUM_SHARDS`, `MAX_MOTIONS`, `SKIP_EXISTING` (set in the job yaml).
+Only **preprocess** jobs accept optional env: `PREPROCESS_NUM_SHARDS`, `MAX_MOTIONS`, `SKIP_EXISTING` (omit `SKIP_EXISTING` to reprocess all motions).
 
 Each preprocess variant uses an Indexed worker Job (`parallelism=completions=64`). Normalization is a separate Job under `preprocess-nimble/normalization` (`compute_normalization.py`) that merges shard manifests and writes `nimble_b3d/Mean.npy` / `Std.npy`. `run-preprocess-nimble.sh` runs workers then normalization; you can also apply normalization alone.
 

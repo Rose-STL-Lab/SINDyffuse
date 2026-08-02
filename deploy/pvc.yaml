@@ -1,7 +1,7 @@
 # PVC for SINDyffuse data (repo checkout, HumanML3D, results, logs).
 #
-# Apply once per cluster:
-#   kubectl apply -f deploy/pvc.yaml
+# Apply once per namespace:
+#   kubectl apply -f deploy/pvc.yaml -n YOUR_NAMESPACE
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

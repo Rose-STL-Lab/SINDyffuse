@@ -83,7 +83,7 @@ Useful Moco flags: `--moco_core_duration_s`, `--moco_buffer_duration_s`, `--moco
 **Kubernetes:**
 
 ```bash
-kubectl delete job sindyffuse-preprocess-moco-track -n ai-md   # before redeploy
+kubectl delete job sindyffuse-preprocess-moco-track -n YOUR_NAMESPACE   # before redeploy
 kubectl apply -k deploy/jobs/preprocess-nimble/ik
 kubectl apply -k deploy/jobs/fit-function-paths
 kubectl apply -k deploy/jobs/preprocess-nimble/moco-track
