@@ -44,6 +44,8 @@ def _process_one_moco(item: tuple) -> dict:
     row = {'id': sid, 'status': manifest_status, 'path': str(out_b3d), 'num_dofs': int(num_dofs), 'ik_stats': stats}
     if manifest_status == 'moco_skipped':
         row['moco_skipped_reason'] = meta_strings.get('moco_skipped_reason') or meta_strings.get('ik_gate_reason') or 'preflight gate'
+    if manifest_status == 'moco_failed':
+        row['coordinate_tracking_gate_reason'] = meta_strings.get('coordinate_tracking_gate_reason') or meta_strings.get('error') or 'moco failed'
     if meta_strings:
         row['meta'] = meta_strings
     return row

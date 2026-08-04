@@ -2,37 +2,27 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, Tuple
 import numpy as np
+from nimble.coordinate_tracking import DEFAULT_MAX_ROTATIONAL_COORD_RMSE_DEG, DEFAULT_MAX_TRANSLATIONAL_COORD_RMSE_M, is_translational_coordinate
 from nimble.muscle_activation import MuscleActivationConfig
 
-# MinT mint-analysis translational tracking threshold (m).
-# https://github.com/simplexsigil/mint-analysis — RMSE < 0.02 m on tracked coordinates.
-IK_MAX_JOINT_POSITION_ERROR_M = 0.02
-IK_MAX_MEAN_JOINT_POSITION_ERROR_M = 0.02
 IK_MIN_SUCCESS_RATIO = 1.0
 
 @dataclass
+class CoordinateTrackingGateConfig:
+    max_translational_rmse_m: float = DEFAULT_MAX_TRANSLATIONAL_COORD_RMSE_M
+    max_rotational_rmse_deg: float = DEFAULT_MAX_ROTATIONAL_COORD_RMSE_DEG
+
+    @classmethod
+    def default(cls) -> 'CoordinateTrackingGateConfig':
+        return cls()
+
+@dataclass
 class IkGateConfig:
-    max_joint_position_error_m: float = IK_MAX_JOINT_POSITION_ERROR_M
-    max_mean_joint_position_error_m: float = IK_MAX_MEAN_JOINT_POSITION_ERROR_M
     min_success_ratio: float = IK_MIN_SUCCESS_RATIO
 
     @classmethod
     def default(cls) -> 'IkGateConfig':
         return cls()
-
-def _ik_max_joint_position_error(ik_stats: Dict[str, Any]) -> float | None:
-    val = ik_stats.get('max_joint_position_error_m')
-    if val is None:
-        return None
-    out = float(val)
-    return out if np.isfinite(out) else None
-
-def _ik_mean_joint_position_error(ik_stats: Dict[str, Any]) -> float | None:
-    val = ik_stats.get('mean_joint_position_error_m')
-    if val is None:
-        return None
-    out = float(val)
-    return out if np.isfinite(out) else None
 
 def _ik_success_ratio(ik_stats: Dict[str, Any]) -> float | None:
     val = ik_stats.get('success_ratio')
@@ -54,16 +44,10 @@ def q_trajectory_is_valid(q: np.ndarray) -> Tuple[bool, str]:
         return (False, 'all q frames degenerate')
     return (True, '')
 
-def evaluate_ik_quality_gate(ik_stats: Dict[str, Any], *, gate_cfg: IkGateConfig) -> Tuple[bool, str]:
+def evaluate_ik_solver_gate(ik_stats: Dict[str, Any], *, gate_cfg: IkGateConfig) -> Tuple[bool, str]:
     ratio = _ik_success_ratio(ik_stats)
     if ratio is not None and ratio + 1e-12 < float(gate_cfg.min_success_ratio):
         return (False, f'success_ratio {ratio:.4f} < {gate_cfg.min_success_ratio:.4f}')
-    max_err = _ik_max_joint_position_error(ik_stats)
-    if max_err is not None and max_err > float(gate_cfg.max_joint_position_error_m):
-        return (False, f'max_joint_position_error_m {max_err:.6g} > {gate_cfg.max_joint_position_error_m:.6g}')
-    mean_err = _ik_mean_joint_position_error(ik_stats)
-    if mean_err is not None and mean_err > float(gate_cfg.max_mean_joint_position_error_m):
-        return (False, f'mean_joint_position_error_m {mean_err:.6g} > {gate_cfg.max_mean_joint_position_error_m:.6g}')
     return (True, '')
 
 def evaluate_ik_gate(ik_stats: Dict[str, Any], *, q: np.ndarray | None=None, gate_cfg: IkGateConfig | None=None) -> Tuple[bool, str]:
@@ -72,7 +56,34 @@ def evaluate_ik_gate(ik_stats: Dict[str, Any], *, q: np.ndarray | None=None, gat
         ok, reason = q_trajectory_is_valid(q)
         if not ok:
             return (False, reason)
-    return evaluate_ik_quality_gate(ik_stats, gate_cfg=merged)
+    return evaluate_ik_solver_gate(ik_stats, gate_cfg=merged)
+
+def evaluate_coordinate_tracking_gate(tracking: Dict[str, Any] | None, *, gate_cfg: CoordinateTrackingGateConfig | None=None) -> Tuple[bool, str]:
+    merged = gate_cfg or CoordinateTrackingGateConfig.default()
+    if not tracking:
+        return (False, 'missing coordinate tracking metrics')
+    per_coord = tracking.get('per_coordinate') or []
+    if not per_coord:
+        return (False, 'empty coordinate tracking metrics')
+    max_trans = float(tracking.get('max_translational_rmse_m', 0.0))
+    max_rot = float(tracking.get('max_rotational_rmse_deg', 0.0))
+    for row in per_coord:
+        name = str(row.get('coordinate', ''))
+        rmse = float(row.get('rmse', float('nan')))
+        if not np.isfinite(rmse):
+            return (False, f'missing tracking RMSE for {name or "unknown coordinate"}')
+        if is_translational_coordinate(name):
+            if rmse > float(merged.max_translational_rmse_m):
+                return (False, f'translational RMSE {name} {rmse:.6g} m > {merged.max_translational_rmse_m:.6g} m')
+        elif rmse > float(merged.max_rotational_rmse_deg):
+            return (False, f'rotational RMSE {name} {rmse:.6g} deg > {merged.max_rotational_rmse_deg:.6g} deg')
+    if max_trans > float(merged.max_translational_rmse_m):
+        worst = str(tracking.get('worst_translational_coordinate', ''))
+        return (False, f'max translational RMSE {max_trans:.6g} m > {merged.max_translational_rmse_m:.6g} m ({worst})')
+    if max_rot > float(merged.max_rotational_rmse_deg):
+        worst = str(tracking.get('worst_rotational_coordinate', ''))
+        return (False, f'max rotational RMSE {max_rot:.6g} deg > {merged.max_rotational_rmse_deg:.6g} deg ({worst})')
+    return (True, '')
 
 def evaluate_moco_preflight_gate(*, ik_manifest_status: str | None, q: np.ndarray) -> Tuple[bool, str]:
     if ik_manifest_status in {'ik_failed', 'error'}:
@@ -81,7 +92,7 @@ def evaluate_moco_preflight_gate(*, ik_manifest_status: str | None, q: np.ndarra
 
 def evaluate_activation_gate(ik_stats: Dict[str, Any], *, num_frames: int, cfg: MuscleActivationConfig, gate_cfg: IkGateConfig | None=None) -> Tuple[bool, str]:
     del num_frames, cfg
-    return evaluate_ik_quality_gate(ik_stats, gate_cfg=gate_cfg or IkGateConfig.default())
+    return evaluate_ik_solver_gate(ik_stats, gate_cfg=gate_cfg or IkGateConfig.default())
 
 def activation_valid_fraction(activations: np.ndarray, mask: np.ndarray | None) -> float:
     act = np.asarray(activations, dtype=np.float64)
@@ -121,19 +132,25 @@ def summarize_moco_metadata(metadata: Dict[str, Any]) -> Dict[str, float | str |
         out['segment_success_count'] = int(metadata['moco_segment_success_count'])
     if metadata.get('moco_segment_count') is not None:
         out['segment_count'] = int(metadata['moco_segment_count'])
+    if metadata.get('max_translational_coord_rmse_m') is not None:
+        out['max_translational_coord_rmse_m'] = float(metadata['max_translational_coord_rmse_m'])
+    if metadata.get('max_rotational_coord_rmse_deg') is not None:
+        out['max_rotational_coord_rmse_deg'] = float(metadata['max_rotational_coord_rmse_deg'])
     return out
 
 def manifest_gate_reason(row: Dict[str, Any]) -> str:
     meta = row.get('meta') or {}
-    for key in ('moco_skipped_reason', 'ik_gate_reason', 'error'):
+    for key in ('moco_skipped_reason', 'coordinate_tracking_gate_reason', 'ik_gate_reason', 'error'):
         val = row.get(key) or meta.get(key)
         if val:
             return str(val)
     return 'failed'
 
-def derive_moco_manifest_status(*, segment_success_count: int, moco_skipped: bool=False) -> str:
+def derive_moco_manifest_status(*, segment_success_count: int, moco_skipped: bool=False, tracking_ok: bool=True) -> str:
     if moco_skipped:
         return 'moco_skipped'
     if int(segment_success_count) <= 0:
+        return 'moco_failed'
+    if not tracking_ok:
         return 'moco_failed'
     return 'ok'

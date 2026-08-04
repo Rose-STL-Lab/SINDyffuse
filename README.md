@@ -43,7 +43,7 @@ Run entry points from the repo root:
 cd /path/to/SINDyffuse
 ```
 
-### 1. Preprocess (four-job MinT-style pipeline)
+### 1. Preprocess (four-job pipeline)
 
 Production preprocessing is **four sequential jobs** sharing the same Python scripts for local runs and Kubernetes indexed jobs:
 
@@ -63,17 +63,17 @@ python scripts/compute_normalization.py --num_shards 1 --wait
 
 `scripts/preprocess_nimble.py` remains as a **deprecated** local wrapper (IK then Moco). Prefer the split scripts above.
 
-**IK quality gates (Job 1 only):** fixed MinT mint-analysis translational threshold — max/mean mapped joint position error **≤ 0.02 m**, all frames must converge (`success_ratio = 1`), plus structural checks (valid `q`, ≥ 2 frames). Failed motions are `ik_failed` in the manifest; Moco skips them via prior status only (no FK re-filter at Moco).
+**IK quality gates (Job 1):** structural checks only — valid `q`, ≥ 2 frames, and all frames must converge (`success_ratio = 1`). HumanML3D joint-position fit stats are recorded for diagnostics but are **not** used to reject motions. Failed IK motions are `ik_failed` in the manifest; Moco skips them via prior status only.
 
-**MinT-aligned Moco defaults:** `mesh_interval=0.02`, `convergence_tolerance=1e-3`, `max_iterations=3000`, `adaptive_mesh=False`. Segment success is **Ipopt success ∧ parsed activations** only (no reserve QC). Manifest statuses: `ik_ok` / `ik_failed` (Job 1), `ok` / `moco_failed` / `moco_skipped` (Job 3).
+**Coordinate tracking gates (Job 3):** after MocoTrack, compare simulated OpenSim coordinates to the low-pass filtered reference trajectory: per-coordinate RMSE over time, requiring **all** translational coordinates `< 0.02 m` and **all** rotational coordinates `< 5.0°`. Segment success still requires Ipopt success ∧ parsed activations. Manifest statuses: `ik_ok` / `ik_failed` (Job 1), `ok` / `moco_failed` / `moco_skipped` (Job 3).
 
 By default, Moco K8s pods run **one segment at a time with all CPUs** (`MOCO_PARALLEL_SEGMENTS=1`). Optional `--moco_parallel_segments 6` on fat local nodes after pilot.
 
 Each `.b3d` stores generalized coordinates plus custom channels: `guidance_features`, `sindy_features`, `muscle_activations` `[80, T]`, and (MocoTrack) `sim_grf` `[18, T]` plus `muscle_activation_mask` `[1, T]`.
 
-At **20 fps**, segmented Moco uses **28-frame cores**, **3-frame buffers**, and **34-frame solve windows** (1.4 s / 0.14 s MinT timing).
+At **20 fps**, segmented Moco uses **28-frame cores**, **3-frame buffers**, and **34-frame solve windows** (1.4 s core / 0.14 s buffer).
 
-**MocoTrack** — MinT-style segmented trajectory optimization with foot contact: ground offset → 1.4 s Moco windows → seam stitch. Reference coordinates are low-pass filtered at **6 Hz**. Failed segments leave **NaN gaps**; the validity mask marks good frames. Training uses gap-aware window indexing (`nimble/gap_utils.py`).
+**MocoTrack** — segmented trajectory optimization with foot contact: ground offset → 1.4 s Moco windows → seam stitch. Reference coordinates are low-pass filtered at **6 Hz**. Failed segments leave **NaN gaps**; the validity mask marks good frames. Training uses gap-aware window indexing (`nimble/gap_utils.py`).
 
 **Static optimization** (`static_optimization`) — still available via deprecated `preprocess_nimble.py --activation_method static_optimization`.
 

@@ -9,6 +9,7 @@ from common.working_directory import working_directory
 from nimble.muscle_activation import MuscleActivationConfig, MuscleActivationResult, _storage_to_array, activation_column_for_muscle, muscle_names, opensim_quiet, rajagopal_model_path
 from nimble.rajagopal_model import build_activation_model_processor, muscle_names_from_processor, unlock_rajagopal_coordinates
 from nimble.moco_segment import SIM_GRF_COLS
+from nimble.coordinate_tracking import build_moco_reference_coordinates, calculate_coordinate_tracking_errors, extract_simulated_coordinates
 from nimble.rajagopal_coord_map import build_moco_states_table_processor, build_rajagopal_coord_mapping, write_coordinates_mot
 _MOCO_TRACK_MODEL_SINGLE = 'rajagopal_moco_track.osim'
 _MOCO_TRACK_MODEL_MULTI = 'rajagopal_moco_track_multi.osim'
@@ -337,6 +338,17 @@ def _solve_moco_track(q: np.ndarray, *, cfg: MuscleActivationConfig, solve_dir: 
             pass
         if solve_ok:
             grf = _extract_sim_grf_from_moco_solution(moco_sol, moco_model_path, frame_times, _track_config(cfg))
+            try:
+                ref_coords = build_moco_reference_coordinates(q, fps=float(cfg.fps), mapping=mapping, frame_times=frame_times, work_dir=solve_dir, lowpass_hz=float(cfg.moco_reference_lowpass_hz))
+                sim_coords = extract_simulated_coordinates(moco_sol, mapping=mapping, frame_times=frame_times)
+                tracking = calculate_coordinate_tracking_errors(sim_coords, ref_coords, mapping.opensim_coord_names)
+                solve_meta['coordinate_tracking'] = tracking
+                solve_meta['tracking_simulated'] = sim_coords
+                solve_meta['tracking_reference'] = ref_coords
+                solve_meta['max_translational_coord_rmse_m'] = float(tracking['max_translational_rmse_m'])
+                solve_meta['max_rotational_coord_rmse_deg'] = float(tracking['max_rotational_rmse_deg'])
+            except Exception as track_exc:
+                solve_meta['coordinate_tracking_error'] = str(track_exc)
     except Exception as exc:
         activations = np.full((t_len, len(muscle_name_list)), np.nan, dtype=np.float32)
         solve_ok = False

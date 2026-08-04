@@ -156,6 +156,7 @@ def run_moco_track_segmented(q: np.ndarray, *, cfg: MuscleActivationConfig, work
     core_grf: List[np.ndarray] = []
     segment_ok: List[bool] = []
     segment_details: List[Dict[str, Any]] = []
+    segment_tracking_samples: List[Dict[str, Any]] = []
     with opensim_quiet(cfg.opensim_log_level):
         mapping = build_rajagopal_coord_mapping(model_path=model_path)
         moco_model_path = prepare_rajagopal_moco_track_model(work_dir, model_path=model_path, track_cfg=track_cfg)
@@ -175,10 +176,16 @@ def run_moco_track_segmented(q: np.ndarray, *, cfg: MuscleActivationConfig, work
             core_activations.append(core_act.astype(np.float32))
             core_grf.append(core_grf_seg.astype(np.float32))
             segment_ok.append(bool(solve_ok))
-            segment_details.append({'index': int(spec.index), 'solve_start': int(spec.solve_start), 'solve_end': int(spec.solve_end), 'core_start': int(spec.core_start), 'core_end': int(spec.core_end), 'solver_success': bool(solve_meta.get('solver_success', solve_ok)), 'success': bool(solve_ok), 'max_reserve_fraction': solve_meta.get('max_reserve_fraction'), 'objective': solve_meta.get('objective'), 'solver_status': solve_meta.get('solver_status'), 'solver_iterations': solve_meta.get('solver_iterations')})
+            if solve_ok and solve_meta.get('tracking_simulated') is not None and solve_meta.get('tracking_reference') is not None:
+                sim = np.asarray(solve_meta['tracking_simulated'], dtype=np.float64)
+                ref = np.asarray(solve_meta['tracking_reference'], dtype=np.float64)
+                segment_tracking_samples.append({'simulated': sim[local_core_start:local_core_end], 'reference': ref[local_core_start:local_core_end]})
+            segment_details.append({'index': int(spec.index), 'solve_start': int(spec.solve_start), 'solve_end': int(spec.solve_end), 'core_start': int(spec.core_start), 'core_end': int(spec.core_end), 'solver_success': bool(solve_meta.get('solver_success', solve_ok)), 'success': bool(solve_ok), 'max_reserve_fraction': solve_meta.get('max_reserve_fraction'), 'objective': solve_meta.get('objective'), 'solver_status': solve_meta.get('solver_status'), 'solver_iterations': solve_meta.get('solver_iterations'), 'max_translational_coord_rmse_m': solve_meta.get('max_translational_coord_rmse_m'), 'max_rotational_coord_rmse_deg': solve_meta.get('max_rotational_coord_rmse_deg')})
     stitched_act = stitch_segment_values(t_len, segments, core_activations, blend_frames=blend_frames, stitch_seams=True)
     stitched_grf = stitch_segment_values(t_len, segments, core_grf, blend_frames=blend_frames, stitch_seams=True)
     validity_mask = stitch_segment_mask(t_len, segments, segment_ok)
     success_count = int(sum((1 for ok in segment_ok if ok)))
-    meta: Dict[str, Any] = {'activation_method': 'moco_track', 'moco_segmented': True, 'ground_offset_m': float(ground_shift), 'moco_segment_count': int(len(segments)), 'moco_segment_success_count': success_count, 'moco_segment_details': segment_details, 'moco_segment_success_fraction': float(success_count / max(len(segments), 1)), 'num_frames': t_len, 'num_muscles': n_muscles, 'fps': float(cfg.fps), 'sim_grf': stitched_grf.astype(np.float32), 'activation_validity_mask': validity_mask.astype(np.float32), 'repaired_frame_count': 0}
+    from nimble.coordinate_tracking import pool_coordinate_tracking_errors
+    pooled_tracking = pool_coordinate_tracking_errors(segment_tracking_samples, mapping.opensim_coord_names)
+    meta: Dict[str, Any] = {'activation_method': 'moco_track', 'moco_segmented': True, 'ground_offset_m': float(ground_shift), 'moco_segment_count': int(len(segments)), 'moco_segment_success_count': success_count, 'moco_segment_details': segment_details, 'moco_segment_success_fraction': float(success_count / max(len(segments), 1)), 'num_frames': t_len, 'num_muscles': n_muscles, 'fps': float(cfg.fps), 'sim_grf': stitched_grf.astype(np.float32), 'activation_validity_mask': validity_mask.astype(np.float32), 'repaired_frame_count': 0, 'coordinate_tracking': pooled_tracking, 'max_translational_coord_rmse_m': float(pooled_tracking.get('max_translational_rmse_m', 0.0)), 'max_rotational_coord_rmse_deg': float(pooled_tracking.get('max_rotational_rmse_deg', 0.0)), 'worst_translational_coordinate': pooled_tracking.get('worst_translational_coordinate'), 'worst_rotational_coordinate': pooled_tracking.get('worst_rotational_coordinate')}
     return MuscleActivationResult(activations=stitched_act.astype(np.float32), muscle_names=tuple(names_ref), metadata=meta, forces=stitched_grf.astype(np.float32))
