@@ -2,6 +2,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -18,6 +19,7 @@ from nimble.rajagopal_coord_map import build_rajagopal_coord_mapping, write_coor
 from nimble.rajagopal_model import function_based_path_set_path, prepare_unlocked_rajagopal_base
 DEFAULT_SAMPLE_MOTIONS = 200
 DEFAULT_SAMPLE_SEED = 42
+COORDINATE_TABLE_SUBSAMPLE_STRIDE = 5
 _SPLIT_NAMES = ('train', 'val', 'test')
 
 def _caption_key(text_dir: Path, sid: str) -> str:
@@ -114,6 +116,29 @@ def _sample_motion_ids(out_root: Path, sample_motions: int, *, num_shards: int=1
     ids = all_motion_ids(out_root)
     return _diverse_sample_motion_ids(out_root, ids, sample_motions, seed=seed)
 
+def _merge_coordinate_tables(mot_paths: list[Path]):
+    import opensim as osim
+    combined = osim.TimeSeriesTable(str(mot_paths[0]))
+    times = combined.getIndependentColumn()
+    time_offset = float(times[-1]) + 0.05
+    for mot in mot_paths[1:]:
+        table = osim.TimeSeriesTable(str(mot))
+        mot_times = table.getIndependentColumn()
+        for i in range(table.getNumRows()):
+            combined.appendRow(time_offset + float(mot_times[i]), table.getRowAtIndex(i))
+        times = combined.getIndependentColumn()
+        time_offset = float(times[-1]) + 0.05
+    return combined
+
+def _subsample_coordinate_table(table, *, stride: int):
+    if stride <= 1:
+        return table
+    times = table.getIndependentColumn()
+    for i in range(len(times)):
+        if i % stride != 0:
+            table.removeRow(times[i])
+    return table
+
 def fit_function_paths(*, out_root: Path, sample_motions: int=DEFAULT_SAMPLE_MOTIONS, fps: float=20.0, num_shards: int=1, seed: int=DEFAULT_SAMPLE_SEED) -> dict:
     import opensim as osim
     ids = _sample_motion_ids(out_root, sample_motions, num_shards=num_shards, seed=seed)
@@ -137,14 +162,20 @@ def fit_function_paths(*, out_root: Path, sample_motions: int=DEFAULT_SAMPLE_MOT
                 mot_paths.append(mot)
             if not mot_paths:
                 raise RuntimeError('No B3D coordinate tables found for path fitting')
+            coordinates = _subsample_coordinate_table(_merge_coordinate_tables(mot_paths), stride=COORDINATE_TABLE_SUBSAMPLE_STRIDE)
             fitter = osim.PolynomialPathFitter()
             fitter.setModel(osim.ModelProcessor(str(base_model)))
-            for mot in mot_paths:
-                fitter.addCoordinateData(str(mot))
-            fitter.setOutputPathSetFile(str(out_xml))
+            fitter.setCoordinateValues(osim.TableProcessor(coordinates))
+            fit_out_dir = work_dir / 'path_fit_out'
+            fit_out_dir.mkdir(parents=True, exist_ok=True)
+            fitter.setOutputDirectory(str(fit_out_dir))
             fitter.run()
+            model_name = osim.Model(str(base_model)).getName()
+            generated = fit_out_dir / f'{model_name}_FunctionBasedPathSet.xml'
+            if not generated.is_file():
+                raise RuntimeError(f'PolynomialPathFitter did not write expected output: {generated}')
+            shutil.copy2(generated, out_xml)
     finally:
-        import shutil
         shutil.rmtree(work_dir, ignore_errors=True)
     meta = {'output_xml': str(out_xml), 'sample_motions': len(ids), 'sample_seed': int(seed), 'sampling': 'split_and_caption_stratified_systematic', 'motion_ids': ids[:10]}
     (out_xml.parent / 'path_fit_meta.json').write_text(json.dumps(meta, indent=2), encoding='utf-8')
