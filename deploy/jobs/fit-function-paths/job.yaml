@@ -29,11 +29,11 @@ spec:
           python scripts/fit_rajagopal_function_paths.py --sample_motions ${PATH_FIT_SAMPLE_MOTIONS}
         resources:
           limits:
-            memory: 128Gi
-            cpu: "128"
+            memory: 64Gi
+            cpu: "16"
           requests:
-            memory: 128Gi
-            cpu: "128"
+            memory: 64Gi
+            cpu: "16"
         volumeMounts:
         - name: data
           mountPath: /mnt

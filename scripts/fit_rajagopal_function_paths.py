@@ -21,6 +21,7 @@ DEFAULT_SAMPLE_MOTIONS = 200
 DEFAULT_SAMPLE_SEED = 42
 COORDINATE_TABLE_SUBSAMPLE_STRIDE = 5
 _SPLIT_NAMES = ('train', 'val', 'test')
+
 def _caption_key(text_dir: Path, sid: str) -> str:
     path = text_dir / f'{sid}.txt'
     if not path.is_file():
