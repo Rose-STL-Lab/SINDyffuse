@@ -21,7 +21,6 @@ DEFAULT_SAMPLE_MOTIONS = 200
 DEFAULT_SAMPLE_SEED = 42
 COORDINATE_TABLE_SUBSAMPLE_STRIDE = 5
 _SPLIT_NAMES = ('train', 'val', 'test')
-
 def _caption_key(text_dir: Path, sid: str) -> str:
     path = text_dir / f'{sid}.txt'
     if not path.is_file():
@@ -119,6 +118,7 @@ def _sample_motion_ids(out_root: Path, sample_motions: int, *, num_shards: int=1
 def _merge_coordinate_tables(mot_paths: list[Path]):
     import opensim as osim
     combined = osim.TimeSeriesTable(str(mot_paths[0]))
+    mot_paths[0].unlink(missing_ok=True)
     times = combined.getIndependentColumn()
     time_offset = float(times[-1]) + 0.05
     for mot in mot_paths[1:]:
@@ -126,6 +126,7 @@ def _merge_coordinate_tables(mot_paths: list[Path]):
         mot_times = table.getIndependentColumn()
         for i in range(table.getNumRows()):
             combined.appendRow(time_offset + float(mot_times[i]), table.getRowAtIndex(i))
+        mot.unlink(missing_ok=True)
         times = combined.getIndependentColumn()
         time_offset = float(times[-1]) + 0.05
     return combined
@@ -139,7 +140,15 @@ def _subsample_coordinate_table(table, *, stride: int):
             table.removeRow(times[i])
     return table
 
-def fit_function_paths(*, out_root: Path, sample_motions: int=DEFAULT_SAMPLE_MOTIONS, fps: float=20.0, num_shards: int=1, seed: int=DEFAULT_SAMPLE_SEED) -> dict:
+def _resolve_num_threads(num_threads: int | None) -> int | None:
+    if num_threads is not None:
+        return max(1, int(num_threads))
+    raw = os.environ.get('PATH_FIT_NUM_THREADS', '').strip()
+    if not raw:
+        return None
+    return max(1, int(raw))
+
+def fit_function_paths(*, out_root: Path, sample_motions: int=DEFAULT_SAMPLE_MOTIONS, fps: float=20.0, num_shards: int=1, seed: int=DEFAULT_SAMPLE_SEED, num_threads: int | None=None) -> dict:
     import opensim as osim
     ids = _sample_motion_ids(out_root, sample_motions, num_shards=num_shards, seed=seed)
     if not ids:
@@ -147,6 +156,7 @@ def fit_function_paths(*, out_root: Path, sample_motions: int=DEFAULT_SAMPLE_MOT
     out_xml = function_based_path_set_path()
     out_xml.parent.mkdir(parents=True, exist_ok=True)
     work_dir = Path(tempfile.mkdtemp(prefix='sindyffuse_path_fit_'))
+    resolved_threads = _resolve_num_threads(num_threads)
     try:
         with opensim_quiet('Off'):
             base_model = prepare_unlocked_rajagopal_base(work_dir)
@@ -164,6 +174,8 @@ def fit_function_paths(*, out_root: Path, sample_motions: int=DEFAULT_SAMPLE_MOT
                 raise RuntimeError('No B3D coordinate tables found for path fitting')
             coordinates = _subsample_coordinate_table(_merge_coordinate_tables(mot_paths), stride=COORDINATE_TABLE_SUBSAMPLE_STRIDE)
             fitter = osim.PolynomialPathFitter()
+            if resolved_threads is not None:
+                fitter.setNumParallelThreads(resolved_threads)
             fitter.setModel(osim.ModelProcessor(str(base_model)))
             fitter.setCoordinateValues(osim.TableProcessor(coordinates))
             fit_out_dir = work_dir / 'path_fit_out'
@@ -177,7 +189,7 @@ def fit_function_paths(*, out_root: Path, sample_motions: int=DEFAULT_SAMPLE_MOT
             shutil.copy2(generated, out_xml)
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
-    meta = {'output_xml': str(out_xml), 'sample_motions': len(ids), 'sample_seed': int(seed), 'sampling': 'split_and_caption_stratified_systematic', 'motion_ids': ids[:10]}
+    meta = {'output_xml': str(out_xml), 'sample_motions': len(ids), 'sample_seed': int(seed), 'sampling': 'split_and_caption_stratified_systematic', 'motion_ids': ids[:10], 'num_threads': resolved_threads if resolved_threads is not None else 'default'}
     (out_xml.parent / 'path_fit_meta.json').write_text(json.dumps(meta, indent=2), encoding='utf-8')
     return meta
 
@@ -188,9 +200,10 @@ def main() -> None:
     parser.add_argument('--sample_seed', type=int, default=DEFAULT_SAMPLE_SEED)
     parser.add_argument('--fps', type=float, default=20.0)
     parser.add_argument('--num_shards', type=int, default=int(os.environ.get('PREPROCESS_NUM_SHARDS', '1') or 1))
+    parser.add_argument('--num_threads', type=int, default=None, help='PolynomialPathFitter parallel threads (default: OpenSim default, overridable via PATH_FIT_NUM_THREADS).')
     args = parser.parse_args()
     out_root = Path(args.out_root).expanduser().resolve()
-    result = fit_function_paths(out_root=out_root, sample_motions=int(args.sample_motions), fps=float(args.fps), num_shards=int(args.num_shards), seed=int(args.sample_seed))
+    result = fit_function_paths(out_root=out_root, sample_motions=int(args.sample_motions), fps=float(args.fps), num_shards=int(args.num_shards), seed=int(args.sample_seed), num_threads=args.num_threads)
     print(json.dumps(result, indent=2))
 
 if __name__ == '__main__':
