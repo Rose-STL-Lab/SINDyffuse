@@ -138,7 +138,7 @@ def fit_function_paths(*, out_root: Path, sample_motions: int=DEFAULT_SAMPLE_MOT
             if not mot_paths:
                 raise RuntimeError('No B3D coordinate tables found for path fitting')
             fitter = osim.PolynomialPathFitter()
-            fitter.setModel(osim.Model(str(base_model)))
+            fitter.setModel(osim.ModelProcessor(str(base_model)))
             for mot in mot_paths:
                 fitter.addCoordinateData(str(mot))
             fitter.setOutputPathSetFile(str(out_xml))
