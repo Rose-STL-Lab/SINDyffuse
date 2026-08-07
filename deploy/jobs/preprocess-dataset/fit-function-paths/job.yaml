@@ -1,11 +1,10 @@
-# Apply: kubectl apply -k deploy/jobs/preprocess-dataset/fit-function-paths/prepare
-# (Usually launched by orchestrator Job.)
+# Apply: kubectl apply -k deploy/jobs/preprocess-dataset/fit-function-paths
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: sindyffuse-path-fit-prepare
+  name: sindyffuse-fit-function-paths
   labels:
-    app: sindyffuse-path-fit-prepare
+    app: sindyffuse-fit-function-paths
 spec:
   parallelism: 1
   completions: 1
@@ -13,32 +12,34 @@ spec:
   template:
     metadata:
       labels:
-        app: sindyffuse-path-fit-prepare
+        app: sindyffuse-fit-function-paths
     spec:
       restartPolicy: Never
       terminationGracePeriodSeconds: 300
       containers:
-      - name: path-fit-prepare
+      - name: fit-function-paths
         image: sindyffuse:latest
         imagePullPolicy: IfNotPresent
         workingDir: /mnt/SINDyffuse
         env:
-        - name: PREPROCESS_NUM_SHARDS
-          value: "180"
         - name: PATH_FIT_SAMPLE_MOTIONS
           value: "200"
+        - name: PATH_FIT_NUM_THREADS
+          value: "128"
+        - name: PATH_FIT_NUM_WORKERS
+          value: "128"
         command: ["/bin/bash", "-c"]
         args:
         - |
           source deploy/scripts/job-env.sh
-          python scripts/fit_rajagopal_function_paths.py --phase prepare --sample_motions ${PATH_FIT_SAMPLE_MOTIONS} --num_shards ${PREPROCESS_NUM_SHARDS}
+          python scripts/fit_rajagopal_function_paths.py --sample_motions ${PATH_FIT_SAMPLE_MOTIONS} --num_threads ${PATH_FIT_NUM_THREADS} --num_workers ${PATH_FIT_NUM_WORKERS}
         resources:
           limits:
-            memory: 2Gi
-            cpu: "1"
+            memory: 256Gi
+            cpu: "128"
           requests:
-            memory: 2Gi
-            cpu: "1"
+            memory: 256Gi
+            cpu: "128"
         volumeMounts:
         - name: data
           mountPath: /mnt

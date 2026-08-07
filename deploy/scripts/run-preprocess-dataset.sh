@@ -21,7 +21,7 @@ case "${STAGE}" in
     run_phase sindyffuse-preprocess-ik "${BASE}/ik" 12h "ik"
     ;;
   path-fit)
-    run_phase sindyffuse-path-fit-orchestrator "${BASE}/fit-function-paths/orchestrator" 8h "path-fit"
+    run_phase sindyffuse-fit-function-paths "${BASE}/fit-function-paths" 24h "path-fit"
     ;;
   moco)
     run_phase sindyffuse-moco-track-orchestrator "${BASE}/moco-track/orchestrator" 26h "moco-track"

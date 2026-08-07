@@ -50,7 +50,7 @@ Production preprocessing is **four sequential jobs** sharing the same Python scr
 | Job | Script | Purpose |
 |-----|--------|---------|
 | 1 — IK | `scripts/preprocess_ik.py` | joints → `q`, SINDy/guidance features, zero activations |
-| 2 — Path fit | `scripts/fit_rajagopal_function_paths.py` | one-time `FunctionBasedPathSet.xml` from 200 stratified IK B3D samples (local: `--phase all`; cluster: orchestrator + 3 work Jobs) |
+| 2 — Path fit | `scripts/fit_rajagopal_function_paths.py` | one-time `FunctionBasedPathSet.xml` from 200 stratified IK B3D samples (`--phase all`; same command locally and on cluster) |
 | 3 — MocoTrack | `scripts/preprocess_moco.py` | muscle activations + GRF + validity mask (reads IK B3D, no IK redo) |
 | 4 — Norm | `scripts/compute_normalization.py` | merge moco manifests → `Mean.npy` / `Std.npy` |
 
@@ -66,9 +66,9 @@ python scripts/compute_normalization.py --num_shards 1 --wait
 | Mode | Where | Command |
 |------|-------|---------|
 | **A — Super-node** | Local / dev pod | `python scripts/fit_rajagopal_function_paths.py --sample_motions 200` (optional `--num_workers`, `--num_threads`) |
-| **C — Cluster** | Kubernetes | `kubectl apply -k deploy/jobs/preprocess-dataset/fit-function-paths/orchestrator` |
+| **C — Cluster** | Kubernetes | `kubectl apply -k deploy/jobs/preprocess-dataset/fit-function-paths` |
 
-Cluster path-fit uses four Jobs (orchestrator + prepare + 180 convert workers + fit). Optional laptop driver: `./deploy/scripts/run-path-fit.sh YOUR_NAMESPACE`.
+Cluster path-fit is a single Job (128 CPU / 256Gi) running `--phase all`. Optional laptop driver: `./deploy/scripts/run-path-fit.sh YOUR_NAMESPACE`.
 
 **Kubernetes (full preprocess pipeline):**
 
@@ -80,7 +80,7 @@ Or run stages individually:
 
 ```bash
 kubectl apply -k deploy/jobs/preprocess-dataset/ik
-kubectl apply -k deploy/jobs/preprocess-dataset/fit-function-paths/orchestrator
+kubectl apply -k deploy/jobs/preprocess-dataset/fit-function-paths
 kubectl apply -k deploy/jobs/preprocess-dataset/moco-track/orchestrator
 ```
 
@@ -107,7 +107,7 @@ Useful Moco flags: `--moco_core_duration_s`, `--moco_buffer_duration_s`, `--moco
 ```bash
 kubectl delete job sindyffuse-preprocess-moco-track -n YOUR_NAMESPACE   # before redeploy
 kubectl apply -k deploy/jobs/preprocess-dataset/ik
-kubectl apply -k deploy/jobs/preprocess-dataset/fit-function-paths/orchestrator
+kubectl apply -k deploy/jobs/preprocess-dataset/fit-function-paths
 kubectl apply -k deploy/jobs/preprocess-dataset/moco-track/orchestrator
 ```
 

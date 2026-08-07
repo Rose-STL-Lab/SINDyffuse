@@ -188,6 +188,14 @@ def _resolve_num_threads(num_threads: int | None) -> int | None:
         return None
     return max(1, int(raw))
 
+def _resolve_num_workers(num_workers: int) -> int:
+    if int(num_workers) > 0:
+        return max(1, int(num_workers))
+    raw = os.environ.get('PATH_FIT_NUM_WORKERS', '').strip()
+    if raw:
+        return max(1, int(raw))
+    return detect_usable_cpus()
+
 def _convert_motion_to_mot(*, sid: str, out_root: Path, staging: Path, fps: float, mapping: RajagopalCoordMapping) -> Path | None:
     b3d = nimble_b3d_dir(out_root) / f'{sid}.b3d'
     if not b3d.is_file():
@@ -321,7 +329,7 @@ def phase_all(*, out_root: Path, sample_motions: int, fps: float, ik_num_shards:
     out_xml.parent.mkdir(parents=True, exist_ok=True)
     work_dir = Path(tempfile.mkdtemp(prefix='sindyffuse_path_fit_'))
     resolved_threads = _resolve_num_threads(num_threads)
-    workers = detect_usable_cpus() if int(num_workers) <= 0 else max(1, int(num_workers))
+    workers = _resolve_num_workers(num_workers)
     try:
         with opensim_quiet('Off'):
             base_model = prepare_unlocked_rajagopal_base(work_dir)
@@ -352,7 +360,7 @@ def main() -> None:
     parser.add_argument('--num_shards', type=int, default=None, help='IK manifest shards for prepare (PREPROCESS_NUM_SHARDS) or convert/fit shards (PATH_FIT_NUM_SHARDS).')
     parser.add_argument('--shard_index', type=int, default=-1, help='Convert shard index (default: JOB_COMPLETION_INDEX in Indexed Job).')
     parser.add_argument('--num_threads', type=int, default=None, help='PolynomialPathFitter parallel threads (default: OpenSim default, overridable via PATH_FIT_NUM_THREADS).')
-    parser.add_argument('--num_workers', type=int, default=0, help='B3D→.mot worker processes for --phase all (default: detect_usable_cpus()).')
+    parser.add_argument('--num_workers', type=int, default=0, help='B3D→.mot worker processes for --phase all (default: PATH_FIT_NUM_WORKERS or detect_usable_cpus()).')
     parser.add_argument('--staging_dir', default='', help='Override staging directory for convert/fit (default: {out_root}/path_fit_mot).')
     parser.add_argument('--no_cleanup', action='store_true', help='Keep staging .mot files after --phase fit.')
     args = parser.parse_args()
@@ -371,7 +379,7 @@ def main() -> None:
         result = phase_fit(out_root=out_root, fps=float(args.fps), convert_num_shards=convert_num_shards, num_threads=args.num_threads, staging_dir_arg=staging_dir_arg, cleanup=not bool(args.no_cleanup))
     else:
         ik_num_shards = _resolve_ik_num_shards(args.num_shards if args.num_shards is not None else _resolve_ik_num_shards(None))
-        result = phase_all(out_root=out_root, sample_motions=int(args.sample_motions), fps=float(args.fps), ik_num_shards=ik_num_shards, sample_seed=int(args.sample_seed), num_threads=args.num_threads, num_workers=int(args.num_workers))
+        result = phase_all(out_root=out_root, sample_motions=int(args.sample_motions), fps=float(args.fps), ik_num_shards=ik_num_shards, sample_seed=int(args.sample_seed), num_threads=args.num_threads, num_workers=_resolve_num_workers(int(args.num_workers)))
     print(json.dumps(result, indent=2))
 
 if __name__ == '__main__':

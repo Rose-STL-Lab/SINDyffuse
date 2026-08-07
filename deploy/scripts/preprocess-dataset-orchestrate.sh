@@ -10,7 +10,7 @@ k8s_orchestrate_init
 BASE="${ROOT}/deploy/jobs/preprocess-dataset"
 
 run_phase sindyffuse-preprocess-ik "${BASE}/ik" 12h "preprocess-dataset"
-run_phase sindyffuse-path-fit-orchestrator "${BASE}/fit-function-paths/orchestrator" 8h "path-fit-orchestrator"
+run_phase sindyffuse-fit-function-paths "${BASE}/fit-function-paths" 24h "path-fit"
 run_phase sindyffuse-moco-track-orchestrator "${BASE}/moco-track/orchestrator" 26h "moco-track-orchestrator"
 
 echo "Preprocess-dataset pipeline complete."

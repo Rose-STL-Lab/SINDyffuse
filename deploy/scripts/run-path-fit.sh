@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Local/laptop driver for path-fit pipeline (kubectl wait; no sleep).
+# Local/laptop driver for path-fit Job (kubectl wait; no sleep).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -12,8 +12,6 @@ NS="${KUBE_NAMESPACE:-${1:-default}}"
 
 BASE="${ROOT}/deploy/jobs/preprocess-dataset/fit-function-paths"
 
-run_phase sindyffuse-path-fit-prepare "${BASE}/prepare" 10m "path-fit"
-run_phase sindyffuse-path-fit-convert "${BASE}/convert" 2h "path-fit"
-run_phase sindyffuse-path-fit-fit "${BASE}/fit" 6h "path-fit"
+run_phase sindyffuse-fit-function-paths "${BASE}" 24h "path-fit"
 
-echo "Path-fit pipeline complete."
+echo "Path-fit complete."
