@@ -112,7 +112,7 @@ def export_ik_to_b3d(hml3d_positions: np.ndarray, output_b3d_path: str | Path, *
     if per_frame_solver is not None:
         ik_stats['per_frame_loss'] = per_frame_solver
     ik_stats['pose_smoothing_enabled'] = 0.0
-    ik_stats['activation_method'] = 'none'
+    ik_stats['activation_method'] = 'ik'
     poses_q_f32 = np.ascontiguousarray(poses_q, dtype=np.float32)
     del poses_q
     q_traj = np.ascontiguousarray(poses_q_f32.T, dtype=np.float64)
@@ -215,10 +215,8 @@ def export_motion_to_b3d(hml3d_positions: np.ndarray, output_b3d_path: str | Pat
     act_cfg = replace(muscle_activation_cfg or MuscleActivationConfig(fps=float(fps), mass_kg=float(mass_kg)), fps=float(fps), mass_kg=float(mass_kg))
     if activation_method is not None:
         act_cfg = replace(act_cfg, activation_method=normalize_activation_method(activation_method))
-    elif skip_muscle_activation:
-        act_cfg = replace(act_cfg, activation_method='none')
     ik_stats, num_dofs, meta_strings, ik_status = export_ik_to_b3d(hml3d_positions, output_b3d_path, trial_name=trial_name, fps=fps, mass_kg=mass_kg, height_m=height_m, gate_cfg=gate_cfg, opensim_log_level=act_cfg.opensim_log_level)
-    if normalize_activation_method(act_cfg.activation_method) == 'none':
+    if skip_muscle_activation:
         return (ik_stats, num_dofs, meta_strings)
     moco_stats, num_dofs, meta_strings, _ = patch_b3d_moco(output_b3d_path, trial_name=trial_name, act_cfg=act_cfg, ik_manifest_status=ik_status, ik_stats=ik_stats)
     return (moco_stats, num_dofs, meta_strings)

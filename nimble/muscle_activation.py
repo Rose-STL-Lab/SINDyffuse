@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 import opensim as osim
 from nimble.rajagopal_coord_map import RAJAGOPAL_NIMBLE_DOF_NAMES
-ACTIVATION_METHODS: Tuple[str, ...] = ('none', 'moco_track', 'static_optimization')
+ACTIVATION_METHODS: Tuple[str, ...] = ('moco_track',)
 
 def rajagopal_model_path() -> Path:
     import nimblephysics as nimble
@@ -51,17 +51,13 @@ class MuscleActivationConfig:
     moco_adaptive_mesh_interval: float = 0.02
     moco_use_function_based_paths: bool = True
     moco_parallel_segments: int = 1
-    static_activation_exponent: float = 2.0
-    static_convergence_criterion: float = 0.0001
-    static_max_iterations: int = 100
-    static_lowpass_cutoff_hz: float = 6.0
     moco_core_duration_s: float = 1.4
     moco_buffer_duration_s: float = 0.14
     moco_stitch_blend_s: float = 0.14
 
 def normalize_activation_method(method: str) -> str:
     key = str(method).strip().lower()
-    aliases = {'skip': 'none', 'moco': 'moco_track', 'static': 'static_optimization', 'static_opt': 'static_optimization'}
+    aliases = {'moco': 'moco_track', 'ik': 'moco_track'}
     key = aliases.get(key, key)
     if key not in ACTIVATION_METHODS:
         raise ValueError(f'Unknown activation_method {method!r}; expected one of {ACTIVATION_METHODS}')
@@ -69,7 +65,7 @@ def normalize_activation_method(method: str) -> str:
 
 def resolve_activation_method(args: argparse.Namespace) -> str:
     if bool(getattr(args, 'skip_muscle_activation', False)):
-        return 'none'
+        raise ValueError('skip_muscle_activation is not supported; use preprocess_ik.py for IK-only export')
     raw = getattr(args, 'activation_method', None)
     if raw is None:
         return 'moco_track'
@@ -87,12 +83,7 @@ def muscle_activation_config_to_dict(cfg: MuscleActivationConfig) -> Dict[str, A
 
 def add_muscle_activation_cli_args(parser: argparse.ArgumentParser) -> None:
     grp = parser.add_argument_group('muscle activation')
-    grp.add_argument('--activation_method', choices=ACTIVATION_METHODS, default='moco_track', help='Muscle label method: none (skip), moco_track (default), or static_optimization (faster, lower fidelity).')
-    static = parser.add_argument_group('static optimization')
-    static.add_argument('--static_activation_exponent', type=float, default=None)
-    static.add_argument('--static_convergence_criterion', type=float, default=None)
-    static.add_argument('--static_max_iterations', type=int, default=None)
-    static.add_argument('--static_lowpass_cutoff_hz', type=float, default=None)
+    grp.add_argument('--activation_method', choices=ACTIVATION_METHODS, default='moco_track', help='Muscle label method (MocoTrack only).')
     grp = parser.add_argument_group('moco track')
     grp.add_argument('--moco_mesh_interval', type=float, default=None, help='Moco mesh interval in seconds (default 0.02, i.e. 50 colloc points/s at 20 fps).')
     grp.add_argument('--moco_residual_force', type=float, default=None)
@@ -130,7 +121,7 @@ def muscle_activation_config_from_args(args: argparse.Namespace, *, fps: float |
         return cast(val) if val is not None else getattr(base, attr)
     mesh = getattr(args, 'moco_mesh_interval', None)
     parallel_seg = getattr(args, 'moco_parallel_segments', None)
-    return MuscleActivationConfig(activation_method=resolve_activation_method(args), fps=float(fps if fps is not None else getattr(args, 'fps', base.fps)), mass_kg=float(mass_kg if mass_kg is not None else getattr(args, 'mass_kg', base.mass_kg)), mesh_interval=float(mesh) if mesh is not None else base.mesh_interval, moco_residual_force=_pick('moco_residual_force', 'moco_residual_force'), moco_reserve_optimal_force=_pick('moco_reserve_optimal_force', 'moco_reserve_optimal_force'), moco_reserve_scale=_pick('moco_reserve_scale', 'moco_reserve_scale'), moco_reserve_control_weight=_pick('moco_reserve_control_weight', 'moco_reserve_control_weight'), moco_convergence_tolerance=_pick('moco_convergence_tolerance', 'moco_convergence_tolerance'), moco_max_iterations=int(_pick('moco_max_iterations', 'moco_max_iterations', cast=int)), moco_states_tracking_weight=_pick('moco_states_tracking_weight', 'moco_states_tracking_weight'), moco_states_speed_tracking_weight=_pick('moco_states_speed_tracking_weight', 'moco_states_speed_tracking_weight'), moco_aux_coord_tracking_weight=_pick('moco_aux_coord_tracking_weight', 'moco_aux_coord_tracking_weight'), moco_reference_lowpass_hz=0.0 if bool(getattr(args, 'moco_no_reference_lowpass', False)) else float(getattr(args, 'moco_reference_lowpass_hz', None) if getattr(args, 'moco_reference_lowpass_hz', None) is not None else base.moco_reference_lowpass_hz), moco_apply_tracked_states_to_guess=not bool(getattr(args, 'moco_no_apply_tracked_guess', False)), moco_minimize_implicit_aux_derivatives=not bool(getattr(args, 'moco_no_implicit_aux_derivatives', False)), moco_weld_toe_joints=not bool(getattr(args, 'moco_no_weld_toes', False)), moco_multi_contact=not bool(getattr(args, 'moco_no_multi_contact', False)), moco_adaptive_mesh=not bool(getattr(args, 'moco_no_adaptive_mesh', False)), moco_adaptive_mesh_speed_deg_s=_pick('moco_adaptive_mesh_speed_deg_s', 'moco_adaptive_mesh_speed_deg_s'), moco_adaptive_mesh_interval=_pick('moco_adaptive_mesh_interval', 'moco_adaptive_mesh_interval'), moco_contact_toe_radius_m=_pick('moco_contact_toe_radius_m', 'moco_contact_toe_radius_m'), moco_use_function_based_paths=not bool(getattr(args, 'moco_no_function_based_paths', False)), moco_parallel_segments=int(parallel_seg) if parallel_seg is not None else base.moco_parallel_segments, opensim_log_level=str(getattr(args, 'opensim_log_level', base.opensim_log_level)), keep_temp=bool(keep_temp), static_activation_exponent=float(getattr(args, 'static_activation_exponent', None) if getattr(args, 'static_activation_exponent', None) is not None else base.static_activation_exponent), static_convergence_criterion=float(getattr(args, 'static_convergence_criterion', None) if getattr(args, 'static_convergence_criterion', None) is not None else base.static_convergence_criterion), static_max_iterations=int(getattr(args, 'static_max_iterations', None) if getattr(args, 'static_max_iterations', None) is not None else base.static_max_iterations), static_lowpass_cutoff_hz=float(getattr(args, 'static_lowpass_cutoff_hz', None) if getattr(args, 'static_lowpass_cutoff_hz', None) is not None else base.static_lowpass_cutoff_hz), moco_core_duration_s=float(getattr(args, 'moco_core_duration_s', None) if getattr(args, 'moco_core_duration_s', None) is not None else base.moco_core_duration_s), moco_buffer_duration_s=float(getattr(args, 'moco_buffer_duration_s', None) if getattr(args, 'moco_buffer_duration_s', None) is not None else base.moco_buffer_duration_s), moco_stitch_blend_s=float(getattr(args, 'moco_stitch_blend_s', None) if getattr(args, 'moco_stitch_blend_s', None) is not None else base.moco_stitch_blend_s))
+    return MuscleActivationConfig(activation_method=resolve_activation_method(args), fps=float(fps if fps is not None else getattr(args, 'fps', base.fps)), mass_kg=float(mass_kg if mass_kg is not None else getattr(args, 'mass_kg', base.mass_kg)), mesh_interval=float(mesh) if mesh is not None else base.mesh_interval, moco_residual_force=_pick('moco_residual_force', 'moco_residual_force'), moco_reserve_optimal_force=_pick('moco_reserve_optimal_force', 'moco_reserve_optimal_force'), moco_reserve_scale=_pick('moco_reserve_scale', 'moco_reserve_scale'), moco_reserve_control_weight=_pick('moco_reserve_control_weight', 'moco_reserve_control_weight'), moco_convergence_tolerance=_pick('moco_convergence_tolerance', 'moco_convergence_tolerance'), moco_max_iterations=int(_pick('moco_max_iterations', 'moco_max_iterations', cast=int)), moco_states_tracking_weight=_pick('moco_states_tracking_weight', 'moco_states_tracking_weight'), moco_states_speed_tracking_weight=_pick('moco_states_speed_tracking_weight', 'moco_states_speed_tracking_weight'), moco_aux_coord_tracking_weight=_pick('moco_aux_coord_tracking_weight', 'moco_aux_coord_tracking_weight'), moco_reference_lowpass_hz=0.0 if bool(getattr(args, 'moco_no_reference_lowpass', False)) else float(getattr(args, 'moco_reference_lowpass_hz', None) if getattr(args, 'moco_reference_lowpass_hz', None) is not None else base.moco_reference_lowpass_hz), moco_apply_tracked_states_to_guess=not bool(getattr(args, 'moco_no_apply_tracked_guess', False)), moco_minimize_implicit_aux_derivatives=not bool(getattr(args, 'moco_no_implicit_aux_derivatives', False)), moco_weld_toe_joints=not bool(getattr(args, 'moco_no_weld_toes', False)), moco_multi_contact=not bool(getattr(args, 'moco_no_multi_contact', False)), moco_adaptive_mesh=not bool(getattr(args, 'moco_no_adaptive_mesh', False)), moco_adaptive_mesh_speed_deg_s=_pick('moco_adaptive_mesh_speed_deg_s', 'moco_adaptive_mesh_speed_deg_s'), moco_adaptive_mesh_interval=_pick('moco_adaptive_mesh_interval', 'moco_adaptive_mesh_interval'), moco_contact_toe_radius_m=_pick('moco_contact_toe_radius_m', 'moco_contact_toe_radius_m'), moco_use_function_based_paths=not bool(getattr(args, 'moco_no_function_based_paths', False)), moco_parallel_segments=int(parallel_seg) if parallel_seg is not None else base.moco_parallel_segments, opensim_log_level=str(getattr(args, 'opensim_log_level', base.opensim_log_level)), keep_temp=bool(keep_temp), moco_core_duration_s=float(getattr(args, 'moco_core_duration_s', None) if getattr(args, 'moco_core_duration_s', None) is not None else base.moco_core_duration_s), moco_buffer_duration_s=float(getattr(args, 'moco_buffer_duration_s', None) if getattr(args, 'moco_buffer_duration_s', None) is not None else base.moco_buffer_duration_s), moco_stitch_blend_s=float(getattr(args, 'moco_stitch_blend_s', None) if getattr(args, 'moco_stitch_blend_s', None) is not None else base.moco_stitch_blend_s))
 
 def _normalize_opensim_log_level(level: str) -> str:
     key = str(level).strip().lower()
@@ -256,16 +247,10 @@ def _activation_work_dir(cfg: MuscleActivationConfig, *, prefix: str) -> Tuple[P
 def compute_muscle_activation(q: np.ndarray, *, cfg: MuscleActivationConfig | None=None) -> MuscleActivationResult:
     cfg = cfg or MuscleActivationConfig()
     method = normalize_activation_method(cfg.activation_method)
-    if method == 'none':
-        raise ValueError("activation_method is 'none'; export with skip before calling compute_muscle_activation")
     configure_opensim_logging(cfg.opensim_log_level)
     arr = _validate_q_input(q)
-    prefix = 'sindyffuse_static_' if method == 'static_optimization' else 'sindyffuse_moco_'
-    work_dir, cleanup = _activation_work_dir(cfg, prefix=prefix)
+    work_dir, cleanup = _activation_work_dir(cfg, prefix='sindyffuse_moco_')
     try:
-        if method == 'static_optimization':
-            from nimble.static_optimization import run_static_optimization
-            return run_static_optimization(arr, cfg=cfg, work_dir=work_dir)
         from nimble.moco_track import run_moco_track
         return run_moco_track(arr, cfg=cfg, work_dir=work_dir)
     finally:

@@ -50,7 +50,7 @@ class SindyWindowIndex:
         root = Path(data_root)
         b3d_dir = nimble_b3d_dir(root)
         if not b3d_dir.is_dir():
-            raise FileNotFoundError(f'Missing {b3d_dir}; run preprocess_nimble.py first.')
+            raise FileNotFoundError(f'Missing {b3d_dir}; run preprocess pipeline first.')
         entries: List[WindowEntry] = []
         stats = SindyIndexStats()
         for sid in load_split_ids(root, split):
@@ -100,7 +100,7 @@ class SindyWindowIndex:
             if max_samples > 0 and len(entries) >= int(max_samples):
                 break
         if not entries:
-            raise ValueError(f'No SINDy windows indexed from {root} (split={split!r}). Re-run preprocess_nimble.py with muscle activations. skipped_missing={stats.num_motions_skipped_missing} skipped_zero={stats.num_motions_skipped_zero}')
+            raise ValueError(f'No SINDy windows indexed from {root} (split={split!r}). Re-run preprocess pipeline with muscle activations. skipped_missing={stats.num_motions_skipped_missing} skipped_zero={stats.num_motions_skipped_zero}')
         print(f'[sindy/data] indexed {len(entries)} windows from {stats.num_motions_kept} motions (skipped_missing={stats.num_motions_skipped_missing} skipped_zero={stats.num_motions_skipped_zero} skipped_nan={stats.num_motions_skipped_nan} skipped_gap_windows={stats.num_windows_skipped_gap} skipped_short={stats.num_motions_skipped_short})', flush=True)
         return cls(entries, stats=stats)
 
@@ -123,7 +123,7 @@ def compute_window_arrays(b3d_path: str, start_frame: int, window_size: int, *, 
             y = np.zeros((max(0, window_size - 1), N_SINDY_TARGETS), dtype=np.float32)
     else:
         warn_missing_custom_once(str(b3d_path), 'guidance_features/sindy_features/muscle_activations')
-        raise RuntimeError(f'B3D {b3d_path} missing SINDyffuse custom values with muscle activations; re-run preprocess_nimble.py with --activation_method moco_track or static_optimization.')
+        raise RuntimeError(f'B3D {b3d_path} missing SINDyffuse custom values with muscle activations; re-run scripts/preprocess_moco.py.')
     if y.shape[1] != N_SINDY_TARGETS:
         raise ValueError(f'Expected y with {N_SINDY_TARGETS} targets, got {y.shape}')
     return (u, c, y, un, cn)

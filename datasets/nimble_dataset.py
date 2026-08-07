@@ -129,13 +129,13 @@ class NimbleDataset(Dataset):
         if not split_file.exists():
             raise FileNotFoundError(f'Missing split file: {split_file}')
         if not self.b3d_dir.is_dir():
-            raise FileNotFoundError(f'Missing {self.b3d_dir}. Run preprocess_nimble.py first.')
+            raise FileNotFoundError(f'Missing {self.b3d_dir}. Run preprocess pipeline first.')
         self.mean: np.ndarray | None = None
         self.std: np.ndarray | None = None
         if self.normalize:
             mean_p, std_p = (self.b3d_dir / 'Mean.npy', self.b3d_dir / 'Std.npy')
             if not mean_p.is_file() or not std_p.is_file():
-                raise FileNotFoundError(f'Nimble Q stats missing at {self.data_root}. Run preprocess_nimble.py first (writes Mean.npy / Std.npy).')
+                raise FileNotFoundError(f'Nimble Q stats missing at {self.data_root}. Run preprocess pipeline first (writes Mean.npy / Std.npy).')
             self.mean = np.load(mean_p).astype(np.float32)
             self.std = np.load(std_p).astype(np.float32)
         ids = [x.strip() for x in split_file.read_text(encoding='utf-8').splitlines() if x.strip()]

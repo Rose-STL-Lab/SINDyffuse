@@ -51,7 +51,7 @@ def run_preprocess_ik(args: argparse.Namespace, logger) -> None:
     work = [(sid, str(hml_root), str(out_root), bool(args.skip_existing), str(args.joint_source), joints_root_s, verbose, float(args.fps), float(args.mass_kg), float(args.height_m)) for sid in ids]
     configure_opensim_logging(str(args.opensim_log_level))
     from common.cpu import resolve_preprocess_parallelism
-    motion_workers, _ = resolve_preprocess_parallelism(int(args.num_workers), activation_method='none', skip_muscle_activation=True, num_shards=num_shards)
+    motion_workers, _ = resolve_preprocess_parallelism(int(args.num_workers), skip_muscle_activation=True, num_shards=num_shards)
     manifest_file = manifest_path(out_root, shard_index, num_shards, stage='ik')
     ok, err, skip = run_preprocess_loop(work=work, process_one=_process_one_ik, manifest_file=manifest_file, motion_workers=motion_workers, moco_threads=1, ok_statuses={'ik_ok'}, logger=logger)
     logger.progress(f'Done (ik): {ok} ik_ok, {err} failed, {skip} skipped')

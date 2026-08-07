@@ -64,7 +64,7 @@ def run_preprocess_moco(args: argparse.Namespace, logger) -> None:
         work.append((sid, str(out_root), bool(args.skip_existing), verbose, act_cfg_json, ik_status, ik_stats_json))
     configure_opensim_logging(str(args.opensim_log_level))
     parallel_segments = int(getattr(args, 'moco_parallel_segments', act_cfg.moco_parallel_segments) or 1)
-    motion_workers, moco_threads = resolve_preprocess_parallelism(int(args.num_workers), activation_method='moco_track', moco_parallel_motions=int(getattr(args, 'moco_parallel_motions', 1) or 1), moco_parallel_segments=parallel_segments, num_shards=num_shards)
+    motion_workers, moco_threads = resolve_preprocess_parallelism(int(args.num_workers), moco_parallel_motions=int(getattr(args, 'moco_parallel_motions', 1) or 1), moco_parallel_segments=parallel_segments, num_shards=num_shards)
     configure_compute_threads(moco_threads)
     manifest_file = manifest_path(out_root, shard_index, num_shards, stage='moco')
     ok, err, skip = run_preprocess_loop(work=work, process_one=_process_one_moco, manifest_file=manifest_file, motion_workers=motion_workers, moco_threads=moco_threads, ok_statuses={'ok'}, logger=logger)

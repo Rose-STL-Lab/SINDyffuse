@@ -84,7 +84,7 @@ def _generate(args: argparse.Namespace, logger: RunLogger) -> None:
     data_root = resolve_data_root(args.data_root or None)
     cache = nimble_b3d_dir(data_root)
     if not cache.is_dir():
-        raise FileNotFoundError(f'Nimble B3D cache required at {cache}. Run preprocess_nimble.py first.')
+        raise FileNotFoundError(f'Nimble B3D cache required at {cache}. Run preprocess pipeline first.')
     device = resolve_torch_device(args.device)
     ckpt = torch.load(args.checkpoint, map_location=device)
     feature_dim = int(ckpt.get('feature_dim', 0))

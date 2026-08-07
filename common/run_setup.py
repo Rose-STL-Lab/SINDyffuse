@@ -45,7 +45,7 @@ def resolve_training_data_root(data_root: str | Path | None) -> str:
 def require_nimble_b3d(data_root: str | Path) -> Path:
     cache = nimble_b3d_dir(data_root)
     if not cache.is_dir():
-        raise FileNotFoundError(f'Nimble B3D cache required at {cache}. Run scripts/preprocess_nimble.py first.')
+        raise FileNotFoundError(f'Nimble B3D cache required at {cache}. Run scripts/preprocess_ik.py and scripts/preprocess_moco.py first.')
     return cache
 
 def require_nimble_normalization(data_root: str | Path) -> None:
@@ -88,8 +88,6 @@ def env_flag(name: str, default: bool=False) -> bool:
 def apply_preprocess_job_env(args) -> None:
     if os.environ.get('PREPROCESS_NUM_SHARDS'):
         args.num_shards = env_int('PREPROCESS_NUM_SHARDS', int(getattr(args, 'num_shards', 1)))
-    if os.environ.get('ACTIVATION_METHOD'):
-        args.activation_method = os.environ['ACTIVATION_METHOD'].strip()
     if os.environ.get('MAX_MOTIONS'):
         args.max_motions = env_int('MAX_MOTIONS', 0)
     if 'SKIP_EXISTING' in os.environ:

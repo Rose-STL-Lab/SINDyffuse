@@ -26,7 +26,7 @@ class ActivationB3DDataset(Dataset):
         self.zero_atol = float(zero_atol)
         self.b3d_dir = nimble_b3d_dir(self.data_root)
         if not self.b3d_dir.is_dir():
-            raise FileNotFoundError(f'Missing {self.b3d_dir}. Run preprocess_nimble.py first.')
+            raise FileNotFoundError(f'Missing {self.b3d_dir}. Run preprocess pipeline first.')
         self.mean: np.ndarray | None = None
         self.std: np.ndarray | None = None
         if self.normalize_q:
@@ -86,7 +86,7 @@ class ActivationB3DDataset(Dataset):
                         continue
                 self._windows.append((str(b3d_path), 0, int(st)))
         if not self._windows:
-            raise ValueError(f'No activation windows for split={self.split!r} under {self.b3d_dir}. Re-run preprocess_nimble.py to embed muscle_activations (skipped_zero={self.num_motions_skipped_zero}).')
+            raise ValueError(f'No activation windows for split={self.split!r} under {self.b3d_dir}. Re-run preprocess pipeline to embed muscle_activations (skipped_zero={self.num_motions_skipped_zero}).')
         self._subj_cache: dict[str, nimble.biomechanics.SubjectOnDisk] = {}
 
     def __len__(self) -> int:

@@ -76,7 +76,7 @@ def train(config_path: str, out_dir: str, *, preload: bool=False) -> None:
     data_root = resolve_data_root(data_cfg.get('data_root'))
     cache = nimble_b3d_dir(data_root)
     if not cache.is_dir():
-        raise FileNotFoundError(f'Nimble B3D cache required at {cache}. Run preprocess_nimble.py first.')
+        raise FileNotFoundError(f'Nimble B3D cache required at {cache}. Run preprocess pipeline first.')
     _preload = bool(preload or data_cfg.get('preload', False))
     train_ds = get_dataset(dataset_name, data_root=data_root, split='train', window_size=int(data_cfg.get('window_size', 64)), fps=int(data_cfg.get('fps', 20)), normalize=bool(data_cfg.get('normalize', True)), preload=_preload)
     log_main('[train] data.preload=True: q trajectories loaded into RAM' if _preload else '[train] data.preload=False: reading B3D windows on demand')

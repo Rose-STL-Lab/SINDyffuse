@@ -1,11 +1,11 @@
-# Worker phase: kubectl apply -k deploy/jobs/preprocess-nimble/ik
+# Worker phase: kubectl apply -k deploy/jobs/preprocess-dataset/moco-track
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: sindyffuse-preprocess-ik
+  name: sindyffuse-preprocess-moco-track
   labels:
-    app: sindyffuse-preprocess-ik
-    activation-method: ik
+    app: sindyffuse-preprocess-moco-track
+    activation-method: moco-track
 spec:
   parallelism: 180
   completions: 180
@@ -14,13 +14,13 @@ spec:
   template:
     metadata:
       labels:
-        app: sindyffuse-preprocess-ik
-        activation-method: ik
+        app: sindyffuse-preprocess-moco-track
+        activation-method: moco-track
     spec:
       restartPolicy: Never
       terminationGracePeriodSeconds: 300
       containers:
-      - name: sindyffuse-preprocess-ik
+      - name: sindyffuse-preprocess-moco-track
         image: sindyffuse:latest
         imagePullPolicy: IfNotPresent
         workingDir: /mnt/SINDyffuse
@@ -29,20 +29,32 @@ spec:
           value: "180"
         - name: MAX_MOTIONS
           value: "0"
+        - name: MOCO_MAX_ITERATIONS
+          value: "3000"
+        - name: MOCO_CONVERGENCE_TOLERANCE
+          value: "0.001"
+        - name: MOCO_MESH_INTERVAL
+          value: "0.02"
+        - name: MOCO_PARALLEL_SEGMENTS
+          value: "1"
+        - name: MOCO_CORE_DURATION_S
+          value: "1.4"
+        - name: MOCO_BUFFER_DURATION_S
+          value: "0.14"
         - name: SINDYFFUSE_RUN_LOG_ID
           value: "RUN_LOG_ID_PLACEHOLDER"
         command: ["/bin/bash", "-c"]
         args:
         - |
           source deploy/scripts/job-env.sh
-          python scripts/preprocess_ik.py --skip_normalization --num_workers 1
+          python scripts/preprocess_moco.py --skip_normalization --num_workers 0
         resources:
           limits:
-            memory: 2Gi
-            cpu: "1"
+            memory: 16Gi
+            cpu: "10"
           requests:
-            memory: 2Gi
-            cpu: "1"
+            memory: 16Gi
+            cpu: "10"
         volumeMounts:
         - name: data
           mountPath: /mnt

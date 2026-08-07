@@ -1,0 +1,40 @@
+# Apply: kubectl apply -k deploy/jobs/preprocess-dataset/orchestrator
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sindyffuse-preprocess-dataset-orchestrator
+  labels:
+    app: sindyffuse-preprocess-dataset-orchestrator
+spec:
+  parallelism: 1
+  completions: 1
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        app: sindyffuse-preprocess-dataset-orchestrator
+    spec:
+      restartPolicy: Never
+      serviceAccountName: sindyffuse-preprocess-orchestrator
+      containers:
+      - name: orchestrator
+        image: bitnami/kubectl:latest
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: SINDYFFUSE_ROOT
+          value: /mnt/SINDyffuse
+        command: ["/bin/bash", "/mnt/SINDyffuse/deploy/scripts/preprocess-dataset-orchestrate.sh"]
+        resources:
+          limits:
+            memory: 2Gi
+            cpu: "1"
+          requests:
+            memory: 2Gi
+            cpu: "1"
+        volumeMounts:
+        - name: data
+          mountPath: /mnt
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: sindyffuse

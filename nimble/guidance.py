@@ -72,11 +72,11 @@ class DeterministicNimbleGuidance:
         root = Path(data_root).expanduser()
         cache = nimble_b3d_dir(root)
         if not cache.is_dir():
-            raise FileNotFoundError(f'Nimble guidance requires Nimble B3D cache at {cache}. Run preprocess_nimble.py first.')
+            raise FileNotFoundError(f'Nimble guidance requires Nimble B3D cache at {cache}. Run preprocess pipeline first.')
         mean_np = cache / 'Mean.npy'
         std_np = cache / 'Std.npy'
         if not mean_np.is_file() or not std_np.is_file():
-            raise FileNotFoundError(f'Nimble guidance needs Mean.npy and Std.npy at {root}. Run preprocess_nimble.py first.')
+            raise FileNotFoundError(f'Nimble guidance needs Mean.npy and Std.npy at {root}. Run preprocess pipeline first.')
         self.fps = float(fps)
         self.weights = weights or NimbleGuidanceWeights()
         self.nimble_settings = nimble_settings or NimbleGuidanceConfig()

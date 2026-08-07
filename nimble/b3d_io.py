@@ -55,7 +55,7 @@ def warn_missing_custom_once(b3d_path: str, name: str) -> None:
     if key in _WARNED_MISSING:
         return
     _WARNED_MISSING.add(key)
-    warnings.warn(f'B3D {b3d_path} missing customValues {name!r}; computing at load time. Re-run preprocess_nimble.py to embed cached features.', stacklevel=3)
+    warnings.warn(f'B3D {b3d_path} missing customValues {name!r}; computing at load time. Re-run scripts/preprocess_ik.py to embed cached features.', stacklevel=3)
 
 def b3d_has_cached_sindy_features(subj: Any, trial: int=0) -> bool:
     if not (subject_has_custom_value(subj, GUIDANCE_FEATURES) and subject_has_custom_value(subj, SINDY_FEATURES)):

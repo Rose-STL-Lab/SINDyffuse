@@ -41,7 +41,7 @@ def compute_normalization(args: argparse.Namespace, logger: RunLogger | None=Non
     out_root = Path(getattr(args, 'out_root', default_root) or default_root).expanduser().resolve()
     num_shards = int(getattr(args, 'num_shards', 1) or 1)
     if num_shards <= 1:
-        raise ValueError('--num_shards must be > 1 (use preprocess_nimble.py directly when not sharded)')
+        raise ValueError('--num_shards must be > 1 (use preprocess_ik.py / preprocess_moco.py directly when not sharded)')
     if bool(getattr(args, 'wait', False)):
         _wait_for_shards(out_root, num_shards, timeout_hours=float(getattr(args, 'timeout_hours', 48.0)), poll_seconds=float(getattr(args, 'poll_seconds', 30.0)), logger=log)
     missing = [i for i in range(num_shards) if not _shard_manifest_path(out_root, i, stage='moco').is_file()]

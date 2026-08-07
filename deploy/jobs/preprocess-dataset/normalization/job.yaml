@@ -1,39 +1,41 @@
+# Apply: kubectl apply -k deploy/jobs/preprocess-dataset/normalization
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: sindyffuse-fit-function-paths
+  name: sindyffuse-compute-normalization
   labels:
-    app: sindyffuse-fit-function-paths
+    app: sindyffuse-compute-normalization
 spec:
-  parallelism: 1
-  completions: 1
   backoffLimit: 3
   template:
     metadata:
       labels:
-        app: sindyffuse-fit-function-paths
+        app: sindyffuse-compute-normalization
     spec:
       restartPolicy: Never
+      terminationGracePeriodSeconds: 300
       containers:
-      - name: fit-function-paths
+      - name: sindyffuse-compute-normalization
         image: sindyffuse:latest
         imagePullPolicy: IfNotPresent
         workingDir: /mnt/SINDyffuse
         env:
-        - name: PATH_FIT_SAMPLE_MOTIONS
-          value: "200"
+        - name: PREPROCESS_NUM_SHARDS
+          value: "180"
+        - name: SINDYFFUSE_RUN_LOG_ID
+          value: "RUN_LOG_ID_PLACEHOLDER"
         command: ["/bin/bash", "-c"]
         args:
         - |
           source deploy/scripts/job-env.sh
-          python scripts/fit_rajagopal_function_paths.py --sample_motions ${PATH_FIT_SAMPLE_MOTIONS}
+          python scripts/compute_normalization.py --wait --num_shards 180
         resources:
           limits:
-            memory: 64Gi
-            cpu: "16"
+            memory: 2Gi
+            cpu: "1"
           requests:
-            memory: 64Gi
-            cpu: "16"
+            memory: 2Gi
+            cpu: "1"
         volumeMounts:
         - name: data
           mountPath: /mnt

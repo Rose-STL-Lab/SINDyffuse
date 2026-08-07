@@ -30,7 +30,7 @@ datasets/HumanML3D/          # not committed (~20GB)
   new_joint_vecs/
   texts/
   train.txt, val.txt, test.txt
-  nimble_b3d/                # canonical B3D cache (IK / static / Moco — one folder)
+  nimble_b3d/                # canonical B3D cache (IK + Moco — one folder)
     {motion_id}.b3d
     Mean.npy, Std.npy
 ```
@@ -50,18 +50,41 @@ Production preprocessing is **four sequential jobs** sharing the same Python scr
 | Job | Script | Purpose |
 |-----|--------|---------|
 | 1 — IK | `scripts/preprocess_ik.py` | joints → `q`, SINDy/guidance features, zero activations |
-| 2 — Path fit | `scripts/fit_rajagopal_function_paths.py` | one-time `FunctionBasedPathSet.xml` from 200 stratified IK B3D samples |
+| 2 — Path fit | `scripts/fit_rajagopal_function_paths.py` | one-time `FunctionBasedPathSet.xml` from 200 stratified IK B3D samples (local: `--phase all`; cluster: orchestrator + 3 work Jobs) |
 | 3 — MocoTrack | `scripts/preprocess_moco.py` | muscle activations + GRF + validity mask (reads IK B3D, no IK redo) |
 | 4 — Norm | `scripts/compute_normalization.py` | merge moco manifests → `Mean.npy` / `Std.npy` |
 
 ```bash
 python scripts/preprocess_ik.py --max_motions 5
-python scripts/fit_rajagopal_function_paths.py --sample_motions 200
+python scripts/fit_rajagopal_function_paths.py --sample_motions 200   # Mode A: local super-node (--phase all)
 python scripts/preprocess_moco.py --max_motions 5
 python scripts/compute_normalization.py --num_shards 1 --wait
 ```
 
-`scripts/preprocess_nimble.py` remains as a **deprecated** local wrapper (IK then Moco). Prefer the split scripts above.
+**Path fit (Job 2)** — two execution modes:
+
+| Mode | Where | Command |
+|------|-------|---------|
+| **A — Super-node** | Local / dev pod | `python scripts/fit_rajagopal_function_paths.py --sample_motions 200` (optional `--num_workers`, `--num_threads`) |
+| **C — Cluster** | Kubernetes | `kubectl apply -k deploy/jobs/preprocess-dataset/fit-function-paths/orchestrator` |
+
+Cluster path-fit uses four Jobs (orchestrator + prepare + 180 convert workers + fit). Optional laptop driver: `./deploy/scripts/run-path-fit.sh YOUR_NAMESPACE`.
+
+**Kubernetes (full preprocess pipeline):**
+
+```bash
+kubectl apply -k deploy/jobs/preprocess-dataset/orchestrator -n YOUR_NAMESPACE
+```
+
+Or run stages individually:
+
+```bash
+kubectl apply -k deploy/jobs/preprocess-dataset/ik
+kubectl apply -k deploy/jobs/preprocess-dataset/fit-function-paths/orchestrator
+kubectl apply -k deploy/jobs/preprocess-dataset/moco-track/orchestrator
+```
+
+Optional laptop driver: `./deploy/scripts/run-preprocess-dataset.sh [full|ik|path-fit|moco] YOUR_NAMESPACE`
 
 **IK quality gates (Job 1):** structural checks only — valid `q`, ≥ 2 frames, and all frames must converge (`success_ratio = 1`). HumanML3D joint-position fit stats are recorded for diagnostics but are **not** used to reject motions. Failed IK motions are `ik_failed` in the manifest; Moco skips them via prior status only.
 
@@ -75,20 +98,17 @@ At **20 fps**, segmented Moco uses **28-frame cores**, **3-frame buffers**, and 
 
 **MocoTrack** — segmented trajectory optimization with foot contact: ground offset → 1.4 s Moco windows → seam stitch. Reference coordinates are low-pass filtered at **6 Hz**. Failed segments leave **NaN gaps**; the validity mask marks good frames. Training uses gap-aware window indexing (`nimble/gap_utils.py`).
 
-**Static optimization** (`static_optimization`) — still available via deprecated `preprocess_nimble.py --activation_method static_optimization`.
-
 OpenSim console output is **hidden by default** (`--opensim_log_level Off`).
 
 Useful Moco flags: `--moco_core_duration_s`, `--moco_buffer_duration_s`, `--moco_stitch_blend_s`, `--moco_reference_lowpass_hz`, `--moco_states_speed_tracking_weight`, `--moco_no_reference_lowpass`, `--moco_mesh_interval`, `--moco_parallel_segments`, `--opensim_log_level`.
 
-**Kubernetes:**
+**Kubernetes (manual stage apply):**
 
 ```bash
 kubectl delete job sindyffuse-preprocess-moco-track -n YOUR_NAMESPACE   # before redeploy
-kubectl apply -k deploy/jobs/preprocess-nimble/ik
-kubectl apply -k deploy/jobs/fit-function-paths
-kubectl apply -k deploy/jobs/preprocess-nimble/moco-track
-kubectl apply -k deploy/jobs/preprocess-nimble/normalization
+kubectl apply -k deploy/jobs/preprocess-dataset/ik
+kubectl apply -k deploy/jobs/preprocess-dataset/fit-function-paths/orchestrator
+kubectl apply -k deploy/jobs/preprocess-dataset/moco-track/orchestrator
 ```
 
 Local sharded test:
@@ -103,7 +123,7 @@ After upgrading the B3D schema (e.g. L_bio v2 with 40 `guidance_features` rows),
 
 ### 2. Train SINDy
 
-Requires B3D cache with **muscle activations** (preprocess with `moco_track` or `static_optimization`, not `none`).
+Requires B3D cache with **MocoTrack muscle activations** (`scripts/preprocess_moco.py`).
 
 ```bash
 python scripts/train_sindy.py --output results/sindy
@@ -168,12 +188,12 @@ Config: `configs/evaluate.json` (32 samples per caption, 1000 bootstrap replicat
 Job manifests live under `deploy/`. Configure your image and PVC in `deploy/components/cluster-config/`, then apply individual jobs:
 
 ```bash
-./deploy/scripts/run-preprocess-nimble.sh static-optimization
-# Or normalization alone after workers finished:
-kubectl apply -k deploy/jobs/preprocess-nimble/normalization
-kubectl apply -k deploy/jobs/train-sindy
-kubectl apply -k deploy/jobs/train-surrogate
-kubectl apply -k deploy/jobs/train-diffusion/nimble
+./deploy/scripts/run-preprocess-dataset.sh full YOUR_NAMESPACE
+# Or individual stages:
+kubectl apply -k deploy/jobs/preprocess-dataset/ik -n YOUR_NAMESPACE
+kubectl apply -k deploy/jobs/train-sindy -n YOUR_NAMESPACE
+kubectl apply -k deploy/jobs/train-surrogate -n YOUR_NAMESPACE
+kubectl apply -k deploy/jobs/train-diffusion/nimble -n YOUR_NAMESPACE
 
 # Interactive dev shell on the cluster
 kubectl apply -k deploy/dev
@@ -191,7 +211,6 @@ See [deploy/README.md](deploy/README.md) for image build, storage setup, and the
 | `scripts/preprocess_ik.py` | Job 1: HumanML3D → IK B3D cache |
 | `scripts/preprocess_moco.py` | Job 3: MocoTrack on IK B3D cache |
 | `scripts/fit_rajagopal_function_paths.py` | Job 2: function-based muscle paths |
-| `scripts/preprocess_nimble.py` | Deprecated wrapper (IK + Moco) |
 | `scripts/compute_normalization.py` | Merge shard manifests; compute `Mean.npy` / `Std.npy` |
 | `scripts/train_sindy.py` | Train SINDy text→Xi model |
 | `scripts/train_surrogate.py` | Train q→activation surrogate |
@@ -221,8 +240,9 @@ OpenSim-backed tests require the `sindyffuse` conda env.
 ## Troubleshooting
 
 ```bash
-python scripts/preprocess_nimble.py --max_motions 1 --opensim_log_level Warn
+python scripts/preprocess_ik.py --max_motions 1 --opensim_log_level Warn
+python scripts/preprocess_moco.py --max_motions 1 --opensim_log_level Warn
 ```
 
-- Re-run `scripts/preprocess_nimble.py` after upgrading B3D schema (e.g. adding `muscle_activations`).  
-- If Ctrl+C does not stop Moco: `pkill -9 -f "python scripts/preprocess_nimble.py"`.
+- Re-run preprocess after upgrading B3D schema (e.g. adding `muscle_activations`).  
+- If Ctrl+C does not stop Moco: `pkill -9 -f "python scripts/preprocess_moco.py"`.

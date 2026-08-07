@@ -1,0 +1,48 @@
+# Apply: kubectl apply -k deploy/jobs/preprocess-dataset/fit-function-paths/fit
+# (Usually launched by orchestrator Job after convert completes.)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sindyffuse-path-fit-fit
+  labels:
+    app: sindyffuse-path-fit-fit
+spec:
+  parallelism: 1
+  completions: 1
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: sindyffuse-path-fit-fit
+    spec:
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 300
+      containers:
+      - name: path-fit-fit
+        image: sindyffuse:latest
+        imagePullPolicy: IfNotPresent
+        workingDir: /mnt/SINDyffuse
+        env:
+        - name: PATH_FIT_NUM_SHARDS
+          value: "180"
+        - name: PATH_FIT_NUM_THREADS
+          value: "32"
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          source deploy/scripts/job-env.sh
+          python scripts/fit_rajagopal_function_paths.py --phase fit --num_shards ${PATH_FIT_NUM_SHARDS} --num_threads ${PATH_FIT_NUM_THREADS}
+        resources:
+          limits:
+            memory: 32Gi
+            cpu: "32"
+          requests:
+            memory: 32Gi
+            cpu: "32"
+        volumeMounts:
+        - name: data
+          mountPath: /mnt
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: sindyffuse
