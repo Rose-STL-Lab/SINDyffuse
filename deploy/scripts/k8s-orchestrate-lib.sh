@@ -1,14 +1,11 @@
 #!/usr/bin/env bash
-# Shared kubectl wait orchestration (no sleep). Source from pipeline scripts.
+# Shared local kubectl wait helpers (run from laptop; no in-cluster orchestrator Jobs).
 # Requires: set -euo pipefail in caller.
 
 k8s_orchestrate_init() {
-  ROOT="${SINDYFFUSE_ROOT:-/mnt/SINDyffuse}"
-  if [[ -f /var/run/secrets/kubernetes.io/serviceaccount/namespace ]]; then
-    NS="${KUBE_NAMESPACE:-$(tr -d '\n' < /var/run/secrets/kubernetes.io/serviceaccount/namespace)}"
-  else
-    NS="${KUBE_NAMESPACE:-default}"
-  fi
+  ROOT="${SINDYFFUSE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+  export SINDYFFUSE_ROOT="${ROOT}"
+  NS="${KUBE_NAMESPACE:-default}"
 }
 
 _report_job_failure() {

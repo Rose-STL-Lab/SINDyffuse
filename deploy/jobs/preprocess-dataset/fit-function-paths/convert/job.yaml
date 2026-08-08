@@ -1,41 +1,36 @@
-# Worker phase: kubectl apply -k deploy/jobs/preprocess-dataset/ik
+# Apply: kubectl apply -k deploy/jobs/preprocess-dataset/fit-function-paths/convert
+# (Usually launched by deploy/scripts/path-fit-orchestrate.sh after prepare completes.)
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: sindyffuse-preprocess-ik
+  name: sindyffuse-path-fit-convert
   labels:
-    app: sindyffuse-preprocess-ik
-    activation-method: ik
+    app: sindyffuse-path-fit-convert
 spec:
   parallelism: 180
   completions: 180
   completionMode: Indexed
-  backoffLimit: 64
+  backoffLimit: 32
   template:
     metadata:
       labels:
-        app: sindyffuse-preprocess-ik
-        activation-method: ik
+        app: sindyffuse-path-fit-convert
     spec:
       restartPolicy: Never
       terminationGracePeriodSeconds: 300
       containers:
-      - name: sindyffuse-preprocess-ik
+      - name: path-fit-convert
         image: sindyffuse:latest
         imagePullPolicy: IfNotPresent
         workingDir: /mnt/SINDyffuse
         env:
-        - name: PREPROCESS_NUM_SHARDS
+        - name: PATH_FIT_NUM_SHARDS
           value: "180"
-        - name: MAX_MOTIONS
-          value: "0"
-        - name: SINDYFFUSE_RUN_LOG_ID
-          value: "RUN_LOG_ID_PLACEHOLDER"
         command: ["/bin/bash", "-c"]
         args:
         - |
           source deploy/scripts/job-env.sh
-          python scripts/preprocess_ik.py --skip_normalization --num_workers 1
+          python scripts/fit_rajagopal_function_paths.py --phase convert --num_shards ${PATH_FIT_NUM_SHARDS} --num_workers 1
         resources:
           limits:
             memory: 2Gi

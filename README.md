@@ -50,7 +50,7 @@ Production preprocessing is **four sequential jobs** sharing the same Python scr
 | Job | Script | Purpose |
 |-----|--------|---------|
 | 1 — IK | `scripts/preprocess_ik.py` | joints → `q`, SINDy/guidance features, zero activations |
-| 2 — Path fit | `scripts/fit_rajagopal_function_paths.py` | one-time `FunctionBasedPathSet.xml` from 200 stratified IK B3D samples (`--phase all`; same command locally and on cluster) |
+| 2 — Path fit | `scripts/fit_rajagopal_function_paths.py` | one-time `FunctionBasedPathSet.xml` from 200 stratified IK B3D samples (local: `--phase all`; cluster: `./deploy/scripts/preprocess-dataset-orchestrate.sh path-fit`) |
 | 3 — MocoTrack | `scripts/preprocess_moco.py` | muscle activations + GRF + validity mask (reads IK B3D, no IK redo) |
 | 4 — Norm | `scripts/compute_normalization.py` | merge moco manifests → `Mean.npy` / `Std.npy` |
 
@@ -66,25 +66,29 @@ python scripts/compute_normalization.py --num_shards 1 --wait
 | Mode | Where | Command |
 |------|-------|---------|
 | **A — Super-node** | Local / dev pod | `python scripts/fit_rajagopal_function_paths.py --sample_motions 200` (optional `--num_workers`, `--num_threads`) |
-| **C — Cluster** | Kubernetes | `kubectl apply -k deploy/jobs/preprocess-dataset/fit-function-paths` |
+| **C — Cluster** | Kubernetes | `./deploy/scripts/preprocess-dataset-orchestrate.sh path-fit YOUR_NAMESPACE` |
 
-Cluster path-fit is a single Job (128 CPU / 256Gi) running `--phase all`. Optional laptop driver: `./deploy/scripts/run-path-fit.sh YOUR_NAMESPACE`.
+Cluster path-fit runs prepare → convert (180 pods) → fit via local orchestrator scripts. Same pattern for the full pipeline: `./deploy/scripts/preprocess-dataset-orchestrate.sh full YOUR_NAMESPACE`.
 
 **Kubernetes (full preprocess pipeline):**
 
 ```bash
-kubectl apply -k deploy/jobs/preprocess-dataset/orchestrator -n YOUR_NAMESPACE
+./deploy/scripts/preprocess-dataset-orchestrate.sh full YOUR_NAMESPACE
 ```
 
 Or run stages individually:
 
 ```bash
-kubectl apply -k deploy/jobs/preprocess-dataset/ik
-kubectl apply -k deploy/jobs/preprocess-dataset/fit-function-paths
-kubectl apply -k deploy/jobs/preprocess-dataset/moco-track/orchestrator
+./deploy/scripts/preprocess-dataset-orchestrate.sh ik YOUR_NAMESPACE
+./deploy/scripts/preprocess-dataset-orchestrate.sh path-fit YOUR_NAMESPACE
+./deploy/scripts/preprocess-dataset-orchestrate.sh moco YOUR_NAMESPACE
 ```
 
-Optional laptop driver: `./deploy/scripts/run-preprocess-dataset.sh [full|ik|path-fit|moco] YOUR_NAMESPACE`
+Optional direct Job apply (without local orchestrator):
+
+```bash
+kubectl apply -k deploy/jobs/preprocess-dataset/inverse_kinematics -n YOUR_NAMESPACE
+```
 
 **IK quality gates (Job 1):** structural checks only — valid `q`, ≥ 2 frames, and all frames must converge (`success_ratio = 1`). HumanML3D joint-position fit stats are recorded for diagnostics but are **not** used to reject motions. Failed IK motions are `ik_failed` in the manifest; Moco skips them via prior status only.
 
@@ -106,9 +110,8 @@ Useful Moco flags: `--moco_core_duration_s`, `--moco_buffer_duration_s`, `--moco
 
 ```bash
 kubectl delete job sindyffuse-preprocess-moco-track -n YOUR_NAMESPACE   # before redeploy
-kubectl apply -k deploy/jobs/preprocess-dataset/ik
-kubectl apply -k deploy/jobs/preprocess-dataset/fit-function-paths
-kubectl apply -k deploy/jobs/preprocess-dataset/moco-track/orchestrator
+kubectl apply -k deploy/jobs/preprocess-dataset/inverse_kinematics -n YOUR_NAMESPACE
+# path-fit and moco: use preprocess-dataset-orchestrate.sh path-fit|moco YOUR_NAMESPACE
 ```
 
 Local sharded test:
@@ -188,9 +191,9 @@ Config: `configs/evaluate.json` (32 samples per caption, 1000 bootstrap replicat
 Job manifests live under `deploy/`. Configure your image and PVC in `deploy/components/cluster-config/`, then apply individual jobs:
 
 ```bash
-./deploy/scripts/run-preprocess-dataset.sh full YOUR_NAMESPACE
+./deploy/scripts/preprocess-dataset-orchestrate.sh full YOUR_NAMESPACE
 # Or individual stages:
-kubectl apply -k deploy/jobs/preprocess-dataset/ik -n YOUR_NAMESPACE
+kubectl apply -k deploy/jobs/preprocess-dataset/inverse_kinematics -n YOUR_NAMESPACE
 kubectl apply -k deploy/jobs/train-sindy -n YOUR_NAMESPACE
 kubectl apply -k deploy/jobs/train-surrogate -n YOUR_NAMESPACE
 kubectl apply -k deploy/jobs/train-diffusion/nimble -n YOUR_NAMESPACE

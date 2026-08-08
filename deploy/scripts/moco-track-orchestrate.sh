@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# In-cluster orchestrator: moco-track workers → normalization (kubectl wait; no sleep).
+# Local driver: moco-track workers → normalization (kubectl wait; no sleep).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

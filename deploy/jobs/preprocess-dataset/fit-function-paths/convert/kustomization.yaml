@@ -5,5 +5,4 @@ resources:
   - job.yaml
 
 components:
-  - ../../components/orchestrator-rbac
   - ../../../../components/cluster-config

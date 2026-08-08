@@ -5,4 +5,4 @@ resources:
   - job.yaml
 
 components:
-  - ../../../components/cluster-config
+  - ../../../../components/cluster-config
