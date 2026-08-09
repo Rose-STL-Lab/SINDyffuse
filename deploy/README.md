@@ -287,7 +287,7 @@ Startup logs include `[distributed/gpu]` with rank, world size, device count, an
 |-----|-----------|------|
 | `sindyffuse-path-fit-prepare` | 1 CPU, 2Gi | sample motions → manifest |
 | `sindyffuse-path-fit-convert` | 180 × (1 CPU, 2Gi) | IndexedJob B3D → `.mot` |
-| `sindyffuse-path-fit-fit` | 32 CPU, 32Gi | merge + OpenSim path fit |
+| `sindyffuse-path-fit-fit` | 32 CPU, 256Gi | merge + OpenSim path fit |
 
 Run after IK (Job 1) and before MocoTrack (Job 3).
 

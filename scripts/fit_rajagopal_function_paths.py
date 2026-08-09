@@ -155,6 +155,36 @@ def _write_motion_manifest(out_root: Path, *, motion_ids: list[str], sample_moti
     path.write_text(json.dumps(payload, indent=2), encoding='utf-8')
     return path
 
+def _collect_staged_mot_paths(staging: Path, motion_ids: list[str]) -> list[Path]:
+    mot_paths: list[Path] = []
+    for sid in motion_ids:
+        mot = staging / f'{sid}.mot'
+        if mot.is_file():
+            mot_paths.append(mot)
+    return mot_paths
+
+def _restage_mot_files_from_b3d(*, out_root: Path, staging: Path, motion_ids: list[str], fps: float, work_dir: Path) -> list[Path]:
+    staging.mkdir(parents=True, exist_ok=True)
+    with opensim_quiet('Off'):
+        base_model = prepare_unlocked_rajagopal_base(work_dir)
+        mapping = build_rajagopal_coord_mapping(model_path=base_model)
+        mot_paths: list[Path] = []
+        for sid in motion_ids:
+            mot = _convert_motion_to_mot(sid=sid, out_root=out_root, staging=staging, fps=fps, mapping=mapping)
+            if mot is not None:
+                mot_paths.append(mot)
+    return mot_paths
+
+def _copy_mot_paths_for_merge(mot_paths: list[Path], work_dir: Path) -> list[Path]:
+    merge_dir = work_dir / 'mot_merge'
+    merge_dir.mkdir(parents=True, exist_ok=True)
+    copied: list[Path] = []
+    for index, mot in enumerate(mot_paths):
+        dest = merge_dir / f'{index:04d}_{mot.name}'
+        shutil.copy2(mot, dest)
+        copied.append(dest)
+    return copied
+
 def _merge_coordinate_tables(mot_paths: list[Path]):
     import opensim as osim
     combined = osim.TimeSeriesTable(str(mot_paths[0]))
@@ -230,7 +260,8 @@ def _run_path_fitter(*, base_model: Path, mot_paths: list[Path], num_threads: in
     resolved_threads = _resolve_num_threads(num_threads)
     if resolved_threads is not None:
         configure_compute_threads(resolved_threads)
-    coordinates = _subsample_coordinate_table(_merge_coordinate_tables(list(mot_paths)), stride=COORDINATE_TABLE_SUBSAMPLE_STRIDE)
+    merge_inputs = _copy_mot_paths_for_merge(mot_paths, work_dir)
+    coordinates = _subsample_coordinate_table(_merge_coordinate_tables(merge_inputs), stride=COORDINATE_TABLE_SUBSAMPLE_STRIDE)
     fitter = osim.PolynomialPathFitter()
     if resolved_threads is not None:
         fitter.setNumParallelThreads(resolved_threads)
@@ -289,11 +320,15 @@ def phase_fit(*, out_root: Path, fps: float, convert_num_shards: int, num_thread
     motion_ids: list[str] = list(manifest['motion_ids'])
     sample_seed = int(manifest.get('sample_seed', DEFAULT_SAMPLE_SEED))
     staging = staging_dir(out_root, staging_dir_arg)
-    mot_paths: list[Path] = []
-    for sid in motion_ids:
-        mot = staging / f'{sid}.mot'
-        if mot.is_file():
-            mot_paths.append(mot)
+    mot_paths = _collect_staged_mot_paths(staging, motion_ids)
+    missing_ids = [sid for sid in motion_ids if not (staging / f'{sid}.mot').is_file()]
+    if missing_ids:
+        work_dir = Path(tempfile.mkdtemp(prefix='sindyffuse_path_fit_restage_'))
+        try:
+            _restage_mot_files_from_b3d(out_root=out_root, staging=staging, motion_ids=missing_ids, fps=fps, work_dir=work_dir)
+            mot_paths = _collect_staged_mot_paths(staging, motion_ids)
+        finally:
+            shutil.rmtree(work_dir, ignore_errors=True)
     if not mot_paths:
         raise RuntimeError(f'No staged .mot files found under {staging}')
     out_xml = function_based_path_set_path()

@@ -9,8 +9,8 @@ k8s_orchestrate_init
 
 BASE="${ROOT}/deploy/jobs/preprocess-dataset/fit-function-paths"
 
-run_phase sindyffuse-path-fit-prepare "${BASE}/prepare" 30m "path-fit-prepare"
-run_phase sindyffuse-path-fit-convert "${BASE}/convert" 2h "path-fit-convert"
-run_phase sindyffuse-path-fit-fit "${BASE}/fit" 6h "path-fit-fit"
+run_phase sindyffuse-path-fit-prepare "${BASE}/prepare" 2h "path-fit-prepare"
+run_phase sindyffuse-path-fit-convert "${BASE}/convert" 24h "path-fit-convert"
+run_phase sindyffuse-path-fit-fit "${BASE}/fit" 48h "path-fit-fit"
 
 echo "Path-fit pipeline complete."

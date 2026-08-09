@@ -34,10 +34,10 @@ spec:
           python scripts/fit_rajagopal_function_paths.py --phase fit --num_shards ${PATH_FIT_NUM_SHARDS} --num_threads ${PATH_FIT_NUM_THREADS}
         resources:
           limits:
-            memory: 32Gi
+            memory: 256Gi
             cpu: "32"
           requests:
-            memory: 32Gi
+            memory: 256Gi
             cpu: "32"
         volumeMounts:
         - name: data
