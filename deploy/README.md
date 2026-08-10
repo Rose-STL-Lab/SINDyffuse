@@ -10,17 +10,14 @@ deploy/
   scripts/
     preprocess-dataset-orchestrate.sh  # entry: full | ik | path-fit | moco
     k8s-orchestrate-lib.sh             # shared kubectl apply + wait helpers
-    path-fit-orchestrate.sh            # prepare → convert → fit (path-fit stage)
+    path-fit-orchestrate.sh            # single path-fit Job (sample → convert → fit)
     moco-track-orchestrate.sh          # moco workers → normalization (moco stage)
   components/
     cluster-config/           # edit image + PVC here (applies to all jobs/dev pod)
   jobs/
     preprocess-dataset/
       inverse_kinematics/       # IndexedJob (180 × 1 CPU)
-      fit-function-paths/
-        prepare/
-        convert/                # IndexedJob B3D → .mot workers
-        fit/                    # merge + PolynomialPathFitter
+      fit-function-paths/       # single Job (sample → B3D→.mot → OpenSim fit)
       moco-track/
         job.yaml                # IndexedJob MocoTrack workers
       normalization/            # Mean.npy / Std.npy after moco workers
@@ -110,7 +107,7 @@ Checklist aligned with [NRP cluster policies](https://nrp.ai/documentation/userd
 | **PVC** | `rook-cephfs`, `ReadWriteMany` (standard Nautilus CephFS) ✓ |
 | **Large parallel submits** | 180 moco pods is a large footprint; coordinate with namespace admins if scheduling is slow |
 
-**backoffLimit:** Indexed preprocess jobs retry failed shard pods a limited number of times before the Job fails (IK: 32; moco: 64; path-fit convert: 32). Single-pod jobs (normalization, path-fit prepare/fit): 3.
+**backoffLimit:** Indexed preprocess jobs retry failed shard pods a limited number of times before the Job fails (IK: 32; moco: 64). Single-pod jobs (normalization, path-fit): 3.
 
 **SKIP_EXISTING:** Not set in job manifests (default: reprocess all motions). To skip existing B3D files on retry, set env `SKIP_EXISTING=1` at apply time or add it to your local overlay.
 
@@ -202,7 +199,7 @@ Delete jobs before a manual re-run:
 
 ```bash
 kubectl delete job sindyffuse-preprocess-ik \
-  sindyffuse-path-fit-prepare sindyffuse-path-fit-convert sindyffuse-path-fit-fit \
+  sindyffuse-fit-function-paths \
   sindyffuse-preprocess-moco-track sindyffuse-compute-normalization --ignore-not-found -n YOUR_NAMESPACE
 ```
 
@@ -235,9 +232,9 @@ Default resources: 8–32 CPU, 32–64Gi memory. Edit `deploy/dev/pod.yaml` to a
 
 All manifests assume the PVC is mounted at `/mnt` with the repo at `/mnt/SINDyffuse` (`workingDir` on every pod/job). HumanML3D lives at `/mnt/SINDyffuse/datasets/HumanML3D`.
 
-Only **preprocess** jobs accept optional env: `PREPROCESS_NUM_SHARDS`, `PATH_FIT_NUM_SHARDS`, `MAX_MOTIONS`, `SKIP_EXISTING` (omit `SKIP_EXISTING` to reprocess all motions).
+Only **preprocess** jobs accept optional env: `PREPROCESS_NUM_SHARDS`, `PATH_FIT_SAMPLE_MOTIONS`, `PATH_FIT_NUM_THREADS`, `PATH_FIT_NUM_WORKERS`, `MAX_MOTIONS`, `SKIP_EXISTING` (omit `SKIP_EXISTING` to reprocess all motions).
 
-Preprocess uses Indexed worker Jobs (`parallelism=completions=180` for inverse kinematics, path-fit convert, and moco). **Pipeline sequencing** is done by local scripts in `deploy/scripts/` (`kubectl apply` + `kubectl wait` from your laptop — no in-cluster orchestrator Jobs or RBAC). Normalization merges moco shard manifests after moco workers finish.
+Preprocess uses Indexed worker Jobs (`parallelism=completions=180` for inverse kinematics and moco). Path-fit is a single Job. **Pipeline sequencing** is done by local scripts in `deploy/scripts/` (`kubectl apply` + `kubectl wait` from your laptop — no in-cluster orchestrator Jobs or RBAC). Normalization merges moco shard manifests after moco workers finish.
 
 ## Resource profiles
 
@@ -247,7 +244,7 @@ Preprocess uses Indexed worker Jobs (`parallelism=completions=180` for inverse k
 | preprocess-dataset/inverse_kinematics | 180 × 1 | 180 × 2Gi | — |
 | preprocess-dataset/moco-track | 180 × 10 | 180 × 16Gi | — |
 | preprocess-dataset/normalization | 1 | 2Gi | — |
-| preprocess-dataset/fit-function-paths/* | see Path fit section | — | — |
+| preprocess-dataset/fit-function-paths | 128 | 256Gi | — |
 | benchmark-moco-parallel | 64 | 64Gi | — |
 | train-sindy | 16 | 64Gi | 1 |
 | train-surrogate | 16 | 64Gi | 1 |
@@ -274,20 +271,18 @@ Startup logs include `[distributed/gpu]` with rank, world size, device count, an
 
 ## Path fit (Job 2)
 
-**Mode A (local):** `python scripts/fit_rajagopal_function_paths.py --sample_motions 200` — single process (`--phase all`), optional `--num_workers` / `--num_threads`.
+**Mode A (local):** `python scripts/fit_rajagopal_function_paths.py --sample_motions 200` — single process, optional `--num_workers` / `--num_threads`.
 
-**Mode C (cluster):** local script submits three work Jobs in order (`kubectl wait`, no sleep):
+**Mode C (cluster):** single Job (same command as local):
 
 ```bash
 ./deploy/scripts/preprocess-dataset-orchestrate.sh path-fit YOUR_NAMESPACE
-# or: ./deploy/scripts/path-fit-orchestrate.sh  (set KUBE_NAMESPACE first)
+# or: kubectl apply -k deploy/jobs/preprocess-dataset/fit-function-paths -n YOUR_NAMESPACE
 ```
 
 | Job | Resources | Role |
 |-----|-----------|------|
-| `sindyffuse-path-fit-prepare` | 1 CPU, 2Gi | sample motions → manifest |
-| `sindyffuse-path-fit-convert` | 180 × (1 CPU, 2Gi) | IndexedJob B3D → `.mot` |
-| `sindyffuse-path-fit-fit` | 32 CPU, 256Gi | merge + OpenSim path fit |
+| `sindyffuse-fit-function-paths` | 128 CPU, 256Gi | sample → B3D→`.mot` (ProcessPool) → merge → OpenSim path fit |
 
 Run after IK (Job 1) and before MocoTrack (Job 3).
 

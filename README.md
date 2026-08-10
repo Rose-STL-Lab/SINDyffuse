@@ -50,13 +50,13 @@ Production preprocessing is **four sequential jobs** sharing the same Python scr
 | Job | Script | Purpose |
 |-----|--------|---------|
 | 1 — IK | `scripts/preprocess_ik.py` | joints → `q`, SINDy/guidance features, zero activations |
-| 2 — Path fit | `scripts/fit_rajagopal_function_paths.py` | one-time `FunctionBasedPathSet.xml` from 200 stratified IK B3D samples (local: `--phase all`; cluster: `./deploy/scripts/preprocess-dataset-orchestrate.sh path-fit`) |
+| 2 — Path fit | `scripts/fit_rajagopal_function_paths.py` | one-time `FunctionBasedPathSet.xml` from 200 stratified IK B3D samples (same command locally and on cluster) |
 | 3 — MocoTrack | `scripts/preprocess_moco.py` | muscle activations + GRF + validity mask (reads IK B3D, no IK redo) |
 | 4 — Norm | `scripts/compute_normalization.py` | merge moco manifests → `Mean.npy` / `Std.npy` |
 
 ```bash
 python scripts/preprocess_ik.py --max_motions 5
-python scripts/fit_rajagopal_function_paths.py --sample_motions 200   # Mode A: local super-node (--phase all)
+python scripts/fit_rajagopal_function_paths.py --sample_motions 200
 python scripts/preprocess_moco.py --max_motions 5
 python scripts/compute_normalization.py --num_shards 1 --wait
 ```
@@ -68,7 +68,7 @@ python scripts/compute_normalization.py --num_shards 1 --wait
 | **A — Super-node** | Local / dev pod | `python scripts/fit_rajagopal_function_paths.py --sample_motions 200` (optional `--num_workers`, `--num_threads`) |
 | **C — Cluster** | Kubernetes | `./deploy/scripts/preprocess-dataset-orchestrate.sh path-fit YOUR_NAMESPACE` |
 
-Cluster path-fit runs prepare → convert (180 pods) → fit via local orchestrator scripts. Same pattern for the full pipeline: `./deploy/scripts/preprocess-dataset-orchestrate.sh full YOUR_NAMESPACE`.
+Cluster path-fit is a single Job (128 CPU / 256Gi). Same pattern for the full pipeline: `./deploy/scripts/preprocess-dataset-orchestrate.sh full YOUR_NAMESPACE`.
 
 **Kubernetes (full preprocess pipeline):**
 
@@ -111,7 +111,7 @@ Useful Moco flags: `--moco_core_duration_s`, `--moco_buffer_duration_s`, `--moco
 ```bash
 kubectl delete job sindyffuse-preprocess-moco-track -n YOUR_NAMESPACE   # before redeploy
 kubectl apply -k deploy/jobs/preprocess-dataset/inverse_kinematics -n YOUR_NAMESPACE
-# path-fit and moco: use preprocess-dataset-orchestrate.sh path-fit|moco YOUR_NAMESPACE
+kubectl apply -k deploy/jobs/preprocess-dataset/fit-function-paths -n YOUR_NAMESPACE
 ```
 
 Local sharded test:

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Local driver: path-fit prepare → convert → fit (kubectl wait; no sleep).
+# Local driver: single path-fit Job (sample → B3D→.mot → OpenSim fit).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -9,8 +9,6 @@ k8s_orchestrate_init
 
 BASE="${ROOT}/deploy/jobs/preprocess-dataset/fit-function-paths"
 
-run_phase sindyffuse-path-fit-prepare "${BASE}/prepare" 2h "path-fit-prepare"
-run_phase sindyffuse-path-fit-convert "${BASE}/convert" 24h "path-fit-convert"
-run_phase sindyffuse-path-fit-fit "${BASE}/fit" 48h "path-fit-fit"
+run_phase sindyffuse-fit-function-paths "${BASE}" 48h "path-fit"
 
-echo "Path-fit pipeline complete."
+echo "Path-fit complete."
