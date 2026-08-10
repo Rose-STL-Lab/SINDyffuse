@@ -31,6 +31,11 @@ spec:
         args:
         - |
           source deploy/scripts/job-env.sh
+          export OMP_NUM_THREADS="${PATH_FIT_NUM_THREADS}"
+          export MKL_NUM_THREADS="${PATH_FIT_NUM_THREADS}"
+          export OPENBLAS_NUM_THREADS="${PATH_FIT_NUM_THREADS}"
+          export VECLIB_MAXIMUM_THREADS="${PATH_FIT_NUM_THREADS}"
+          export NUMEXPR_NUM_THREADS="${PATH_FIT_NUM_THREADS}"
           python scripts/fit_rajagopal_function_paths.py --phase fit --num_shards ${PATH_FIT_NUM_SHARDS} --num_threads ${PATH_FIT_NUM_THREADS}
         resources:
           limits:

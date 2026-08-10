@@ -14,6 +14,10 @@ if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 from common.cpu import configure_compute_threads, detect_usable_cpus, resolve_k8s_shard
 from common.paths import default_humanml3d_root, humanml3d_text_dir, nimble_b3d_dir
+# OpenSim initializes OpenMP/MKL pools at import; configure before nimble imports it.
+_path_fit_threads = os.environ.get('PATH_FIT_NUM_THREADS', '').strip()
+if _path_fit_threads.isdigit():
+    configure_compute_threads(int(_path_fit_threads))
 from common.preprocess_runner import load_stage_manifest_index
 from datasets.nimble_dataset import read_q_segment
 from datasets.splits import all_motion_ids, load_split_ids, shard_motion_ids
@@ -210,13 +214,13 @@ def _subsample_coordinate_table(table, *, stride: int):
             table.removeRow(times[i])
     return table
 
-def _resolve_num_threads(num_threads: int | None) -> int | None:
+def _resolve_num_threads(num_threads: int | None) -> int:
     if num_threads is not None:
         return max(1, int(num_threads))
     raw = os.environ.get('PATH_FIT_NUM_THREADS', '').strip()
-    if not raw:
-        return None
-    return max(1, int(raw))
+    if raw.isdigit():
+        return max(1, int(raw))
+    return detect_usable_cpus()
 
 def _convert_motion_to_mot(*, sid: str, out_root: Path, staging: Path, fps: float, mapping: RajagopalCoordMapping) -> Path | None:
     b3d = nimble_b3d_dir(out_root) / f'{sid}.b3d'
@@ -257,14 +261,11 @@ def _convert_motions_parallel(*, ids: list[str], out_root: Path, staging: Path, 
 
 def _run_path_fitter(*, base_model: Path, mot_paths: list[Path], num_threads: int | None, work_dir: Path) -> Path:
     import opensim as osim
-    resolved_threads = _resolve_num_threads(num_threads)
-    if resolved_threads is not None:
-        configure_compute_threads(resolved_threads)
+    resolved_threads = configure_compute_threads(_resolve_num_threads(num_threads))
     merge_inputs = _copy_mot_paths_for_merge(mot_paths, work_dir)
     coordinates = _subsample_coordinate_table(_merge_coordinate_tables(merge_inputs), stride=COORDINATE_TABLE_SUBSAMPLE_STRIDE)
     fitter = osim.PolynomialPathFitter()
-    if resolved_threads is not None:
-        fitter.setNumParallelThreads(resolved_threads)
+    fitter.setNumParallelThreads(resolved_threads)
     fitter.setModel(osim.ModelProcessor(str(base_model)))
     fitter.setCoordinateValues(osim.TableProcessor(coordinates))
     fit_out_dir = work_dir / 'path_fit_out'
@@ -334,15 +335,15 @@ def phase_fit(*, out_root: Path, fps: float, convert_num_shards: int, num_thread
     out_xml = function_based_path_set_path()
     out_xml.parent.mkdir(parents=True, exist_ok=True)
     work_dir = Path(tempfile.mkdtemp(prefix='sindyffuse_path_fit_'))
-    resolved_threads = _resolve_num_threads(num_threads)
+    resolved_threads = configure_compute_threads(_resolve_num_threads(num_threads))
     try:
         with opensim_quiet('Off'):
             base_model = prepare_unlocked_rajagopal_base(work_dir)
-            generated = _run_path_fitter(base_model=base_model, mot_paths=mot_paths, num_threads=num_threads, work_dir=work_dir)
+            generated = _run_path_fitter(base_model=base_model, mot_paths=mot_paths, num_threads=resolved_threads, work_dir=work_dir)
             shutil.copy2(generated, out_xml)
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
-    meta = {'phase': 'fit', 'output_xml': str(out_xml), 'sample_motions': len(motion_ids), 'sample_seed': sample_seed, 'sampling': manifest.get('sampling', 'split_and_caption_stratified_systematic'), 'motion_ids': motion_ids[:10], 'num_threads': resolved_threads if resolved_threads is not None else 'default', 'mot_files': len(mot_paths)}
+    meta = {'phase': 'fit', 'output_xml': str(out_xml), 'sample_motions': len(motion_ids), 'sample_seed': sample_seed, 'sampling': manifest.get('sampling', 'split_and_caption_stratified_systematic'), 'motion_ids': motion_ids[:10], 'num_threads': resolved_threads, 'mot_files': len(mot_paths)}
     (out_xml.parent / 'path_fit_meta.json').write_text(json.dumps(meta, indent=2), encoding='utf-8')
     if cleanup:
         _cleanup_staging(out_root, motion_ids=motion_ids, num_convert_shards=convert_num_shards)
@@ -355,7 +356,7 @@ def phase_all(*, out_root: Path, sample_motions: int, fps: float, ik_num_shards:
     out_xml = function_based_path_set_path()
     out_xml.parent.mkdir(parents=True, exist_ok=True)
     work_dir = Path(tempfile.mkdtemp(prefix='sindyffuse_path_fit_'))
-    resolved_threads = _resolve_num_threads(num_threads)
+    resolved_threads = configure_compute_threads(_resolve_num_threads(num_threads))
     workers = detect_usable_cpus() if int(num_workers) <= 0 else max(1, int(num_workers))
     try:
         with opensim_quiet('Off'):
@@ -366,11 +367,11 @@ def phase_all(*, out_root: Path, sample_motions: int, fps: float, ik_num_shards:
             mot_paths = _convert_motions_parallel(ids=ids, out_root=out_root, staging=staging, fps=fps, mapping=mapping, base_model=base_model, num_workers=workers)
             if not mot_paths:
                 raise RuntimeError('No B3D coordinate tables found for path fitting')
-            generated = _run_path_fitter(base_model=base_model, mot_paths=mot_paths, num_threads=num_threads, work_dir=work_dir)
+            generated = _run_path_fitter(base_model=base_model, mot_paths=mot_paths, num_threads=resolved_threads, work_dir=work_dir)
             shutil.copy2(generated, out_xml)
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
-    meta = {'phase': 'all', 'output_xml': str(out_xml), 'sample_motions': len(ids), 'sample_seed': int(sample_seed), 'sampling': 'split_and_caption_stratified_systematic', 'motion_ids': ids[:10], 'num_threads': resolved_threads if resolved_threads is not None else 'default', 'num_workers': workers}
+    meta = {'phase': 'all', 'output_xml': str(out_xml), 'sample_motions': len(ids), 'sample_seed': int(sample_seed), 'sampling': 'split_and_caption_stratified_systematic', 'motion_ids': ids[:10], 'num_threads': resolved_threads, 'num_workers': workers}
     (out_xml.parent / 'path_fit_meta.json').write_text(json.dumps(meta, indent=2), encoding='utf-8')
     return meta
 
@@ -383,7 +384,7 @@ def main() -> None:
     parser.add_argument('--fps', type=float, default=20.0)
     parser.add_argument('--num_shards', type=int, default=None, help='IK manifest shards for prepare (PREPROCESS_NUM_SHARDS) or convert/fit shards (PATH_FIT_NUM_SHARDS).')
     parser.add_argument('--shard_index', type=int, default=-1, help='Convert shard index (default: JOB_COMPLETION_INDEX in Indexed Job).')
-    parser.add_argument('--num_threads', type=int, default=None, help='PolynomialPathFitter parallel threads (default: OpenSim default, overridable via PATH_FIT_NUM_THREADS).')
+    parser.add_argument('--num_threads', type=int, default=None, help='PolynomialPathFitter parallel threads (default: PATH_FIT_NUM_THREADS or cgroup CPU count).')
     parser.add_argument('--num_workers', type=int, default=0, help='B3D→.mot worker processes for --phase all (default: detect_usable_cpus()).')
     parser.add_argument('--staging_dir', default='', help='Override staging directory for convert/fit (default: {out_root}/path_fit_mot).')
     parser.add_argument('--no_cleanup', action='store_true', help='Keep staging .mot files after --phase fit.')
