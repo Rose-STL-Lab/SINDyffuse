@@ -107,7 +107,9 @@ def add_muscle_activation_cli_args(parser: argparse.ArgumentParser) -> None:
     grp.add_argument('--moco_contact_toe_radius_m', type=float, default=None, help='Toe contact sphere radius in m (default 0.015).')
     grp.add_argument('--moco_no_function_based_paths', action='store_true', help='Use geometry muscle paths instead of function-based paths.')
     grp.add_argument('--moco_parallel_segments', type=int, default=None, help='Concurrent Moco segments per motion (default 1 on K8s; use ~6 on multi-core local nodes).')
-    grp.add_argument('--opensim_log_level', default='Off', choices=('Off', 'Critical', 'Error', 'Warn', 'Info', 'Debug'), help='OpenSim log verbosity during Moco/IK (default Off). Off also suppresses Rajagopal mesh warnings on the terminal.')
+    # --opensim_log_level lives on add_common_preprocess_args; avoid duplicate when both are used.
+    if not any('--opensim_log_level' in getattr(action, 'option_strings', ()) for action in parser._actions):
+        grp.add_argument('--opensim_log_level', default='Off', choices=('Off', 'Critical', 'Error', 'Warn', 'Info', 'Debug'), help='OpenSim log verbosity during Moco/IK (default Off). Off also suppresses Rajagopal mesh warnings on the terminal.')
     seg = parser.add_argument_group('segmented moco')
     seg.add_argument('--moco_core_duration_s', type=float, default=None)
     seg.add_argument('--moco_buffer_duration_s', type=float, default=None)

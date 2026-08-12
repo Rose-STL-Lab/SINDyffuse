@@ -175,4 +175,4 @@ def add_common_preprocess_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument('--shard_index', type=int, default=-1)
     parser.add_argument('--skip_normalization', action='store_true')
     parser.add_argument('--num_workers', type=int, default=0)
-    parser.add_argument('--opensim_log_level', default='Off')
+    parser.add_argument('--opensim_log_level', default='Off', choices=('Off', 'Critical', 'Error', 'Warn', 'Info', 'Debug'), help='OpenSim log verbosity during Moco/IK (default Off).')
