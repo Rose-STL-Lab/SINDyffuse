@@ -180,7 +180,12 @@ def run_moco_track_segmented(q: np.ndarray, *, cfg: MuscleActivationConfig, work
                 sim = np.asarray(solve_meta['tracking_simulated'], dtype=np.float64)
                 ref = np.asarray(solve_meta['tracking_reference'], dtype=np.float64)
                 segment_tracking_samples.append({'simulated': sim[local_core_start:local_core_end], 'reference': ref[local_core_start:local_core_end]})
-            segment_details.append({'index': int(spec.index), 'solve_start': int(spec.solve_start), 'solve_end': int(spec.solve_end), 'core_start': int(spec.core_start), 'core_end': int(spec.core_end), 'solver_success': bool(solve_meta.get('solver_success', solve_ok)), 'success': bool(solve_ok), 'max_reserve_fraction': solve_meta.get('max_reserve_fraction'), 'objective': solve_meta.get('objective'), 'solver_status': solve_meta.get('solver_status'), 'solver_iterations': solve_meta.get('solver_iterations'), 'max_translational_coord_rmse_m': solve_meta.get('max_translational_coord_rmse_m'), 'max_rotational_coord_rmse_deg': solve_meta.get('max_rotational_coord_rmse_deg')})
+            detail = {'index': int(spec.index), 'solve_start': int(spec.solve_start), 'solve_end': int(spec.solve_end), 'core_start': int(spec.core_start), 'core_end': int(spec.core_end), 'solver_success': bool(solve_meta.get('solver_success', solve_ok)), 'success': bool(solve_ok), 'max_reserve_fraction': solve_meta.get('max_reserve_fraction'), 'objective': solve_meta.get('objective'), 'solver_status': solve_meta.get('solver_status'), 'solver_iterations': solve_meta.get('solver_iterations'), 'max_translational_coord_rmse_m': solve_meta.get('max_translational_coord_rmse_m'), 'max_rotational_coord_rmse_deg': solve_meta.get('max_rotational_coord_rmse_deg')}
+            if solve_meta.get('error'):
+                detail['error'] = str(solve_meta['error'])
+            if solve_meta.get('coordinate_tracking_error'):
+                detail['coordinate_tracking_error'] = str(solve_meta['coordinate_tracking_error'])
+            segment_details.append(detail)
     stitched_act = stitch_segment_values(t_len, segments, core_activations, blend_frames=blend_frames, stitch_seams=True)
     stitched_grf = stitch_segment_values(t_len, segments, core_grf, blend_frames=blend_frames, stitch_seams=True)
     validity_mask = stitch_segment_mask(t_len, segments, segment_ok)

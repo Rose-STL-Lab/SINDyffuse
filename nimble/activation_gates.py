@@ -140,7 +140,7 @@ def summarize_moco_metadata(metadata: Dict[str, Any]) -> Dict[str, float | str |
 
 def manifest_gate_reason(row: Dict[str, Any]) -> str:
     meta = row.get('meta') or {}
-    for key in ('moco_skipped_reason', 'coordinate_tracking_gate_reason', 'ik_gate_reason', 'error'):
+    for key in ('moco_skipped_reason', 'moco_failed_reason', 'coordinate_tracking_gate_reason', 'ik_gate_reason', 'error'):
         val = row.get(key) or meta.get(key)
         if val:
             return str(val)
@@ -154,3 +154,18 @@ def derive_moco_manifest_status(*, segment_success_count: int, moco_skipped: boo
     if not tracking_ok:
         return 'moco_failed'
     return 'ok'
+
+def summarize_moco_segment_failures(metadata: Dict[str, Any]) -> str:
+    """Human-readable reason when every Moco segment fails (avoids empty-tracking false alarms)."""
+    details = metadata.get('moco_segment_details') or []
+    for key in ('error', 'solver_status', 'coordinate_tracking_error'):
+        for detail in details:
+            if not isinstance(detail, dict):
+                continue
+            val = detail.get(key)
+            if val:
+                return str(val)
+    if metadata.get('error'):
+        return str(metadata['error'])
+    seg_n = int(metadata.get('moco_segment_count') or len(details) or 0)
+    return f'all {seg_n} Moco segments failed'

@@ -25,9 +25,37 @@ def prepare_unlocked_rajagopal_base(work_dir: Path) -> Path:
 def function_based_path_set_path() -> Path:
     return repo_root() / 'models' / 'rajagopal' / 'Rajagopal2015_FunctionBasedPathSet.xml'
 
+def function_based_path_set_depends_on_mtp(path_set: Path) -> bool:
+    """True when the fitted path set still references MTP coordinates.
+
+    Path-fit historically used an unwelded Rajagopal model, so FunctionBasedPath
+    expressions depend on mtp_angle_*. MocoTrack welds MTP joints by default,
+    which removes those coordinates and makes ModelProcessor::process() fail.
+    """
+    try:
+        text = path_set.read_text(encoding='utf-8', errors='ignore')
+    except OSError:
+        return False
+    return 'mtp_angle' in text
+
 def build_activation_model_processor(base_model_path: Path, cfg: MuscleActivationConfig, *, weld_toe_joints: bool=False) -> osim.ModelProcessor:
+    import sys
+    path_set = function_based_path_set_path() if bool(cfg.moco_use_function_based_paths) else None
+    use_function_paths = bool(path_set is not None and path_set.is_file())
+    if bool(cfg.moco_use_function_based_paths) and path_set is not None and not use_function_paths:
+        print(f'WARNING: function-based path set missing at {path_set}; using geometry paths.', file=sys.stderr, flush=True)
+    will_weld = bool(weld_toe_joints and cfg.moco_weld_toe_joints)
+    if will_weld and use_function_paths and path_set is not None and function_based_path_set_depends_on_mtp(path_set):
+        # Keep function-based paths; skip MTP welds so path coordinate dependencies remain valid.
+        print(
+            'WARNING: function-based path set references mtp_angle_*; skipping MTP welds so paths can connect. '
+            'Re-fit paths on a welded-toe model to restore MocoTrack toe welding.',
+            file=sys.stderr,
+            flush=True,
+        )
+        will_weld = False
     mp = osim.ModelProcessor(str(base_model_path))
-    if weld_toe_joints and cfg.moco_weld_toe_joints:
+    if will_weld:
         joints_to_weld = osim.StdVectorString()
         for joint_name in _MOCO_TOE_JOINTS:
             joints_to_weld.append(joint_name)
@@ -39,13 +67,8 @@ def build_activation_model_processor(base_model_path: Path, cfg: MuscleActivatio
     mp.append(osim.ModOpAddResiduals(float(cfg.moco_residual_force), float(cfg.moco_residual_force) * 0.2, 1.0))
     reserve_force = float(cfg.moco_reserve_optimal_force) * float(cfg.moco_reserve_scale)
     mp.append(osim.ModOpAddReserves(reserve_force, 1.0))
-    if bool(cfg.moco_use_function_based_paths):
-        path_set = function_based_path_set_path()
-        if path_set.is_file():
-            mp.append(osim.ModOpReplacePathsWithFunctionBasedPaths(str(path_set)))
-        else:
-            import sys
-            print(f'WARNING: function-based path set missing at {path_set}; using geometry paths.', file=sys.stderr, flush=True)
+    if use_function_paths and path_set is not None:
+        mp.append(osim.ModOpReplacePathsWithFunctionBasedPaths(str(path_set)))
     return mp
 
 def muscle_names_from_processor(mp: osim.ModelProcessor) -> Tuple[str, ...]:

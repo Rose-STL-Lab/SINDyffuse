@@ -7,7 +7,7 @@ import numpy as np
 import nimblephysics as nimble
 from nimble.b3d_schema import B3D_CUSTOM_VALUE_NAMES, pack_b3d_trial_custom_values
 from nimble.muscle_b3d import MUSCLE_ACTIVATION_ROWS
-from nimble.activation_gates import CoordinateTrackingGateConfig, IkGateConfig, activation_valid_fraction, derive_moco_manifest_status, evaluate_coordinate_tracking_gate, evaluate_ik_gate, evaluate_moco_preflight_gate, summarize_moco_metadata
+from nimble.activation_gates import CoordinateTrackingGateConfig, IkGateConfig, activation_valid_fraction, derive_moco_manifest_status, evaluate_coordinate_tracking_gate, evaluate_ik_gate, evaluate_moco_preflight_gate, summarize_moco_metadata, summarize_moco_segment_failures
 from nimble.coordinate_tracking import summarize_coordinate_tracking_stats
 from common.run_logging import append_verbose_log
 from nimble.muscle_activation import MuscleActivationConfig, MuscleActivationResult, compute_muscle_activation, configure_opensim_logging, muscle_names, normalize_activation_method, opensim_quiet
@@ -202,10 +202,19 @@ def patch_b3d_moco(b3d_path: str | Path, *, trial_name: str, act_cfg: MuscleActi
         stats['moco_segment_success_fraction'] = float(act_result.metadata.get('moco_segment_success_fraction', 0.0))
         for key, val in summarize_coordinate_tracking_stats(act_result.metadata.get('coordinate_tracking') or {}).items():
             stats[str(key)] = val
-        tracking_ok, tracking_reason = evaluate_coordinate_tracking_gate(act_result.metadata.get('coordinate_tracking'), gate_cfg=tracking_gate_cfg)
-        if not tracking_ok:
-            stats['coordinate_tracking_gate_reason'] = tracking_reason
-        manifest_status = derive_moco_manifest_status(segment_success_count=int(act_result.metadata.get('moco_segment_success_count', 0)), tracking_ok=tracking_ok)
+        seg_success = int(act_result.metadata.get('moco_segment_success_count', 0))
+        tracking_ok = True
+        if seg_success <= 0:
+            # Empty tracking metrics would otherwise report "missing RMSE for pelvis_tilt".
+            fail_reason = summarize_moco_segment_failures(act_result.metadata)
+            stats['moco_failed_reason'] = fail_reason
+            tracking_ok = False
+        else:
+            tracking_ok, tracking_reason = evaluate_coordinate_tracking_gate(act_result.metadata.get('coordinate_tracking'), gate_cfg=tracking_gate_cfg)
+            if not tracking_ok:
+                stats['coordinate_tracking_gate_reason'] = tracking_reason
+                stats['moco_failed_reason'] = tracking_reason
+        manifest_status = derive_moco_manifest_status(segment_success_count=seg_success, tracking_ok=tracking_ok)
         del act_result
     out_stats, num_dofs, meta_strings = _write_b3d_from_q(poses_q_f32=poses_q_f32, output_b3d_path=path, trial_name=trial_name, fps=float(act_cfg.fps), mass_kg=mass_kg, height_m=height_m, sk=sk, spec=spec, muscle_act=muscle_act, sim_grf_pack=sim_grf_pack, activation_mask_pack=activation_mask_pack, ik_stats=stats)
     clear_export_caches()
