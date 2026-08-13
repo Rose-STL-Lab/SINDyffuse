@@ -1,8 +1,8 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, List, Tuple
 import numpy as np
-from nimble.coordinate_tracking import DEFAULT_MAX_ROTATIONAL_COORD_RMSE_DEG, DEFAULT_MAX_TRANSLATIONAL_COORD_RMSE_M, is_translational_coordinate
+from nimble.coordinate_tracking import DEFAULT_MAX_ROTATIONAL_COORD_RMSE_DEG, DEFAULT_MAX_TRANSLATIONAL_COORD_RMSE_M, is_tracked_opensim_coordinate, is_translational_coordinate, short_coord_name
 from nimble.muscle_activation import MuscleActivationConfig
 
 IK_MIN_SUCCESS_RATIO = 1.0
@@ -67,16 +67,28 @@ def evaluate_coordinate_tracking_gate(tracking: Dict[str, Any] | None, *, gate_c
         return (False, 'empty coordinate tracking metrics')
     max_trans = float(tracking.get('max_translational_rmse_m', 0.0))
     max_rot = float(tracking.get('max_rotational_rmse_deg', 0.0))
+    missing_tracked: List[str] = []
+    gated_any = False
     for row in per_coord:
         name = str(row.get('coordinate', ''))
         rmse = float(row.get('rmse', float('nan')))
+        tracked = is_tracked_opensim_coordinate(name)
         if not np.isfinite(rmse):
-            return (False, f'missing tracking RMSE for {name or "unknown coordinate"}')
+            if tracked:
+                missing_tracked.append(short_coord_name(name) or name or 'unknown coordinate')
+            continue
+        gated_any = True
         if is_translational_coordinate(name):
             if rmse > float(merged.max_translational_rmse_m):
                 return (False, f'translational RMSE {name} {rmse:.6g} m > {merged.max_translational_rmse_m:.6g} m')
         elif rmse > float(merged.max_rotational_rmse_deg):
             return (False, f'rotational RMSE {name} {rmse:.6g} deg > {merged.max_rotational_rmse_deg:.6g} deg')
+    if missing_tracked:
+        shown = ', '.join(missing_tracked[:8])
+        extra = f' (+{len(missing_tracked) - 8} more)' if len(missing_tracked) > 8 else ''
+        return (False, f'missing tracking RMSE for {shown}{extra}')
+    if not gated_any:
+        return (False, 'no finite tracking RMSE for any coordinate')
     if max_trans > float(merged.max_translational_rmse_m):
         worst = str(tracking.get('worst_translational_coordinate', ''))
         return (False, f'max translational RMSE {max_trans:.6g} m > {merged.max_translational_rmse_m:.6g} m ({worst})')
