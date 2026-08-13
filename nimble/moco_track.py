@@ -157,6 +157,45 @@ def _is_reserve_control_name(name: str) -> bool:
     lower = name.lower()
     return 'reserve' in lower and 'residual' not in lower
 
+def _osim_numeric_array(value: Any) -> np.ndarray:
+    if isinstance(value, np.ndarray):
+        return np.asarray(value, dtype=np.float64)
+    if hasattr(value, 'nrow') and hasattr(value, 'get'):
+        n_row = int(value.nrow())
+        n_col = int(value.ncol()) if hasattr(value, 'ncol') else 1
+        if n_col <= 1:
+            return np.array([float(value.get(i, 0)) for i in range(n_row)], dtype=np.float64)
+        return np.array([[float(value.get(i, j)) for j in range(n_col)] for i in range(n_row)], dtype=np.float64)
+    if hasattr(value, 'size') and hasattr(value, 'get'):
+        return np.array([float(value.get(i)) for i in range(int(value.size()))], dtype=np.float64)
+    return np.asarray(value, dtype=np.float64)
+
+def _moco_solution_times(moco_sol: osim.MocoSolution) -> np.ndarray:
+    for attr in ('getTime', 'getTimeMat'):
+        fn = getattr(moco_sol, attr, None)
+        if fn is None:
+            continue
+        try:
+            arr = _osim_numeric_array(fn())
+            return arr.reshape(-1)
+        except TypeError:
+            continue
+    table = moco_sol.exportToStatesTrajectoryTable()
+    indep = table.getIndependentColumn()
+    return np.array([float(indep.get(i)) for i in range(table.getNumRows())], dtype=np.float64)
+
+def _moco_control_series(moco_sol: osim.MocoSolution, name: str) -> np.ndarray:
+    get_mat = getattr(moco_sol, 'getControlMat', None)
+    if get_mat is not None:
+        try:
+            return _osim_numeric_array(get_mat(name)).reshape(-1)
+        except TypeError:
+            pass
+    get_ctrl = getattr(moco_sol, 'getControl', None)
+    if get_ctrl is not None:
+        return _osim_numeric_array(get_ctrl(name)).reshape(-1)
+    raise RuntimeError(f'OpenSim MocoSolution has no per-control accessor for {name!r}')
+
 def _side_from_contact_force_name(name: str) -> str:
     lower = str(name).lower()
     if '_l' in lower or lower.endswith('left'):
@@ -219,16 +258,22 @@ def _extract_sim_grf_from_moco_solution(moco_sol: osim.MocoSolution, moco_model_
 
 def _analyze_moco_reserve_controls(moco_sol: osim.MocoSolution, frame_times: np.ndarray) -> Tuple[np.ndarray, Dict[str, Any]]:
     names = list(moco_sol.getControlNames())
-    mat = moco_sol.getControlMat()
-    time_mat = moco_sol.getTimeMat()
-    sol_times = np.array([float(time_mat.get(i, 0)) for i in range(time_mat.nrow())])
+    sol_times = _moco_solution_times(moco_sol)
     n_frames = int(frame_times.shape[0])
     reserve_peaks: Dict[str, float] = {}
     combined = np.zeros(sol_times.shape[0], dtype=np.float64)
-    for idx, name in enumerate(names):
+    for name in names:
         if not _is_reserve_control_name(name):
             continue
-        col = np.array([abs(float(mat.get(i, idx))) for i in range(mat.nrow())], dtype=np.float64)
+        col = np.abs(_moco_control_series(moco_sol, name))
+        if col.shape[0] != combined.shape[0]:
+            n = min(col.shape[0], combined.shape[0])
+            if n == 0:
+                continue
+            col = col[:n]
+            if combined.shape[0] != n:
+                combined = combined[:n]
+                sol_times = sol_times[:n]
         combined = np.maximum(combined, col)
         short = name.rsplit('/', 1)[-1]
         reserve_peaks[short] = float(np.max(col)) if col.size else 0.0
@@ -328,8 +373,11 @@ def _solve_moco_track(q: np.ndarray, *, cfg: MuscleActivationConfig, solve_dir: 
             moco_sol.write(str(out_sto.resolve()))
         _cleanup_moco_side_effects(solve_dir)
         activations, parsed_ok = _parse_moco_activation_storage(out_sto, muscle_name_list, frame_times)
-        _, reserve_meta = _analyze_moco_reserve_controls(moco_sol, frame_times)
-        solve_meta.update(reserve_meta)
+        try:
+            _, reserve_meta = _analyze_moco_reserve_controls(moco_sol, frame_times)
+            solve_meta.update(reserve_meta)
+        except Exception as reserve_exc:
+            solve_meta['reserve_analysis_error'] = str(reserve_exc)
         solve_ok = bool(moco_sol.success()) and parsed_ok
         solve_meta['success'] = solve_ok
         try:
