@@ -37,6 +37,8 @@ spec:
           value: "0.02"
         - name: MOCO_PARALLEL_SEGMENTS
           value: "1"
+        - name: MOCO_NUM_THREADS
+          value: "20"
         - name: MOCO_CORE_DURATION_S
           value: "1.4"
         - name: MOCO_BUFFER_DURATION_S
@@ -51,10 +53,10 @@ spec:
         resources:
           limits:
             memory: 16Gi
-            cpu: "10"
+            cpu: "20"
           requests:
             memory: 16Gi
-            cpu: "10"
+            cpu: "20"
         volumeMounts:
         - name: data
           mountPath: /mnt

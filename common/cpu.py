@@ -59,6 +59,21 @@ def configure_compute_threads(num_threads: int) -> int:
         os.environ[key] = str(n)
     return n
 
+def resolve_moco_thread_count(*, num_workers: int=0, num_shards: int=1) -> int:
+    """Thread budget for one Moco worker (OpenSim/Ipopt/OpenMP)."""
+    raw = os.environ.get('MOCO_NUM_THREADS', '').strip()
+    if raw.isdigit():
+        return max(1, int(raw))
+    _, threads = resolve_moco_parallelism(int(num_workers), num_shards=int(num_shards))
+    return max(1, int(threads))
+
+def bootstrap_moco_compute_threads(*, num_workers: int=0, num_shards: int | None=None) -> int:
+    """Configure OMP/MKL before OpenSim import; pools are fixed at first use."""
+    if num_shards is None:
+        env_shards = os.environ.get('PREPROCESS_NUM_SHARDS', '').strip()
+        num_shards = int(env_shards) if env_shards.isdigit() else 1
+    return configure_compute_threads(resolve_moco_thread_count(num_workers=num_workers, num_shards=int(num_shards)))
+
 def resolve_k8s_shard(*, num_shards: int | None=None, shard_index: int | None=None) -> tuple[int, int]:
     env_shards = os.environ.get('PREPROCESS_NUM_SHARDS', '').strip()
     n = int(num_shards) if num_shards is not None else int(env_shards) if env_shards.isdigit() else 1

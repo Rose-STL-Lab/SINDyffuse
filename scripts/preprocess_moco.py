@@ -7,7 +7,9 @@ from pathlib import Path
 _REPO = Path(__file__).resolve().parent.parent
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
-from common.cpu import configure_compute_threads, resolve_preprocess_parallelism
+from common.cpu import bootstrap_moco_compute_threads, configure_compute_threads, resolve_preprocess_parallelism
+# OpenSim initializes OpenMP/MKL pools at import; configure before any nimble/opensim import.
+_BOOTSTRAP_MOCO_THREADS = bootstrap_moco_compute_threads()
 from common.paths import nimble_b3d_dir
 from common.preprocess_runner import add_common_preprocess_args, load_stage_manifest_index, manifest_path, resolve_shard_motion_ids, run_preprocess_loop
 from common.run_setup import apply_preprocess_job_env
@@ -65,7 +67,8 @@ def run_preprocess_moco(args: argparse.Namespace, logger) -> None:
     configure_opensim_logging(str(args.opensim_log_level))
     parallel_segments = int(getattr(args, 'moco_parallel_segments', act_cfg.moco_parallel_segments) or 1)
     motion_workers, moco_threads = resolve_preprocess_parallelism(int(args.num_workers), moco_parallel_motions=int(getattr(args, 'moco_parallel_motions', 1) or 1), moco_parallel_segments=parallel_segments, num_shards=num_shards)
-    configure_compute_threads(moco_threads)
+    moco_threads = configure_compute_threads(moco_threads)
+    logger.progress(f'Moco threads: bootstrap={_BOOTSTRAP_MOCO_THREADS} resolved={moco_threads} motion_workers={motion_workers}')
     manifest_file = manifest_path(out_root, shard_index, num_shards, stage='moco')
     ok, err, skip = run_preprocess_loop(work=work, process_one=_process_one_moco, manifest_file=manifest_file, motion_workers=motion_workers, moco_threads=moco_threads, ok_statuses={'ok'}, logger=logger)
     logger.progress(f'Done (moco): {ok} ok, {err} failed/skipped, {skip} skipped existing')
