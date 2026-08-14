@@ -5,7 +5,7 @@ metadata:
   name: sindyffuse-preprocess-moco-track
   labels:
     app: sindyffuse-preprocess-moco-track
-    activation-method: moco-track
+    activation-method: opensimad
 spec:
   parallelism: 180
   completions: 180
@@ -15,7 +15,7 @@ spec:
     metadata:
       labels:
         app: sindyffuse-preprocess-moco-track
-        activation-method: moco-track
+        activation-method: opensimad
     spec:
       restartPolicy: Never
       terminationGracePeriodSeconds: 300
@@ -29,16 +29,18 @@ spec:
           value: "180"
         - name: MAX_MOTIONS
           value: "0"
+        - name: ACTIVATION_METHOD
+          value: "opensimad"
         - name: MOCO_MAX_ITERATIONS
-          value: "3000"
+          value: "2500"
         - name: MOCO_CONVERGENCE_TOLERANCE
           value: "0.001"
         - name: MOCO_MESH_INTERVAL
           value: "0.02"
         - name: MOCO_PARALLEL_SEGMENTS
-          value: "1"
+          value: "6"
         - name: MOCO_NUM_THREADS
-          value: "20"
+          value: "3"
         - name: MOCO_CORE_DURATION_S
           value: "1.4"
         - name: MOCO_BUFFER_DURATION_S
@@ -49,13 +51,15 @@ spec:
         args:
         - |
           source deploy/scripts/job-env.sh
+          # Indexed Job shard → unique run log (placeholder rewritten if still default).
+          export SINDYFFUSE_RUN_LOG_ID="moco_shard_${JOB_COMPLETION_INDEX:-0}"
           python scripts/preprocess_moco.py --skip_normalization --num_workers 0
         resources:
           limits:
-            memory: 16Gi
+            memory: 32Gi
             cpu: "20"
           requests:
-            memory: 16Gi
+            memory: 32Gi
             cpu: "20"
         volumeMounts:
         - name: data

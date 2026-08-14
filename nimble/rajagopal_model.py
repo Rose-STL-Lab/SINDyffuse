@@ -22,6 +22,22 @@ def prepare_unlocked_rajagopal_base(work_dir: Path) -> Path:
     model.printToXML(str(out))
     return out
 
+def prepare_welded_unlocked_rajagopal_base(work_dir: Path) -> Path:
+    """Unlocked coords + MTP welds for path-fit / OpenSimAD (no locked joints)."""
+    out = Path(work_dir) / 'rajagopal_unlocked_mtp_welded.osim'
+    if out.is_file():
+        return out
+    unlocked = prepare_unlocked_rajagopal_base(work_dir)
+    joints = osim.StdVectorString()
+    for joint_name in _MOCO_TOE_JOINTS:
+        joints.append(joint_name)
+    mp = osim.ModelProcessor(str(unlocked))
+    mp.append(osim.ModOpReplaceJointsWithWelds(joints))
+    model = mp.process()
+    model.initSystem()
+    model.printToXML(str(out))
+    return out
+
 def function_based_path_set_path() -> Path:
     return repo_root() / 'models' / 'rajagopal' / 'Rajagopal2015_FunctionBasedPathSet.xml'
 

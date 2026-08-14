@@ -1,0 +1,42 @@
+# One-shot: kubectl apply -k deploy/jobs/preprocess-dataset/build-opensimad-ext
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sindyffuse-build-opensimad-ext
+  labels:
+    app: sindyffuse-build-opensimad-ext
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: sindyffuse-build-opensimad-ext
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: sindyffuse-build-opensimad-ext
+        image: sindyffuse:latest
+        imagePullPolicy: IfNotPresent
+        workingDir: /mnt/SINDyffuse
+        env:
+        - name: SINDYFFUSE_RUN_LOG_ID
+          value: build-opensimad-ext
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          source deploy/scripts/job-env.sh
+          python scripts/build_rajagopal_opensimad_ext.py --force
+        resources:
+          limits:
+            memory: 32Gi
+            cpu: "16"
+          requests:
+            memory: 32Gi
+            cpu: "16"
+        volumeMounts:
+        - name: data
+          mountPath: /mnt
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: sindyffuse

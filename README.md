@@ -50,13 +50,15 @@ Production preprocessing is **four sequential jobs** sharing the same Python scr
 | Job | Script | Purpose |
 |-----|--------|---------|
 | 1 — IK | `scripts/preprocess_ik.py` | joints → `q`, SINDy/guidance features, zero activations |
-| 2 — Path fit | `scripts/fit_rajagopal_function_paths.py` | one-time `FunctionBasedPathSet.xml` from 200 stratified IK B3D samples (same command locally and on cluster) |
-| 3 — MocoTrack | `scripts/preprocess_moco.py` | muscle activations + GRF + validity mask (reads IK B3D, no IK redo) |
+| 2 — Path fit | `scripts/fit_rajagopal_function_paths.py` | one-time `FunctionBasedPathSet.xml` from 200 stratified IK B3D samples on **MTP-welded** Rajagopal (OpenSimAD-compatible) |
+| 3 — Activations | `scripts/preprocess_moco.py` | MinT/OpenSimAD (default) or MocoTrack: muscle activations + GRF + validity mask |
+| 3b — OpenSimAD ext | `scripts/build_rajagopal_opensimad_ext.py` | one-shot AD model + CasADi external function `F` (required before OpenSimAD workers) |
 | 4 — Norm | `scripts/compute_normalization.py` | merge moco manifests → `Mean.npy` / `Std.npy` |
 
 ```bash
 python scripts/preprocess_ik.py --max_motions 5
 python scripts/fit_rajagopal_function_paths.py --sample_motions 200
+python scripts/build_rajagopal_opensimad_ext.py
 python scripts/preprocess_moco.py --max_motions 5
 python scripts/compute_normalization.py --num_shards 1 --wait
 ```
@@ -90,28 +92,29 @@ Optional direct Job apply (without local orchestrator):
 kubectl apply -k deploy/jobs/preprocess-dataset/inverse_kinematics -n YOUR_NAMESPACE
 ```
 
-**IK quality gates (Job 1):** structural checks only — valid `q`, ≥ 2 frames, and all frames must converge (`success_ratio = 1`). HumanML3D joint-position fit stats are recorded for diagnostics but are **not** used to reject motions. Failed IK motions are `ik_failed` in the manifest; Moco skips them via prior status only.
+**IK quality gates (Job 1):** structural checks only — valid `q`, ≥ 2 frames, and all frames must converge (`success_ratio = 1`). HumanML3D joint-position fit stats are recorded for diagnostics but are **not** used to reject motions. Failed IK motions are `ik_failed` in the manifest; activation skips them via prior status only.
 
-**Coordinate tracking gates (Job 3):** after MocoTrack, compare simulated OpenSim coordinates to the low-pass filtered reference trajectory: per-coordinate RMSE over time, requiring **all** translational coordinates `< 0.02 m` and **all** rotational coordinates `< 5.0°`. Segment success still requires Ipopt success ∧ parsed activations. Manifest statuses: `ik_ok` / `ik_failed` (Job 1), `ok` / `moco_failed` / `moco_skipped` (Job 3).
+**Activation gates (Job 3, MinT gap policy):** a motion is `ok` if **≥1** OpenSimAD/Moco segment succeeds. Failed segments leave **NaN gaps** and `muscle_activation_mask=0`. Whole-motion coordinate RMSE is diagnostic only (no longer hard-fails the clip). Manifest statuses: `ik_ok` / `ik_failed` (Job 1), `ok` / `moco_failed` / `moco_skipped` (Job 3).
 
-By default, Moco K8s pods run **one segment at a time with all CPUs** (`MOCO_PARALLEL_SEGMENTS=1`). Optional `--moco_parallel_segments 6` on fat local nodes after pilot.
+By default, activation K8s pods run **6 concurrent segments** (`MOCO_PARALLEL_SEGMENTS=6`, MinT) with **2500** Ipopt iterations and mesh interval **0.02 s** (50 colloc pts/s). Set `ACTIVATION_METHOD=moco_track` to use legacy OpenSim MocoTrack.
 
-Each `.b3d` stores generalized coordinates plus custom channels: `guidance_features`, `sindy_features`, `muscle_activations` `[80, T]`, and (MocoTrack) `sim_grf` `[18, T]` plus `muscle_activation_mask` `[1, T]`.
+Each `.b3d` stores generalized coordinates plus custom channels: `guidance_features`, `sindy_features`, `muscle_activations` `[80, T]`, and `sim_grf` `[18, T]` plus `muscle_activation_mask` `[1, T]`.
 
 At **20 fps**, segmented Moco uses **28-frame cores**, **3-frame buffers**, and **34-frame solve windows** (1.4 s core / 0.14 s buffer).
 
-**MocoTrack** — segmented trajectory optimization with foot contact: ground offset → 1.4 s Moco windows → seam stitch. Reference coordinates are low-pass filtered at **6 Hz**. Failed segments leave **NaN gaps**; the validity mask marks good frames. Training uses gap-aware window indexing (`nimble/gap_utils.py`).
+**MocoTrack / OpenSimAD** — segmented trajectory optimization with foot contact: ground offset → 1.4 s windows → seam stitch (MinT). Default backend is **OpenSimAD** (OpenCap/CasADi); `moco_track` remains for A/B. Reference coordinates are low-pass filtered at **6 Hz**. Failed segments leave **NaN gaps**; the validity mask marks good frames. Training uses gap-aware window indexing (`nimble/gap_utils.py`).
 
 OpenSim console output is **hidden by default** (`--opensim_log_level Off`).
 
-Useful Moco flags: `--moco_core_duration_s`, `--moco_buffer_duration_s`, `--moco_stitch_blend_s`, `--moco_reference_lowpass_hz`, `--moco_states_speed_tracking_weight`, `--moco_no_reference_lowpass`, `--moco_mesh_interval`, `--moco_parallel_segments`, `--opensim_log_level`.
+Useful flags: `--activation_method`, `--moco_core_duration_s`, `--moco_buffer_duration_s`, `--moco_stitch_blend_s`, `--moco_reference_lowpass_hz`, `--moco_mesh_interval`, `--moco_parallel_segments`, `--opensim_log_level`.
 
 **Kubernetes (manual stage apply):**
 
 ```bash
 kubectl delete job sindyffuse-preprocess-moco-track -n YOUR_NAMESPACE   # before redeploy
-kubectl apply -k deploy/jobs/preprocess-dataset/inverse_kinematics -n YOUR_NAMESPACE
 kubectl apply -k deploy/jobs/preprocess-dataset/fit-function-paths -n YOUR_NAMESPACE
+kubectl apply -k deploy/jobs/preprocess-dataset/build-opensimad-ext -n YOUR_NAMESPACE
+kubectl apply -k deploy/jobs/preprocess-dataset/inverse_kinematics -n YOUR_NAMESPACE
 ```
 
 Local sharded test:

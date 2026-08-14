@@ -11,16 +11,17 @@ deploy/
     preprocess-dataset-orchestrate.sh  # entry: full | ik | path-fit | moco
     k8s-orchestrate-lib.sh             # shared kubectl apply + wait helpers
     path-fit-orchestrate.sh            # single path-fit Job (sample → convert → fit)
-    moco-track-orchestrate.sh          # moco workers → normalization (moco stage)
+    moco-track-orchestrate.sh          # OpenSimAD ext → workers → normalization
   components/
     cluster-config/           # edit image + PVC here (applies to all jobs/dev pod)
   jobs/
     preprocess-dataset/
       inverse_kinematics/       # IndexedJob (180 × 1 CPU)
-      fit-function-paths/       # single Job (sample → B3D→.mot → OpenSim fit)
+      fit-function-paths/       # single Job (sample → B3D→.mot → OpenSim fit on welded MTP)
+      build-opensimad-ext/      # one-shot OpenSimAD F codegen
       moco-track/
-        job.yaml                # IndexedJob MocoTrack workers
-      normalization/            # Mean.npy / Std.npy after moco workers
+        job.yaml                # IndexedJob OpenSimAD (MinT) workers
+      normalization/            # Mean.npy / Std.npy after activation workers
     benchmark-moco-parallel/
     train-sindy/
     train-surrogate/
@@ -100,7 +101,7 @@ Checklist aligned with [NRP cluster policies](https://nrp.ai/documentation/userd
 | Rule | Our setup |
 |------|-----------|
 | **limits within 20% of requests** | All jobs use **limits = requests** (Guaranteed QoS) |
-| **> ~100 pods: limit = request** | Moco (180 shards): 10 CPU / 16Gi limits = requests ✓ |
+| **> ~100 pods: limit = request** | Activation (180 shards): 20 CPU / 32Gi limits = requests ✓ |
 | **1 CPU + 2Gi exemption** | IK workers (180 × 1 CPU, 2Gi): exempt from utilization violation checks ✓ |
 | **Batch jobs, not sleep infinity** | Jobs run Python scripts to completion ✓ |
 | **No GPUs on CPU-only preprocess** | Preprocess jobs request CPU/memory only ✓ |
@@ -242,7 +243,8 @@ Preprocess uses Indexed worker Jobs (`parallelism=completions=180` for inverse k
 |-----|------|--------|------|
 | dev | 8–32 | 32–64Gi | — (add in pod.yaml if needed) |
 | preprocess-dataset/inverse_kinematics | 180 × 1 | 180 × 2Gi | — |
-| preprocess-dataset/moco-track | 180 × 10 | 180 × 16Gi | — |
+| preprocess-dataset/build-opensimad-ext | 16 | 32Gi | — |
+| preprocess-dataset/moco-track | 180 × 20 | 180 × 32Gi | — |
 | preprocess-dataset/normalization | 1 | 2Gi | — |
 | preprocess-dataset/fit-function-paths | 128 | 256Gi | — |
 | benchmark-moco-parallel | 64 | 64Gi | — |
@@ -284,13 +286,30 @@ Startup logs include `[distributed/gpu]` with rank, world size, device count, an
 |-----|-----------|------|
 | `sindyffuse-fit-function-paths` | 128 CPU, 256Gi | sample → B3D→`.mot` (ProcessPool) → merge → OpenSim path fit |
 
-Run after IK (Job 1) and before MocoTrack (Job 3).
+Run after IK (Job 1) and before OpenSimAD ext build / activation workers (Job 3). Path fit must use the **MTP-welded** Rajagopal base so FunctionBasedPathSet does not reference `mtp_angle_*`.
+
+## OpenSimAD external function (Job 3b)
+
+One-shot CasADi external function build (workers only consume cached `F` / `F_map.npy`):
+
+```bash
+# Local supernode (same entrypoint as K8s)
+python scripts/build_rajagopal_opensimad_ext.py
+
+# Cluster
+kubectl apply -k deploy/jobs/preprocess-dataset/build-opensimad-ext -n YOUR_NAMESPACE
+# or via: ./deploy/scripts/moco-track-orchestrate.sh  (runs build then workers)
+```
+
+Artifacts land under `models/rajagopal/opensimad/ExternalFunction/` (and the same path on the PVC).
+
+Activation workers default to `ACTIVATION_METHOD=opensimad` with `MOCO_PARALLEL_SEGMENTS=6`, `MOCO_MAX_ITERATIONS=2500`, mesh `0.02` s. Set `ACTIVATION_METHOD=moco_track` for legacy A/B.
 
 ## Pipeline order
 
 1. `./deploy/scripts/preprocess-dataset-orchestrate.sh ik` (or apply `inverse_kinematics/` Job)
 2. `./deploy/scripts/preprocess-dataset-orchestrate.sh path-fit`
-3. `./deploy/scripts/preprocess-dataset-orchestrate.sh moco`
+3. `./deploy/scripts/preprocess-dataset-orchestrate.sh moco`  # builds OpenSimAD ext, then activation workers, then normalization
 4. `train-sindy`
 5. `train-surrogate`
 6. `train-diffusion/{none,nimble,sindy}`

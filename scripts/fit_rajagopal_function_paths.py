@@ -23,7 +23,7 @@ from datasets.nimble_dataset import read_q_segment
 from datasets.splits import all_motion_ids, load_split_ids
 from nimble.muscle_activation import opensim_quiet
 from nimble.rajagopal_coord_map import RajagopalCoordMapping, build_rajagopal_coord_mapping, write_coordinates_mot
-from nimble.rajagopal_model import function_based_path_set_path, prepare_unlocked_rajagopal_base
+from nimble.rajagopal_model import function_based_path_set_path, prepare_welded_unlocked_rajagopal_base
 DEFAULT_SAMPLE_MOTIONS = 200
 DEFAULT_SAMPLE_SEED = 42
 COORDINATE_TABLE_SUBSAMPLE_STRIDE = 5
@@ -247,7 +247,9 @@ def fit_function_paths(*, out_root: Path, sample_motions: int=DEFAULT_SAMPLE_MOT
     workers = _resolve_num_workers(num_workers)
     try:
         with opensim_quiet('Off'):
-            base_model = prepare_unlocked_rajagopal_base(work_dir)
+            # Fit on welded-MTP Rajagopal so FunctionBasedPathSet does not reference mtp_angle_*
+            # (required for OpenSimAD / MinT-aligned toe welding).
+            base_model = prepare_welded_unlocked_rajagopal_base(work_dir)
             mapping = build_rajagopal_coord_mapping(model_path=base_model)
             staging = work_dir / 'mot'
             staging.mkdir(parents=True, exist_ok=True)
@@ -258,7 +260,17 @@ def fit_function_paths(*, out_root: Path, sample_motions: int=DEFAULT_SAMPLE_MOT
             shutil.copy2(generated, out_xml)
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
-    meta = {'output_xml': str(out_xml), 'sample_motions': len(ids), 'sample_seed': int(seed), 'sampling': 'split_and_caption_stratified_systematic', 'motion_ids': ids[:10], 'num_threads': resolved_threads, 'num_workers': workers}
+    meta = {
+        'output_xml': str(out_xml),
+        'sample_motions': len(ids),
+        'sample_seed': int(seed),
+        'sampling': 'split_and_caption_stratified_systematic',
+        'motion_ids': ids[:10],
+        'num_threads': resolved_threads,
+        'num_workers': workers,
+        'mtp_welded': True,
+        'path_fit_model': 'rajagopal_unlocked_mtp_welded',
+    }
     (out_xml.parent / 'path_fit_meta.json').write_text(json.dumps(meta, indent=2), encoding='utf-8')
     return meta
 

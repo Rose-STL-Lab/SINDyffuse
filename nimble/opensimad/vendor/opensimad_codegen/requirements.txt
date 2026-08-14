@@ -1,0 +1,4 @@
+numpy
+casadi
+pandas
+cmake

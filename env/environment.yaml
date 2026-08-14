@@ -31,3 +31,8 @@ dependencies:
       - ftfy
       - regex
       - musint>=0.1
+      - casadi>=3.6.0
+      - pyyaml>=6.0
+      - requests>=2.31
+      - seaborn>=0.13
+      - pandas>=2.0

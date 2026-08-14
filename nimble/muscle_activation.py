@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 import opensim as osim
 from nimble.rajagopal_coord_map import RAJAGOPAL_NIMBLE_DOF_NAMES
-ACTIVATION_METHODS: Tuple[str, ...] = ('moco_track',)
+ACTIVATION_METHODS: Tuple[str, ...] = ('opensimad', 'moco_track')
 
 def rajagopal_model_path() -> Path:
     import nimblephysics as nimble
@@ -18,7 +18,7 @@ def rajagopal_model_path() -> Path:
 
 @dataclass
 class MuscleActivationConfig:
-    activation_method: str = 'moco_track'
+    activation_method: str = 'opensimad'
     fps: float = 20.0
     mass_kg: float = 70.0
     opensim_log_level: str = 'Off'
@@ -29,7 +29,7 @@ class MuscleActivationConfig:
     moco_reserve_optimal_force: float = 250.0
     moco_reserve_scale: float = 1.3
     moco_convergence_tolerance: float = 0.001
-    moco_max_iterations: int = 3000
+    moco_max_iterations: int = 2500
     moco_states_tracking_weight: float = 1.0
     moco_states_speed_tracking_weight: float = 1.0
     moco_aux_coord_tracking_weight: float = 1.0
@@ -50,14 +50,20 @@ class MuscleActivationConfig:
     moco_adaptive_mesh_speed_deg_s: float = 140.0
     moco_adaptive_mesh_interval: float = 0.02
     moco_use_function_based_paths: bool = True
-    moco_parallel_segments: int = 1
+    moco_parallel_segments: int = 6
     moco_core_duration_s: float = 1.4
     moco_buffer_duration_s: float = 0.14
     moco_stitch_blend_s: float = 0.14
 
 def normalize_activation_method(method: str) -> str:
     key = str(method).strip().lower()
-    aliases = {'moco': 'moco_track', 'ik': 'moco_track'}
+    aliases = {
+        'moco': 'moco_track',
+        'ik': 'opensimad',
+        'opensim_ad': 'opensimad',
+        'open_sim_ad': 'opensimad',
+        'mint': 'opensimad',
+    }
     key = aliases.get(key, key)
     if key not in ACTIVATION_METHODS:
         raise ValueError(f'Unknown activation_method {method!r}; expected one of {ACTIVATION_METHODS}')
@@ -68,7 +74,7 @@ def resolve_activation_method(args: argparse.Namespace) -> str:
         raise ValueError('skip_muscle_activation is not supported; use preprocess_ik.py for IK-only export')
     raw = getattr(args, 'activation_method', None)
     if raw is None:
-        return 'moco_track'
+        return 'opensimad'
     return normalize_activation_method(str(raw))
 
 def muscle_activation_config_from_dict(data: Dict[str, Any]) -> MuscleActivationConfig:
@@ -83,15 +89,15 @@ def muscle_activation_config_to_dict(cfg: MuscleActivationConfig) -> Dict[str, A
 
 def add_muscle_activation_cli_args(parser: argparse.ArgumentParser) -> None:
     grp = parser.add_argument_group('muscle activation')
-    grp.add_argument('--activation_method', choices=ACTIVATION_METHODS, default='moco_track', help='Muscle label method (MocoTrack only).')
+    grp.add_argument('--activation_method', choices=ACTIVATION_METHODS, default='opensimad', help='Muscle label method (default opensimad / MinT OpenSimAD; moco_track kept for A/B).')
     grp = parser.add_argument_group('moco track')
-    grp.add_argument('--moco_mesh_interval', type=float, default=None, help='Moco mesh interval in seconds (default 0.02, i.e. 50 colloc points/s at 20 fps).')
+    grp.add_argument('--moco_mesh_interval', type=float, default=None, help='Mesh interval in seconds (default 0.02 = 50 colloc pts/s).')
     grp.add_argument('--moco_residual_force', type=float, default=None)
     grp.add_argument('--moco_reserve_optimal_force', type=float, default=None, help='Reserve actuator optimal force in N (default 250, OpenSim walking example).')
     grp.add_argument('--moco_reserve_scale', type=float, default=None, help='Multiplier on reserve optimal force (default 1.3, +30%% athletic tuning).')
     grp.add_argument('--moco_reserve_control_weight', type=float, default=None, help='MocoControlGoal weight for reserve actuators (default 0.001).')
     grp.add_argument('--moco_convergence_tolerance', type=float, default=None)
-    grp.add_argument('--moco_max_iterations', type=int, default=None, help='Ipopt iteration cap (default 3000).')
+    grp.add_argument('--moco_max_iterations', type=int, default=None, help='Ipopt iteration cap (default 2500, MinT).')
     grp.add_argument('--moco_states_tracking_weight', type=float, default=None)
     grp.add_argument('--moco_states_speed_tracking_weight', type=float, default=None, help='Moco tracking weight for joint /speed states (default 1.0; pelvis_ty/value stays 0).')
     grp.add_argument('--moco_aux_coord_tracking_weight', type=float, default=None, help='Unused (kept for CLI compat); position tracking uses --moco_states_tracking_weight.')
@@ -106,7 +112,7 @@ def add_muscle_activation_cli_args(parser: argparse.ArgumentParser) -> None:
     grp.add_argument('--moco_adaptive_mesh_interval', type=float, default=None, help='Mesh interval when adaptive mesh triggers (default 0.01 s).')
     grp.add_argument('--moco_contact_toe_radius_m', type=float, default=None, help='Toe contact sphere radius in m (default 0.015).')
     grp.add_argument('--moco_no_function_based_paths', action='store_true', help='Use geometry muscle paths instead of function-based paths.')
-    grp.add_argument('--moco_parallel_segments', type=int, default=None, help='Concurrent Moco segments per motion (default 1 on K8s; use ~6 on multi-core local nodes).')
+    grp.add_argument('--moco_parallel_segments', type=int, default=None, help='Concurrent segments per motion (default 6, MinT).')
     # --opensim_log_level lives on add_common_preprocess_args; avoid duplicate when both are used.
     if not any('--opensim_log_level' in getattr(action, 'option_strings', ()) for action in parser._actions):
         grp.add_argument('--opensim_log_level', default='Off', choices=('Off', 'Critical', 'Error', 'Warn', 'Info', 'Debug'), help='OpenSim log verbosity during Moco/IK (default Off). Off also suppresses Rajagopal mesh warnings on the terminal.')
@@ -251,8 +257,12 @@ def compute_muscle_activation(q: np.ndarray, *, cfg: MuscleActivationConfig | No
     method = normalize_activation_method(cfg.activation_method)
     configure_opensim_logging(cfg.opensim_log_level)
     arr = _validate_q_input(q)
-    work_dir, cleanup = _activation_work_dir(cfg, prefix='sindyffuse_moco_')
+    prefix = 'sindyffuse_opensimad_' if method == 'opensimad' else 'sindyffuse_moco_'
+    work_dir, cleanup = _activation_work_dir(cfg, prefix=prefix)
     try:
+        if method == 'opensimad':
+            from nimble.opensimad_track import run_opensimad_track
+            return run_opensimad_track(arr, cfg=cfg, work_dir=work_dir)
         from nimble.moco_track import run_moco_track
         return run_moco_track(arr, cfg=cfg, work_dir=work_dir)
     finally:

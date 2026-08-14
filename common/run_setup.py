@@ -103,13 +103,21 @@ def apply_preprocess_job_env(args) -> None:
     if os.environ.get('MOCO_STITCH_BLEND_S'):
         args.moco_stitch_blend_s = float(os.environ['MOCO_STITCH_BLEND_S'].strip())
     if os.environ.get('MOCO_MAX_ITERATIONS'):
-        args.moco_max_iterations = env_int('MOCO_MAX_ITERATIONS', 3000)
+        args.moco_max_iterations = env_int('MOCO_MAX_ITERATIONS', 2500)
+    elif os.environ.get('OPENSIMAD_MAX_ITERATIONS'):
+        args.moco_max_iterations = env_int('OPENSIMAD_MAX_ITERATIONS', 2500)
     if os.environ.get('MOCO_CONVERGENCE_TOLERANCE'):
         args.moco_convergence_tolerance = float(os.environ['MOCO_CONVERGENCE_TOLERANCE'].strip())
     if os.environ.get('MOCO_MESH_INTERVAL'):
         args.moco_mesh_interval = float(os.environ['MOCO_MESH_INTERVAL'].strip())
+    elif os.environ.get('OPENSIMAD_MESH_INTERVAL'):
+        args.moco_mesh_interval = float(os.environ['OPENSIMAD_MESH_INTERVAL'].strip())
     if os.environ.get('MOCO_PARALLEL_SEGMENTS'):
-        args.moco_parallel_segments = env_int('MOCO_PARALLEL_SEGMENTS', 1)
+        args.moco_parallel_segments = env_int('MOCO_PARALLEL_SEGMENTS', 6)
+    elif os.environ.get('OPENSIMAD_PARALLEL_SEGMENTS'):
+        args.moco_parallel_segments = env_int('OPENSIMAD_PARALLEL_SEGMENTS', 6)
+    if os.environ.get('ACTIVATION_METHOD'):
+        args.activation_method = os.environ['ACTIVATION_METHOD'].strip()
     log_dir = str(getattr(args, 'log_dir', '') or '').strip()
     if not log_dir:
         args.log_dir = str(repo_root() / 'logs')

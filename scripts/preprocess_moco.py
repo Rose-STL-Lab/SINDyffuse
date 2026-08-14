@@ -76,20 +76,32 @@ def run_preprocess_moco(args: argparse.Namespace, logger) -> None:
         sys.exit(1)
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description='Job 3: MocoTrack muscle activations on IK B3D cache')
+    parser = argparse.ArgumentParser(description='Job 3: OpenSimAD (MinT) / MocoTrack muscle activations on IK B3D cache')
     add_common_preprocess_args(parser)
     parser.add_argument('--moco_parallel_motions', type=int, default=1)
     add_muscle_activation_cli_args(parser)
     add_run_log_cli_args(parser)
     args = parser.parse_args()
     apply_preprocess_job_env(args)
-    args.activation_method = 'moco_track'
+    if not getattr(args, 'activation_method', None):
+        args.activation_method = 'opensimad'
+    else:
+        from nimble.muscle_activation import normalize_activation_method
+        args.activation_method = normalize_activation_method(str(args.activation_method))
+    # Unique per-shard run log id so parallel workers do not share one log file.
+    if not str(os.environ.get('SINDYFFUSE_RUN_LOG_ID', '')).strip() or str(os.environ.get('SINDYFFUSE_RUN_LOG_ID', '')).strip() == 'RUN_LOG_ID_PLACEHOLDER':
+        shard = os.environ.get('JOB_COMPLETION_INDEX') or os.environ.get('PREPROCESS_SHARD_INDEX') or ''
+        if str(shard).strip().isdigit():
+            os.environ['SINDYFFUSE_RUN_LOG_ID'] = f'moco_shard_{int(shard):04d}'
+        else:
+            os.environ['SINDYFFUSE_RUN_LOG_ID'] = f'moco_{os.getpid()}'
     if args.no_run_log:
         run_preprocess_moco(args, null_logger())
         return
     with run_log_session(args.log_dir, script_name=Path(__file__).stem, argv=sys.argv) as (paths, logger):
         args._run_log_file = str(paths.log_file)
         logger.progress(f'log: {paths.latest_log}')
+        logger.progress(f'activation_method={args.activation_method}')
         run_preprocess_moco(args, logger)
 
 if __name__ == '__main__':

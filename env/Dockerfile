@@ -10,6 +10,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     git \
+    build-essential \
+    cmake \
+    g++ \
     libegl1 \
     libgomp1 \
     libglib2.0-0 \
@@ -20,6 +23,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     liblapack3 \
     libblas3 \
+    libopenblas0 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN wget -qO /tmp/miniforge.sh \
@@ -45,12 +49,14 @@ import numpy as np; \
 import scipy, sklearn, joblib, torch, torchvision, clip; \
 import nimblephysics as nimble; \
 import opensim; \
+import casadi; \
 assert np.__version__.startswith('1.25'), np.__version__; \
 assert hasattr(nimble, 'biomechanics'); \
 assert hasattr(opensim, 'Model'); \
 print('numpy', np.__version__); \
 print('torch', torch.__version__, 'cuda', torch.cuda.is_available()); \
-print('opensim', opensim.GetVersion())"
+print('opensim', opensim.GetVersion()); \
+print('casadi', casadi.__version__)"
 
 ENV CONDA_DEFAULT_ENV=sindyffuse
 ENV PATH=${CONDA_DIR}/envs/sindyffuse/bin:${PATH}

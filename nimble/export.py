@@ -205,15 +205,17 @@ def patch_b3d_moco(b3d_path: str | Path, *, trial_name: str, act_cfg: MuscleActi
         seg_success = int(act_result.metadata.get('moco_segment_success_count', 0))
         tracking_ok = True
         if seg_success <= 0:
-            # Empty tracking metrics would otherwise report "missing RMSE for pelvis_tilt".
             fail_reason = summarize_moco_segment_failures(act_result.metadata)
             stats['moco_failed_reason'] = fail_reason
             tracking_ok = False
         else:
+            # MinT gap policy: record tracking diagnostics but do not fail the motion
+            # solely for missing/empty pooled RMSE (failed segments stay as NaN gaps).
             tracking_ok, tracking_reason = evaluate_coordinate_tracking_gate(act_result.metadata.get('coordinate_tracking'), gate_cfg=tracking_gate_cfg)
             if not tracking_ok:
                 stats['coordinate_tracking_gate_reason'] = tracking_reason
-                stats['moco_failed_reason'] = tracking_reason
+                # Soft: keep tracking_ok True for manifest when any segment succeeded.
+                tracking_ok = True
         manifest_status = derive_moco_manifest_status(segment_success_count=seg_success, tracking_ok=tracking_ok)
         del act_result
     out_stats, num_dofs, meta_strings = _write_b3d_from_q(poses_q_f32=poses_q_f32, output_b3d_path=path, trial_name=trial_name, fps=float(act_cfg.fps), mass_kg=mass_kg, height_m=height_m, sk=sk, spec=spec, muscle_act=muscle_act, sim_grf_pack=sim_grf_pack, activation_mask_pack=activation_mask_pack, ik_stats=stats)

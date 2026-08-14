@@ -159,11 +159,14 @@ def manifest_gate_reason(row: Dict[str, Any]) -> str:
     return 'failed'
 
 def derive_moco_manifest_status(*, segment_success_count: int, moco_skipped: bool=False, tracking_ok: bool=True) -> str:
+    """MinT-style gap policy: keep the motion if any segment succeeded.
+
+    Whole-motion coordinate-tracking hard-fail is disabled (`tracking_ok` retained
+    for API compat / diagnostics only). Failed segments leave NaN gaps in the mask.
+    """
     if moco_skipped:
         return 'moco_skipped'
     if int(segment_success_count) <= 0:
-        return 'moco_failed'
-    if not tracking_ok:
         return 'moco_failed'
     return 'ok'
 

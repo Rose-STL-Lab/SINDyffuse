@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Local driver: moco-track workers → normalization (kubectl wait; no sleep).
+# Local driver: OpenSimAD ext build → activation workers → normalization (kubectl wait).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -9,7 +9,9 @@ k8s_orchestrate_init
 
 BASE="${ROOT}/deploy/jobs/preprocess-dataset"
 
-run_phase sindyffuse-preprocess-moco-track "${BASE}/moco-track" 24h "moco-track"
+run_phase sindyffuse-build-opensimad-ext "${BASE}/build-opensimad-ext" 6h "opensimad-ext"
+# MinT-scale OpenSimAD on HumanML3D is long-running; 7d wait budget for 180 shards.
+run_phase sindyffuse-preprocess-moco-track "${BASE}/moco-track" 168h "opensimad-track"
 run_phase sindyffuse-compute-normalization "${BASE}/normalization" 2h "normalization"
 
-echo "MocoTrack + normalization pipeline complete."
+echo "OpenSimAD (MinT) + normalization pipeline complete."
