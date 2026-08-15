@@ -35,16 +35,26 @@ def build_rajagopal_coord_mapping(model_path: str | Path | None=None) -> Rajagop
     rotational = []
     for i in range(coord_set.getSize()):
         rotational.append(coord_set.get(i).getMotionType() == osim.Coordinate.Rotational)
+    # Skip Nimble DOFs whose OpenSim coords were removed (e.g. mtp_angle_* after MTP welds).
+    nimble_names: List[str] = []
     nimble_to_idx: List[int] = []
     for nn in RAJAGOPAL_NIMBLE_DOF_NAMES:
         on = NIMBLE_TO_OPENSIM_COORD[nn]
         if on not in coord_idx:
-            raise KeyError(f'OpenSim coordinate {on!r} missing from model')
+            continue
+        nimble_names.append(nn)
         nimble_to_idx.append(coord_idx[on])
+    if not nimble_to_idx:
+        raise KeyError(f'No Nimble→OpenSim coordinates found in model {model_path}')
     for beta_name in OPENSIM_COUPLED_BETA_FROM_KNEE:
         if beta_name not in coord_idx:
             raise KeyError(f'OpenSim beta coordinate {beta_name!r} missing from model')
-    return RajagopalCoordMapping(nimble_dof_names=RAJAGOPAL_NIMBLE_DOF_NAMES, opensim_coord_names=tuple(opensim_names), nimble_to_opensim_idx=tuple(nimble_to_idx), rotational_coord_mask=tuple(rotational))
+    return RajagopalCoordMapping(
+        nimble_dof_names=tuple(nimble_names),
+        opensim_coord_names=tuple(opensim_names),
+        nimble_to_opensim_idx=tuple(nimble_to_idx),
+        rotational_coord_mask=tuple(rotational),
+    )
 
 def q_to_opensim_coordinates(q: np.ndarray, mapping: RajagopalCoordMapping | None=None) -> np.ndarray:
     arr = np.asarray(q, dtype=np.float64)
@@ -56,9 +66,13 @@ def q_to_opensim_coordinates(q: np.ndarray, mapping: RajagopalCoordMapping | Non
     t_len = int(arr.shape[0])
     out = np.zeros((t_len, m.num_opensim_coords), dtype=np.float64)
     name_to_col = {n: i for i, n in enumerate(m.opensim_coord_names)}
-    beta_from_knee = {name_to_col[beta]: name_to_col[parent] for beta, parent in OPENSIM_COUPLED_BETA_FROM_KNEE.items()}
+    beta_from_knee = {name_to_col[beta]: name_to_col[parent] for beta, parent in OPENSIM_COUPLED_BETA_FROM_KNEE.items() if beta in name_to_col and parent in name_to_col}
+    # Map by Nimble DOF name so welded models (subset of coords) still align with full q.
+    full_name_to_qcol = {n: i for i, n in enumerate(RAJAGOPAL_NIMBLE_DOF_NAMES)}
     for t in range(t_len):
-        for ni, oi in enumerate(m.nimble_to_opensim_idx):
+        for mapped_i, oi in enumerate(m.nimble_to_opensim_idx):
+            nn = m.nimble_dof_names[mapped_i]
+            ni = full_name_to_qcol[nn]
             val = float(arr[t, ni])
             if m.rotational_coord_mask[oi]:
                 val = float(np.rad2deg(val))
