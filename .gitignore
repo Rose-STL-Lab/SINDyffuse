@@ -34,3 +34,7 @@ preprocess_meta.json
 *.swp
 .env
 .env.*
+
+# Local image build scratch
+.containers/
+.docker-build.log
