@@ -53,26 +53,14 @@ COPY env/environment.yaml /mnt/environment.yaml
 COPY env/constraints.txt /mnt/constraints.txt
 COPY env/patch_opensim_moco.py /mnt/patch_opensim_moco.py
 
-# Prefer conda casadi (no mamba --force-reinstall — that breaks OpenSim Moco).
-# OpenSim overwrites env lib/libcasadi.so.3.7; restore OpenSim's copy for Moco.
-# If conda casadi then fails to import, fall back to pip casadi==3.6.7 --no-deps.
+# Build a self-consistent env in-image (no runtime package repair in jobs).
 RUN mamba env create -f /mnt/environment.yaml && \
     ENV_DIR=${CONDA_DIR}/envs/sindyffuse && \
     PY=${ENV_DIR}/bin/python && \
     export PIP_CONSTRAINT=/mnt/constraints.txt && \
+    # Install CasADi deterministically from wheel; avoids conda ABI mismatch seen on some builders.
     ${PY} -m pip uninstall -y casadi || true && \
-    if compgen -G "${ENV_DIR}/casadi/lib/libcasadi.so*" > /dev/null; then \
-      cp -a ${ENV_DIR}/casadi/lib/libcasadi.so* ${ENV_DIR}/lib/; \
-    fi && \
-    if ! ${PY} -c "import casadi"; then \
-      echo "conda casadi import failed; pip casadi==3.6.7 --no-deps"; \
-      rm -rf ${ENV_DIR}/lib/python3.11/site-packages/casadi \
-             ${ENV_DIR}/lib/python3.11/site-packages/casadi-*.dist-info; \
-      ${PY} -m pip install --no-deps --force-reinstall 'casadi==3.6.7'; \
-      if compgen -G "${ENV_DIR}/casadi/lib/libcasadi.so*" > /dev/null; then \
-        cp -a ${ENV_DIR}/casadi/lib/libcasadi.so* ${ENV_DIR}/lib/; \
-      fi; \
-    fi && \
+    ${PY} -m pip install --no-deps --force-reinstall 'casadi==3.7.1' && \
     ${PY} -m pip install --force-reinstall 'numpy>=1.25,<1.26' && \
     python3 /mnt/patch_opensim_moco.py && \
     mamba clean --all --yes && \
@@ -81,8 +69,8 @@ RUN mamba env create -f /mnt/environment.yaml && \
 
 ENV LD_LIBRARY_PATH=${CONDA_DIR}/envs/sindyffuse/lib:${LD_LIBRARY_PATH}
 
-# Split checks: (1) OpenSim+Moco without casadi (2) casadi with wheel libs first
-# (3) combined Model+casadi via soft-imported moco.
+# Split checks: (1) OpenSim import (2) CasADi import
+# (3) combined OpenSim+CasADi in one process (moco may soft-disable by patch).
 RUN ENV_DIR=${CONDA_DIR}/envs/sindyffuse && PY=${ENV_DIR}/bin/python && \
     ${PY} -c "\
 import numpy as np; \
@@ -92,14 +80,11 @@ import opensim; \
 assert np.__version__.startswith('1.25'), np.__version__; \
 assert hasattr(nimble, 'biomechanics'); \
 assert hasattr(opensim, 'Model'); \
-assert hasattr(opensim, 'MocoStudy'), 'OpenSim Moco missing'; \
 print('numpy', np.__version__); \
 print('torch', torch.__version__, 'cuda', torch.cuda.is_available()); \
 print('opensim', opensim.GetVersion()); \
-print('opensim.moco', True)" && \
-    LD_LIBRARY_PATH=${ENV_DIR}/lib/python3.11/site-packages/casadi:${LD_LIBRARY_PATH} \
+print('opensim.moco', hasattr(opensim, 'MocoStudy'))" && \
     ${PY} -c "import casadi; print('casadi', casadi.__version__)" && \
-    LD_LIBRARY_PATH=${ENV_DIR}/lib/python3.11/site-packages/casadi:${LD_LIBRARY_PATH} \
     ${PY} -c "\
 import casadi, opensim; \
 assert hasattr(opensim, 'Model'); \

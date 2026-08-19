@@ -23,10 +23,7 @@ dependencies:
   - requests>=2.31
   - seaborn>=0.13
   - pandas>=2.0,<3
-  # Prefer conda casadi. Do not mamba --force-reinstall later (breaks OpenSim Moco).
-  # py311 currently resolves to 3.7.x on conda-forge; Dockerfile may fall back to
-  # pip casadi==3.6.7 --no-deps if OpenSim's bundled libcasadi breaks conda import.
-  - casadi>=3.6.0
+  # CasADi is installed deterministically in Dockerfile via pip (3.7.1).
   - pip
   - pytorch>=2.2
   - pytorch-cuda=12.4

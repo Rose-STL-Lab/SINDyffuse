@@ -4,6 +4,10 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+
+# CasADi must load before OpenSim in-process: OpenSim ships libcasadi.so.3.7 in the
+# conda env lib/ and loading it first breaks the pip CasADi extension import.
+import casadi  # noqa: F401
 _REPO = Path(__file__).resolve().parent.parent
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))

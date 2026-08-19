@@ -3,6 +3,10 @@ import os
 import shutil
 import sys
 from pathlib import Path
+
+# CasADi before OpenSim (see scripts/build_rajagopal_opensimad_ext.py).
+import casadi  # noqa: F401
+
 from nimble.opensimad.model_prep import ensure_ad_ready_artifacts
 from nimble.opensimad.paths import ad_contacts_model_path, ad_scaled_adjusted_model_path, external_function_dir, opensimad_dir, vendor_opencap_ad_dir
 from nimble.opensimad import OPENSIM_MODEL_BASENAME

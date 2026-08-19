@@ -15,7 +15,7 @@ spec:
       restartPolicy: Never
       containers:
       - name: sindyffuse-build-opensimad-ext
-        image: sindyffuse:latest
+        image: ncking/sindyffuse@sha256:a08d427e7ccd2b03b4fa7cadfce0d069f83b92e7e283c81cce4a6e01c82cb00d
         imagePullPolicy: IfNotPresent
         workingDir: /mnt/SINDyffuse
         env:
