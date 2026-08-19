@@ -23,7 +23,6 @@ dependencies:
   - requests>=2.31
   - seaborn>=0.13
   - pandas>=2.0,<3
-  # CasADi is installed deterministically in Dockerfile via pip (3.7.1).
   - pip
   - pytorch>=2.2
   - pytorch-cuda=12.4

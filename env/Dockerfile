@@ -58,8 +58,6 @@ RUN mamba env create -f /mnt/environment.yaml && \
     ENV_DIR=${CONDA_DIR}/envs/sindyffuse && \
     PY=${ENV_DIR}/bin/python && \
     export PIP_CONSTRAINT=/mnt/constraints.txt && \
-    # Install CasADi deterministically from wheel; avoids conda ABI mismatch seen on some builders.
-    ${PY} -m pip uninstall -y casadi || true && \
     ${PY} -m pip install --no-deps --force-reinstall 'casadi==3.7.1' && \
     ${PY} -m pip install --force-reinstall 'numpy>=1.25,<1.26' && \
     python3 /mnt/patch_opensim_moco.py && \
@@ -69,8 +67,7 @@ RUN mamba env create -f /mnt/environment.yaml && \
 
 ENV LD_LIBRARY_PATH=${CONDA_DIR}/envs/sindyffuse/lib:${LD_LIBRARY_PATH}
 
-# Split checks: (1) OpenSim import (2) CasADi import
-# (3) combined OpenSim+CasADi in one process (moco may soft-disable by patch).
+# Verify OpenSim and CasADi independently, then verify the AD import order.
 RUN ENV_DIR=${CONDA_DIR}/envs/sindyffuse && PY=${ENV_DIR}/bin/python && \
     ${PY} -c "\
 import numpy as np; \
@@ -89,7 +86,7 @@ print('opensim.moco', hasattr(opensim, 'MocoStudy'))" && \
 import casadi, opensim; \
 assert hasattr(opensim, 'Model'); \
 print('combined Model+casadi ok'); \
-print('combined moco', hasattr(opensim, 'MocoStudy'))"
+print('combined moco available', hasattr(opensim, 'MocoStudy'))"
 
 ENV CONDA_DEFAULT_ENV=sindyffuse
 ENV PATH=${CONDA_DIR}/envs/sindyffuse/bin:${PATH}

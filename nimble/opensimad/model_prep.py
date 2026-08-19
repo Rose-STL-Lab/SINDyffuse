@@ -49,6 +49,44 @@ def prepare_welded_unlocked_rajagopal(work_dir: Path | None=None, *, force: bool
         tmp.unlink(missing_ok=True)
     return out
 
+def _replace_simm_splines_in_spatial_transforms(model: osim.Model) -> None:
+    """Apply the MinT/OpenSimAD spline compatibility preprocessing.
+
+    OpenSimAD's generated model supports PolynomialFunction but not SimmSpline.
+    Fit a degree-five polynomial to each spatial-transform spline, matching the
+    upstream MinT/OpenSimAD model-preparation convention.
+    """
+    converted = []
+    for index in range(model.get_JointSet().getSize()):
+        joint = model.get_JointSet().get(index)
+        if joint.getConcreteClassName() != 'CustomJoint':
+            continue
+        custom_joint = osim.CustomJoint.safeDownCast(joint)
+        spatial_transform = custom_joint.get_SpatialTransform()
+        axes = (
+            ('rotation1', spatial_transform.get_rotation1()),
+            ('rotation2', spatial_transform.get_rotation2()),
+            ('rotation3', spatial_transform.get_rotation3()),
+            ('translation1', spatial_transform.get_translation1()),
+            ('translation2', spatial_transform.get_translation2()),
+            ('translation3', spatial_transform.get_translation3()),
+        )
+        for axis_name, axis in axes:
+            function = axis.get_function()
+            if function.getConcreteClassName() != 'SimmSpline':
+                continue
+            spline = osim.SimmSpline.safeDownCast(function)
+            x = spline.getX().to_numpy()
+            y = spline.getY().to_numpy()
+            if x.shape[0] < 2:
+                raise ValueError(f'{joint.getName()} {axis_name} SimmSpline has fewer than two points')
+            degree = min(5, x.shape[0] - 1)
+            coefficients = np.polynomial.polynomial.polyfit(x, y, degree)
+            axis.set_function(osim.PolynomialFunction(osim.Vector(coefficients.tolist())))
+            converted.append(f'{joint.getName()}.{axis_name}')
+    if converted:
+        print('OpenSimAD spline compatibility: replaced ' + ', '.join(converted))
+
 def prepare_ad_base_model(*, force: bool=False) -> Path:
     """Write AD base model: welded MTP + function-based paths applied."""
     out = ad_base_model_path()
@@ -62,6 +100,7 @@ def prepare_ad_base_model(*, force: bool=False) -> Path:
         if path_set.is_file():
             mp.append(osim.ModOpReplacePathsWithFunctionBasedPaths(str(path_set)))
         model = mp.process()
+        _replace_simm_splines_in_spatial_transforms(model)
         model.initSystem()
         model.printToXML(str(out))
     # OpenCap naming alias (no contacts yet).
