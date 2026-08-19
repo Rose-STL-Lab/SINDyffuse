@@ -494,8 +494,15 @@ def getIK(storage_file, joints, degrees=False):
                 Qs.insert(count + 1, joint, data[joint] * np.pi / 180)                
             else:
                 Qs.insert(count + 1, joint, data[joint])
-                
     return Qs
+
+
+def _write_polynomial_coefficients(file_handle, joint_name, coordinate, coefficients):
+    values = ', '.join(f'{value:.20f}' for value in coefficients)
+    file_handle.write(
+        '\tosim_double_adouble st_%s_%i_coeffs[%i] = {%s}; \n'
+        % (joint_name, coordinate, len(coefficients), values)
+    )
 
 # %% Get moment arm indices.
 def getMomentArmIndices(rightMuscles, leftPolynomialJoints,
@@ -756,7 +763,7 @@ def generateExternalFunction(
                     elif c_nCoeffs == 5:
                         f.write('\tosim_double_adouble st_%s_%i_coeffs[%i] = {%.20f, %.20f, %.20f, %.20f, %.20f}; \n' % (c_joint.getName(), coord, c_nCoeffs, rot1_f_coeffs[0], rot1_f_coeffs[1], rot1_f_coeffs[2], rot1_f_coeffs[3], rot1_f_coeffs[4]))                    
                     else:
-                        raise ValueError("TODO")
+                        _write_polynomial_coefficients(f, c_joint.getName(), coord, rot1_f_coeffs)
                     f.write('\tVector st_%s_%i_coeffs_vec(%i); \n' % (c_joint.getName(), coord, c_nCoeffs))
                     f.write('\tfor (int i = 0; i < %i; ++i) st_%s_%i_coeffs_vec[i] = st_%s_%i_coeffs[i]; \n' % (c_nCoeffs, c_joint.getName(), coord, c_joint.getName(), coord))
                     f.write('\tst_%s[%i].setFunction(new PolynomialFunction(st_%s_%i_coeffs_vec));\n' % (c_joint.getName(), coord, c_joint.getName(), coord))
@@ -783,7 +790,7 @@ def generateExternalFunction(
                         elif c_nCoeffs == 5:
                             f.write('\tosim_double_adouble st_%s_%i_coeffs[%i] = {%.20f, %.20f, %.20f, %.20f, %.20f}; \n' % (c_joint.getName(), coord, c_nCoeffs, rot1_f_obj_f_coeffs[0], rot1_f_obj_f_coeffs[1], rot1_f_obj_f_coeffs[2], rot1_f_obj_f_coeffs[3], rot1_f_obj_f_coeffs[4]))                    
                         else:
-                            raise ValueError("TODO")
+                            _write_polynomial_coefficients(f, c_joint.getName(), coord, rot1_f_obj_f_coeffs)
                         f.write('\tVector st_%s_%i_coeffs_vec(%i); \n' % (c_joint.getName(), coord, c_nCoeffs))
                         f.write('\tfor (int i = 0; i < %i; ++i) st_%s_%i_coeffs_vec[i] = st_%s_%i_coeffs[i]; \n' % (c_nCoeffs, c_joint.getName(), coord, c_joint.getName(), coord))
                         f.write('\tst_%s[%i].setFunction(new MultiplierFunction(new PolynomialFunction(st_%s_%i_coeffs_vec), %.20f));\n' % (c_joint.getName(), coord, c_joint.getName(), coord, rot1_f_obj_scale))
@@ -824,7 +831,7 @@ def generateExternalFunction(
                     elif c_nCoeffs == 5:
                         f.write('\tosim_double_adouble st_%s_%i_coeffs[%i] = {%.20f, %.20f, %.20f, %.20f, %.20f}; \n' % (c_joint.getName(), coord, c_nCoeffs, rot2_f_coeffs[0], rot2_f_coeffs[1], rot2_f_coeffs[2], rot2_f_coeffs[3], rot2_f_coeffs[4]))                    
                     else:
-                        raise ValueError("TODO")
+                        _write_polynomial_coefficients(f, c_joint.getName(), coord, rot2_f_coeffs)
                     f.write('\tVector st_%s_%i_coeffs_vec(%i); \n' % (c_joint.getName(), coord, c_nCoeffs))
                     f.write('\tfor (int i = 0; i < %i; ++i) st_%s_%i_coeffs_vec[i] = st_%s_%i_coeffs[i]; \n' % (c_nCoeffs, c_joint.getName(), coord, c_joint.getName(), coord))
                     f.write('\tst_%s[%i].setFunction(new PolynomialFunction(st_%s_%i_coeffs_vec));\n' % (c_joint.getName(), coord, c_joint.getName(), coord))
@@ -851,7 +858,7 @@ def generateExternalFunction(
                         elif c_nCoeffs == 5:
                             f.write('\tosim_double_adouble st_%s_%i_coeffs[%i] = {%.20f, %.20f, %.20f, %.20f, %.20f}; \n' % (c_joint.getName(), coord, c_nCoeffs, rot2_f_obj_f_coeffs[0], rot2_f_obj_f_coeffs[1], rot2_f_obj_f_coeffs[2], rot2_f_obj_f_coeffs[3], rot2_f_obj_f_coeffs[4]))                    
                         else:
-                            raise ValueError("TODO")
+                            _write_polynomial_coefficients(f, c_joint.getName(), coord, rot2_f_obj_f_coeffs)
                         f.write('\tVector st_%s_%i_coeffs_vec(%i); \n' % (c_joint.getName(), coord, c_nCoeffs))
                         f.write('\tfor (int i = 0; i < %i; ++i) st_%s_%i_coeffs_vec[i] = st_%s_%i_coeffs[i]; \n' % (c_nCoeffs, c_joint.getName(), coord, c_joint.getName(), coord))
                         f.write('\tst_%s[%i].setFunction(new MultiplierFunction(new PolynomialFunction(st_%s_%i_coeffs_vec), %.20f));\n' % (c_joint.getName(), coord, c_joint.getName(), coord, rot2_f_obj_scale))
@@ -892,7 +899,7 @@ def generateExternalFunction(
                     elif c_nCoeffs == 5:
                         f.write('\tosim_double_adouble st_%s_%i_coeffs[%i] = {%.20f, %.20f, %.20f, %.20f, %.20f}; \n' % (c_joint.getName(), coord, c_nCoeffs, rot3_f_coeffs[0], rot3_f_coeffs[1], rot3_f_coeffs[2], rot3_f_coeffs[3], rot3_f_coeffs[4]))                    
                     else:
-                        raise ValueError("TODO")
+                        _write_polynomial_coefficients(f, c_joint.getName(), coord, rot3_f_coeffs)
                     f.write('\tVector st_%s_%i_coeffs_vec(%i); \n' % (c_joint.getName(), coord, c_nCoeffs))
                     f.write('\tfor (int i = 0; i < %i; ++i) st_%s_%i_coeffs_vec[i] = st_%s_%i_coeffs[i]; \n' % (c_nCoeffs, c_joint.getName(), coord, c_joint.getName(), coord))
                     f.write('\tst_%s[%i].setFunction(new PolynomialFunction(st_%s_%i_coeffs_vec));\n' % (c_joint.getName(), coord, c_joint.getName(), coord))
@@ -919,7 +926,7 @@ def generateExternalFunction(
                         elif c_nCoeffs == 5:
                             f.write('\tosim_double_adouble st_%s_%i_coeffs[%i] = {%.20f, %.20f, %.20f, %.20f, %.20f}; \n' % (c_joint.getName(), coord, c_nCoeffs, rot3_f_obj_f_coeffs[0], rot3_f_obj_f_coeffs[1], rot3_f_obj_f_coeffs[2], rot3_f_obj_f_coeffs[3], rot3_f_obj_f_coeffs[4]))                    
                         else:
-                            raise ValueError("TODO")
+                            _write_polynomial_coefficients(f, c_joint.getName(), coord, rot3_f_obj_f_coeffs)
                         f.write('\tVector st_%s_%i_coeffs_vec(%i); \n' % (c_joint.getName(), coord, c_nCoeffs))
                         f.write('\tfor (int i = 0; i < %i; ++i) st_%s_%i_coeffs_vec[i] = st_%s_%i_coeffs[i]; \n' % (c_nCoeffs, c_joint.getName(), coord, c_joint.getName(), coord))
                         f.write('\tst_%s[%i].setFunction(new MultiplierFunction(new PolynomialFunction(st_%s_%i_coeffs_vec), %.20f));\n' % (c_joint.getName(), coord, c_joint.getName(), coord, rot3_f_obj_scale))
@@ -960,7 +967,7 @@ def generateExternalFunction(
                     elif c_nCoeffs == 5:
                         f.write('\tosim_double_adouble st_%s_%i_coeffs[%i] = {%.20f, %.20f, %.20f, %.20f, %.20f}; \n' % (c_joint.getName(), coord, c_nCoeffs, tr1_f_coeffs[0], tr1_f_coeffs[1], tr1_f_coeffs[2], tr1_f_coeffs[3], tr1_f_coeffs[4]))                    
                     else:
-                        raise ValueError("TODO")
+                        _write_polynomial_coefficients(f, c_joint.getName(), coord, tr1_f_coeffs)
                     f.write('\tVector st_%s_%i_coeffs_vec(%i); \n' % (c_joint.getName(), coord, c_nCoeffs))
                     f.write('\tfor (int i = 0; i < %i; ++i) st_%s_%i_coeffs_vec[i] = st_%s_%i_coeffs[i]; \n' % (c_nCoeffs, c_joint.getName(), coord, c_joint.getName(), coord))
                     f.write('\tst_%s[%i].setFunction(new PolynomialFunction(st_%s_%i_coeffs_vec));\n' % (c_joint.getName(), coord, c_joint.getName(), coord))
@@ -987,7 +994,7 @@ def generateExternalFunction(
                         elif c_nCoeffs == 5:
                             f.write('\tosim_double_adouble st_%s_%i_coeffs[%i] = {%.20f, %.20f, %.20f, %.20f, %.20f}; \n' % (c_joint.getName(), coord, c_nCoeffs, tr1_f_obj_f_coeffs[0], tr1_f_obj_f_coeffs[1], tr1_f_obj_f_coeffs[2], tr1_f_obj_f_coeffs[3], tr1_f_obj_f_coeffs[4]))                    
                         else:
-                            raise ValueError("TODO")
+                            _write_polynomial_coefficients(f, c_joint.getName(), coord, tr1_f_obj_f_coeffs)
                         f.write('\tVector st_%s_%i_coeffs_vec(%i); \n' % (c_joint.getName(), coord, c_nCoeffs))
                         f.write('\tfor (int i = 0; i < %i; ++i) st_%s_%i_coeffs_vec[i] = st_%s_%i_coeffs[i]; \n' % (c_nCoeffs, c_joint.getName(), coord, c_joint.getName(), coord))
                         f.write('\tst_%s[%i].setFunction(new MultiplierFunction(new PolynomialFunction(st_%s_%i_coeffs_vec), %.20f));\n' % (c_joint.getName(), coord, c_joint.getName(), coord, tr1_f_obj_scale))
@@ -1028,7 +1035,7 @@ def generateExternalFunction(
                     elif c_nCoeffs == 5:
                         f.write('\tosim_double_adouble st_%s_%i_coeffs[%i] = {%.20f, %.20f, %.20f, %.20f, %.20f}; \n' % (c_joint.getName(), coord, c_nCoeffs, tr2_f_coeffs[0], tr2_f_coeffs[1], tr2_f_coeffs[2], tr2_f_coeffs[3], tr2_f_coeffs[4]))                    
                     else:
-                        raise ValueError("TODO")
+                        _write_polynomial_coefficients(f, c_joint.getName(), coord, tr2_f_coeffs)
                     f.write('\tVector st_%s_%i_coeffs_vec(%i); \n' % (c_joint.getName(), coord, c_nCoeffs))
                     f.write('\tfor (int i = 0; i < %i; ++i) st_%s_%i_coeffs_vec[i] = st_%s_%i_coeffs[i]; \n' % (c_nCoeffs, c_joint.getName(), coord, c_joint.getName(), coord))
                     f.write('\tst_%s[%i].setFunction(new PolynomialFunction(st_%s_%i_coeffs_vec));\n' % (c_joint.getName(), coord, c_joint.getName(), coord))
@@ -1055,7 +1062,7 @@ def generateExternalFunction(
                         elif c_nCoeffs == 5:
                             f.write('\tosim_double_adouble st_%s_%i_coeffs[%i] = {%.20f, %.20f, %.20f, %.20f, %.20f}; \n' % (c_joint.getName(), coord, c_nCoeffs, tr2_f_obj_f_coeffs[0], tr2_f_obj_f_coeffs[1], tr2_f_obj_f_coeffs[2], tr2_f_obj_f_coeffs[3], tr2_f_obj_f_coeffs[4]))                    
                         else:
-                            raise ValueError("TODO")
+                            _write_polynomial_coefficients(f, c_joint.getName(), coord, tr2_f_obj_f_coeffs)
                         f.write('\tVector st_%s_%i_coeffs_vec(%i); \n' % (c_joint.getName(), coord, c_nCoeffs))
                         f.write('\tfor (int i = 0; i < %i; ++i) st_%s_%i_coeffs_vec[i] = st_%s_%i_coeffs[i]; \n' % (c_nCoeffs, c_joint.getName(), coord, c_joint.getName(), coord))
                         f.write('\tst_%s[%i].setFunction(new MultiplierFunction(new PolynomialFunction(st_%s_%i_coeffs_vec), %.20f));\n' % (c_joint.getName(), coord, c_joint.getName(), coord, tr2_f_obj_scale))
@@ -1096,7 +1103,7 @@ def generateExternalFunction(
                     elif c_nCoeffs == 5:
                         f.write('\tosim_double_adouble st_%s_%i_coeffs[%i] = {%.20f, %.20f, %.20f, %.20f, %.20f}; \n' % (c_joint.getName(), coord, c_nCoeffs, tr3_f_coeffs[0], tr3_f_coeffs[1], tr3_f_coeffs[2], tr3_f_coeffs[3], tr3_f_coeffs[4]))                    
                     else:
-                        raise ValueError("TODO")
+                        _write_polynomial_coefficients(f, c_joint.getName(), coord, tr3_f_coeffs)
                     f.write('\tVector st_%s_%i_coeffs_vec(%i); \n' % (c_joint.getName(), coord, c_nCoeffs))
                     f.write('\tfor (int i = 0; i < %i; ++i) st_%s_%i_coeffs_vec[i] = st_%s_%i_coeffs[i]; \n' % (c_nCoeffs, c_joint.getName(), coord, c_joint.getName(), coord))
                     f.write('\tst_%s[%i].setFunction(new PolynomialFunction(st_%s_%i_coeffs_vec));\n' % (c_joint.getName(), coord, c_joint.getName(), coord))
@@ -1123,7 +1130,7 @@ def generateExternalFunction(
                         elif c_nCoeffs == 5:
                             f.write('\tosim_double_adouble st_%s_%i_coeffs[%i] = {%.20f, %.20f, %.20f, %.20f, %.20f}; \n' % (c_joint.getName(), coord, c_nCoeffs, tr3_f_obj_f_coeffs[0], tr3_f_obj_f_coeffs[1], tr3_f_obj_f_coeffs[2], tr3_f_obj_f_coeffs[3], tr3_f_obj_f_coeffs[4]))                    
                         else:
-                            raise ValueError("TODO")
+                            _write_polynomial_coefficients(f, c_joint.getName(), coord, tr3_f_obj_f_coeffs)
                         f.write('\tVector st_%s_%i_coeffs_vec(%i); \n' % (c_joint.getName(), coord, c_nCoeffs))
                         f.write('\tfor (int i = 0; i < %i; ++i) st_%s_%i_coeffs_vec[i] = st_%s_%i_coeffs[i]; \n' % (c_nCoeffs, c_joint.getName(), coord, c_joint.getName(), coord))
                         f.write('\tst_%s[%i].setFunction(new MultiplierFunction(new PolynomialFunction(st_%s_%i_coeffs_vec), %.20f));\n' % (c_joint.getName(), coord, c_joint.getName(), coord, tr3_f_obj_scale))

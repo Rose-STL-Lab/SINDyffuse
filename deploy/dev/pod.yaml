@@ -18,6 +18,9 @@ spec:
     command: ["/bin/bash", "-c"]
     args:
     - |
+      if [[ -x /opt/conda/envs/sindyffuse/bin/id && ! -e /opt/conda/envs/sindyffuse/bin/opensim-id ]]; then
+        mv /opt/conda/envs/sindyffuse/bin/id /opt/conda/envs/sindyffuse/bin/opensim-id
+      fi
       grep -q sindyffuse /root/.bashrc 2>/dev/null || cat >> /root/.bashrc <<'EOF'
       eval "$(conda shell.bash hook)"
       conda activate sindyffuse

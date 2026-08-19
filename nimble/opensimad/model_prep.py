@@ -76,8 +76,10 @@ def _replace_simm_splines_in_spatial_transforms(model: osim.Model) -> None:
             if function.getConcreteClassName() != 'SimmSpline':
                 continue
             spline = osim.SimmSpline.safeDownCast(function)
-            x = spline.getX().to_numpy()
-            y = spline.getY().to_numpy()
+            x_array = spline.getX()
+            y_array = spline.getY()
+            x = np.array([x_array.get(i) for i in range(x_array.getSize())], dtype=float)
+            y = np.array([y_array.get(i) for i in range(y_array.getSize())], dtype=float)
             if x.shape[0] < 2:
                 raise ValueError(f'{joint.getName()} {axis_name} SimmSpline has fewer than two points')
             degree = min(5, x.shape[0] - 1)
