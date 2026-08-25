@@ -1,6 +1,6 @@
 from __future__ import annotations
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping, Sequence
 _SPLIT_FILES = ('train.txt', 'val.txt', 'test.txt')
 
 def load_split_ids(root: Path, split: str) -> list[str]:
@@ -21,14 +21,35 @@ def all_motion_ids(root: Path) -> list[str]:
         ids.extend((ln.strip() for ln in p.read_text(encoding='utf-8').splitlines() if ln.strip()))
     return sorted(set(ids))
 
-def shard_motion_ids(ids: list[str], shard_index: int, num_shards: int) -> list[str]:
+def shard_motion_ids(ids: Sequence[str], shard_index: int, num_shards: int, *, lengths: Mapping[str, float] | None=None) -> list[str]:
+    """Assign motions to shards via deterministic longest-first bin packing.
+
+    When ``lengths`` is omitted (or uniform), packing reduces to round-robin over
+    sorted ids, matching the historical ``ids[i::n]`` stride assignment.
+    """
     n = int(num_shards)
     if n <= 1:
-        return ids
+        return list(ids)
     i = int(shard_index)
     if i < 0 or i >= n:
         raise ValueError(f'shard_index must be in [0, {n}), got {i}')
-    return ids[i::n]
+
+    def _weight(sid: str) -> float:
+        if lengths is None:
+            return 1.0
+        try:
+            return max(0.0, float(lengths.get(sid, 1.0)))
+        except (TypeError, ValueError):
+            return 1.0
+
+    ordered = sorted(ids, key=lambda sid: (-_weight(sid), str(sid)))
+    bins: list[list[str]] = [[] for _ in range(n)]
+    loads = [0.0] * n
+    for sid in ordered:
+        b = min(range(n), key=lambda j: (loads[j], j))
+        bins[b].append(str(sid))
+        loads[b] += _weight(sid)
+    return sorted(bins[i])
 
 def kinematics_pass_index(subj: Any, trial: int) -> int:
     import nimblephysics as nimble

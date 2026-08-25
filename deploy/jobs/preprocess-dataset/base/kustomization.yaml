@@ -1,0 +1,20 @@
+# Shared preprocess-dataset knobs (shard count, skip-existing).
+# Included by each stage kustomization under deploy/jobs/preprocess-dataset/.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+configMapGenerator:
+  - name: sindyffuse-preprocess-config
+    literals:
+      - PREPROCESS_NUM_SHARDS=180
+      - SKIP_EXISTING=1
+
+patches:
+  - target:
+      kind: Job
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/envFrom
+        value:
+          - configMapRef:
+              name: sindyffuse-preprocess-config

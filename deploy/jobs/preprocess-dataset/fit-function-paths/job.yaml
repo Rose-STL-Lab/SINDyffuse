@@ -9,6 +9,8 @@ spec:
   parallelism: 1
   completions: 1
   backoffLimit: 3
+  ttlSecondsAfterFinished: 86400
+  activeDeadlineSeconds: 172800
   template:
     metadata:
       labels:
@@ -22,34 +24,34 @@ spec:
         imagePullPolicy: IfNotPresent
         workingDir: /mnt/SINDyffuse
         env:
-        - name: PREPROCESS_NUM_SHARDS
-          value: "180"
         - name: PATH_FIT_SAMPLE_MOTIONS
           value: "200"
         - name: PATH_FIT_NUM_THREADS
           value: "128"
         - name: PATH_FIT_NUM_WORKERS
-          value: "128"
+          value: "32"
+        - name: SINDYFFUSE_RUN_LOG_ID
+          value: "path_fit"
         command: ["/bin/bash", "-c"]
         args:
         - |
           source deploy/scripts/job-env.sh
-          export OMP_NUM_THREADS="${PATH_FIT_NUM_THREADS}"
-          export MKL_NUM_THREADS="${PATH_FIT_NUM_THREADS}"
-          export OPENBLAS_NUM_THREADS="${PATH_FIT_NUM_THREADS}"
-          export VECLIB_MAXIMUM_THREADS="${PATH_FIT_NUM_THREADS}"
-          export NUMEXPR_NUM_THREADS="${PATH_FIT_NUM_THREADS}"
+          FORCE_ARGS=()
+          if [[ "${PATH_FIT_FORCE:-0}" =~ ^(1|true|yes|on)$ ]]; then
+            FORCE_ARGS+=(--force)
+          fi
           python scripts/fit_rajagopal_function_paths.py \
             --sample_motions ${PATH_FIT_SAMPLE_MOTIONS} \
             --num_shards ${PREPROCESS_NUM_SHARDS} \
             --num_threads ${PATH_FIT_NUM_THREADS} \
-            --num_workers ${PATH_FIT_NUM_WORKERS}
+            --num_workers ${PATH_FIT_NUM_WORKERS} \
+            "${FORCE_ARGS[@]}"
         resources:
           limits:
-            memory: 256Gi
+            memory: 128Gi
             cpu: "128"
           requests:
-            memory: 256Gi
+            memory: 128Gi
             cpu: "128"
         volumeMounts:
         - name: data

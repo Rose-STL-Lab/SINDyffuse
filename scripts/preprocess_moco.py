@@ -33,6 +33,9 @@ def _process_one_moco(item: tuple) -> dict:
             subj_ok = False
         if subj_ok:
             return {'id': sid, 'status': 'skipped', 'path': str(out_b3d), 'skip_reason': 'existing moco b3d'}
+    if ik_status != 'ik_ok':
+        reason = f'ik status={ik_status}' if ik_status else 'missing ik_ok'
+        return {'id': sid, 'status': 'moco_skipped', 'moco_skipped_reason': reason, 'path': str(out_b3d) if out_b3d.is_file() else None}
     if not out_b3d.is_file():
         return {'id': sid, 'status': 'moco_skipped', 'error': 'missing IK B3D', 'moco_skipped_reason': 'missing B3D'}
     act_cfg = muscle_activation_config_from_dict(json.loads(act_cfg_json))
@@ -59,11 +62,16 @@ def run_preprocess_moco(args: argparse.Namespace, logger) -> None:
     ik_index = load_stage_manifest_index(out_root, num_shards, stage='ik')
     verbose = str(getattr(args, '_run_log_file', '') or '').strip()
     work = []
+    skipped_non_ik = 0
     for sid in ids:
         ik_row = ik_index.get(sid, {})
         ik_status = str(ik_row.get('status', '')) or None
         ik_stats_json = json.dumps(ik_row.get('ik_stats', {})) if ik_row.get('ik_stats') else ''
+        if ik_status != 'ik_ok':
+            skipped_non_ik += 1
         work.append((sid, str(out_root), bool(args.skip_existing), verbose, act_cfg_json, ik_status, ik_stats_json))
+    if skipped_non_ik:
+        logger.progress(f'Pre-filter: {skipped_non_ik}/{len(ids)} motion(s) lack ik_ok (will moco_skip without B3D open)')
     configure_opensim_logging(str(args.opensim_log_level))
     parallel_segments = int(getattr(args, 'moco_parallel_segments', act_cfg.moco_parallel_segments) or 1)
     motion_workers, moco_threads = resolve_preprocess_parallelism(int(args.num_workers), moco_parallel_motions=int(getattr(args, 'moco_parallel_motions', 1) or 1), moco_parallel_segments=parallel_segments, num_shards=num_shards)

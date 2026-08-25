@@ -103,10 +103,11 @@ def resolve_moco_parallelism(num_workers: int, *, moco_parallel_segments: int=1,
 def resolve_preprocess_parallelism(num_workers: int, *, skip_muscle_activation: bool=False, moco_parallel_motions: int=1, moco_parallel_segments: int=1, num_shards: int=1) -> tuple[int, int]:
     auto = detect_usable_cpus()
     if bool(skip_muscle_activation):
+        if int(num_workers) > 0:
+            return (max(1, int(num_workers)), 1)
         if int(num_shards) > 1:
             return (1, 1)
-        pool = max(1, int(num_workers)) if int(num_workers) > 0 else auto
-        return (pool, 1)
+        return (max(1, auto), 1)
     if int(num_shards) > 1:
         return resolve_moco_parallelism(num_workers, moco_parallel_segments=moco_parallel_segments, num_shards=num_shards)
     parallel = max(1, int(moco_parallel_motions))

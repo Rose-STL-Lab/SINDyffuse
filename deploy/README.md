@@ -16,10 +16,11 @@ deploy/
     cluster-config/           # edit image + PVC here (applies to all jobs/dev pod)
   jobs/
     preprocess-dataset/
-      inverse_kinematics/       # IndexedJob (180 × 1 CPU)
-      fit-function-paths/       # single Job (sample → B3D→.mot → OpenSim fit)
+      base/                     # shared ConfigMap: PREPROCESS_NUM_SHARDS, SKIP_EXISTING
+      inverse_kinematics/       # IndexedJob (180 × 4 CPU)
+      fit-function-paths/       # single Job (MTP-welded path fit; skip if XML exists)
       moco-track/
-        job.yaml                # IndexedJob MocoTrack workers
+        job.yaml                # IndexedJob MocoTrack workers (emptyDir scratch)
       normalization/            # Mean.npy / Std.npy after moco workers
     benchmark-moco-parallel/
     train-sindy/
@@ -100,16 +101,16 @@ Checklist aligned with [NRP cluster policies](https://nrp.ai/documentation/userd
 | Rule | Our setup |
 |------|-----------|
 | **limits within 20% of requests** | All jobs use **limits = requests** (Guaranteed QoS) |
-| **> ~100 pods: limit = request** | Moco (180 shards): 10 CPU / 16Gi limits = requests ✓ |
-| **1 CPU + 2Gi exemption** | IK workers (180 × 1 CPU, 2Gi): exempt from utilization violation checks ✓ |
+| **> ~100 pods: limit = request** | Moco (180 shards): 20 CPU / 16Gi limits = requests ✓ |
+| **1 CPU + 2Gi exemption** | Small pods only; IK workers are 180 × 4 CPU / 4Gi (Guaranteed) ✓ |
 | **Batch jobs, not sleep infinity** | Jobs run Python scripts to completion ✓ |
 | **No GPUs on CPU-only preprocess** | Preprocess jobs request CPU/memory only ✓ |
 | **PVC** | `rook-cephfs`, `ReadWriteMany` (standard Nautilus CephFS) ✓ |
 | **Large parallel submits** | 180 moco pods is a large footprint; coordinate with namespace admins if scheduling is slow |
 
-**backoffLimit:** Indexed preprocess jobs retry failed shard pods a limited number of times before the Job fails (IK: 32; moco: 64). Single-pod jobs (normalization, path-fit): 3.
+**backoffLimit:** Indexed preprocess jobs retry failed shard pods a limited number of times before the Job fails (IK/moco: 64). Single-pod jobs (normalization, path-fit): 3.
 
-**SKIP_EXISTING:** Not set in job manifests (default: reprocess all motions). To skip existing B3D files on retry, set env `SKIP_EXISTING=1` at apply time or add it to your local overlay.
+**SKIP_EXISTING:** Default **on** via shared ConfigMap `sindyffuse-preprocess-config` (`SKIP_EXISTING=1`, `PREPROCESS_NUM_SHARDS=180` in `deploy/jobs/preprocess-dataset/base/`). Omit or set `SKIP_EXISTING=0` in an overlay to force full reprocess.
 
 **Image:** `deploy/components/cluster-config` rewrites `sindyffuse:latest` → `ncking/sindyffuse:latest`. Every job kustomization must include that component.
 
@@ -232,19 +233,19 @@ Default resources: 8–32 CPU, 32–64Gi memory. Edit `deploy/dev/pod.yaml` to a
 
 All manifests assume the PVC is mounted at `/mnt` with the repo at `/mnt/SINDyffuse` (`workingDir` on every pod/job). HumanML3D lives at `/mnt/SINDyffuse/datasets/HumanML3D`.
 
-Only **preprocess** jobs accept optional env: `PREPROCESS_NUM_SHARDS`, `PATH_FIT_SAMPLE_MOTIONS`, `PATH_FIT_NUM_THREADS`, `PATH_FIT_NUM_WORKERS`, `MAX_MOTIONS`, `SKIP_EXISTING` (omit `SKIP_EXISTING` to reprocess all motions).
+Only **preprocess** jobs accept optional env: `PREPROCESS_NUM_SHARDS`, `SKIP_EXISTING` (shared ConfigMap), `PATH_FIT_SAMPLE_MOTIONS`, `PATH_FIT_NUM_THREADS`, `PATH_FIT_NUM_WORKERS`, `PATH_FIT_FORCE`, `MAX_MOTIONS`, `MOCO_TEMP_DIR` / `TMPDIR` (moco scratch).
 
-Preprocess uses Indexed worker Jobs (`parallelism=completions=180` for inverse kinematics and moco). Path-fit is a single Job. **Pipeline sequencing** is done by local scripts in `deploy/scripts/` (`kubectl apply` + `kubectl wait` from your laptop — no in-cluster orchestrator Jobs or RBAC). Normalization merges moco shard manifests after moco workers finish.
+Preprocess uses Indexed worker Jobs (`parallelism=completions=180` for inverse kinematics and moco). Motions are length-balanced across shards (file-size proxy). Path-fit is a single Job and is skipped when the FunctionBasedPathSet XML already exists. **Pipeline sequencing** is done by local scripts in `deploy/scripts/` (`kubectl apply` + `kubectl wait` from your laptop — no in-cluster orchestrator Jobs or RBAC). Normalization merges moco shard manifests after moco workers finish.
 
 ## Resource profiles
 
 | Job | CPUs | Memory | GPUs |
 |-----|------|--------|------|
 | dev | 8–32 | 32–64Gi | — (add in pod.yaml if needed) |
-| preprocess-dataset/inverse_kinematics | 180 × 1 | 180 × 2Gi | — |
-| preprocess-dataset/moco-track | 180 × 10 | 180 × 16Gi | — |
+| preprocess-dataset/inverse_kinematics | 180 × 4 | 180 × 4Gi | — |
+| preprocess-dataset/moco-track | 180 × 20 | 180 × 16Gi (+ emptyDir `/scratch`) | — |
 | preprocess-dataset/normalization | 1 | 2Gi | — |
-| preprocess-dataset/fit-function-paths | 128 | 256Gi | — |
+| preprocess-dataset/fit-function-paths | 128 | 128Gi | — |
 | benchmark-moco-parallel | 64 | 64Gi | — |
 | train-sindy | 16 | 64Gi | 1 |
 | train-surrogate | 16 | 64Gi | 1 |
@@ -271,9 +272,9 @@ Startup logs include `[distributed/gpu]` with rank, world size, device count, an
 
 ## Path fit (Job 2)
 
-**Mode A (local):** `python scripts/fit_rajagopal_function_paths.py --sample_motions 200` — single process, optional `--num_workers` / `--num_threads`.
+**Mode A (local):** `python scripts/fit_rajagopal_function_paths.py --sample_motions 200` — skips if XML exists; optional `--force`, `--num_workers` / `--num_threads`.
 
-**Mode C (cluster):** single Job (same command as local):
+**Mode C (cluster):** single Job (same command as local). Orchestrator skips when XML is present unless `PATH_FIT_FORCE=1`:
 
 ```bash
 ./deploy/scripts/preprocess-dataset-orchestrate.sh path-fit YOUR_NAMESPACE
@@ -282,7 +283,7 @@ Startup logs include `[distributed/gpu]` with rank, world size, device count, an
 
 | Job | Resources | Role |
 |-----|-----------|------|
-| `sindyffuse-fit-function-paths` | 128 CPU, 256Gi | sample → B3D→`.mot` (ProcessPool) → merge → OpenSim path fit |
+| `sindyffuse-fit-function-paths` | 128 CPU, 128Gi | sample → B3D→`.mot` (32 workers) → merge → OpenSim path fit (128 threads) on MTP-welded Rajagopal |
 
 Run after IK (Job 1) and before MocoTrack (Job 3).
 

@@ -238,11 +238,26 @@ def _validate_q_input(q: np.ndarray) -> np.ndarray:
         raise ValueError(f'Expected q [T, {len(RAJAGOPAL_NIMBLE_DOF_NAMES)}], got {arr.shape}')
     return arr
 
+def _resolve_activation_temp_dir(explicit: Optional[str]=None) -> Optional[str]:
+    if explicit is not None and str(explicit).strip():
+        return str(Path(explicit).expanduser())
+    for key in ('MOCO_TEMP_DIR', 'TMPDIR'):
+        raw = os.environ.get(key, '').strip()
+        if raw:
+            return raw
+    return None
+
 def _activation_work_dir(cfg: MuscleActivationConfig, *, prefix: str) -> Tuple[Path, bool]:
     if cfg.temp_dir:
         work_dir = Path(cfg.temp_dir)
         work_dir.mkdir(parents=True, exist_ok=True)
         return (work_dir, False)
+    base = _resolve_activation_temp_dir()
+    if base:
+        parent = Path(base)
+        parent.mkdir(parents=True, exist_ok=True)
+        work_dir = Path(tempfile.mkdtemp(prefix=prefix, dir=str(parent)))
+        return (work_dir, not bool(cfg.keep_temp))
     work_dir = Path(tempfile.mkdtemp(prefix=prefix))
     return (work_dir, not bool(cfg.keep_temp))
 

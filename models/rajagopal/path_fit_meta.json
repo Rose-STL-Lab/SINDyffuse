@@ -1,0 +1,22 @@
+{
+  "output_xml": "/mnt/SINDyffuse/models/rajagopal/Rajagopal2015_FunctionBasedPathSet.xml",
+  "sample_motions": 200,
+  "sample_seed": 42,
+  "sampling": "split_and_caption_stratified_systematic",
+  "motion_ids": [
+    "001264",
+    "000985",
+    "005276",
+    "006302",
+    "000209",
+    "001294",
+    "007994",
+    "004139",
+    "001280",
+    "000257"
+  ],
+  "num_threads": 128,
+  "num_workers": 128,
+  "mtp_welded": true,
+  "path_fit_model": "rajagopal_unlocked_mtp_welded"
+}

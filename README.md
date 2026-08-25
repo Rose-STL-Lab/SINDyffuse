@@ -50,7 +50,7 @@ Production preprocessing is **four sequential jobs** sharing the same Python scr
 | Job | Script | Purpose |
 |-----|--------|---------|
 | 1 — IK | `scripts/preprocess_ik.py` | joints → `q`, SINDy/guidance features, zero activations |
-| 2 — Path fit | `scripts/fit_rajagopal_function_paths.py` | one-time `FunctionBasedPathSet.xml` from 200 stratified IK B3D samples (same command locally and on cluster) |
+| 2 — Path fit | `scripts/fit_rajagopal_function_paths.py` | one-time MTP-welded `FunctionBasedPathSet.xml` from 200 stratified IK B3D samples (skips if XML already exists; `--force` / `PATH_FIT_FORCE=1` to refit) |
 | 3 — MocoTrack | `scripts/preprocess_moco.py` | muscle activations + GRF + validity mask (reads IK B3D, no IK redo) |
 | 4 — Norm | `scripts/compute_normalization.py` | merge moco manifests → `Mean.npy` / `Std.npy` |
 
@@ -65,10 +65,10 @@ python scripts/compute_normalization.py --num_shards 1 --wait
 
 | Mode | Where | Command |
 |------|-------|---------|
-| **A — Super-node** | Local / dev pod | `python scripts/fit_rajagopal_function_paths.py --sample_motions 200` (optional `--num_workers`, `--num_threads`) |
+| **A — Super-node** | Local / dev pod | `python scripts/fit_rajagopal_function_paths.py --sample_motions 200` (optional `--num_workers`, `--num_threads`, `--force`) |
 | **C — Cluster** | Kubernetes | `./deploy/scripts/preprocess-dataset-orchestrate.sh path-fit YOUR_NAMESPACE` |
 
-Cluster path-fit is a single Job (128 CPU / 256Gi). Same pattern for the full pipeline: `./deploy/scripts/preprocess-dataset-orchestrate.sh full YOUR_NAMESPACE`.
+Cluster path-fit is a single Job (128 CPU / 128Gi). Fits on an **MTP-welded** unlocked Rajagopal so paths do not depend on `mtp_angle_*` (keeps MocoTrack toe welding). Orchestrator and script **skip** when `models/rajagopal/Rajagopal2015_FunctionBasedPathSet.xml` already exists (`PATH_FIT_FORCE=1` to re-fit). Same pattern for the full pipeline: `./deploy/scripts/preprocess-dataset-orchestrate.sh full YOUR_NAMESPACE`.
 
 **Kubernetes (full preprocess pipeline):**
 

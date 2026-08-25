@@ -19,6 +19,40 @@ from common.run_logging import DualTqdm, RunLogger, dual_tqdm, null_logger
 from datasets.splits import all_motion_ids, shard_motion_ids
 from nimble.activation_gates import manifest_gate_reason
 
+def estimate_motion_lengths(ids: list[str], *, hml_root: Path, out_root: Path, joint_source: str='auto', joints_root: str | Path | None=None) -> dict[str, float]:
+    """Cheap length proxies for shard balancing (B3D size, else joint .npy size)."""
+    b3d_dir = nimble_b3d_dir(out_root)
+    root = hml_root.expanduser().resolve()
+    joints_dir = Path(joints_root).expanduser().resolve() if joints_root else root / 'joints'
+    lengths: dict[str, float] = {}
+    for sid in ids:
+        b3d = b3d_dir / f'{sid}.b3d'
+        if b3d.is_file():
+            try:
+                lengths[sid] = float(b3d.stat().st_size)
+                continue
+            except OSError:
+                pass
+        candidates: list[Path] = []
+        if joint_source in ('auto', 'joints'):
+            candidates.append(joints_dir / f'{sid}.npy')
+        if joint_source in ('auto', 'new_joints'):
+            candidates.append(root / 'new_joints' / f'{sid}.npy')
+        if joint_source == 'auto':
+            candidates.append(root / 'new_joint_vecs' / f'{sid}.npy')
+        found = False
+        for path in candidates:
+            if path.is_file():
+                try:
+                    lengths[sid] = float(path.stat().st_size)
+                    found = True
+                    break
+                except OSError:
+                    continue
+        if not found:
+            lengths[sid] = 1.0
+    return lengths
+
 def symlink_metadata(hml_root: Path, out_root: Path) -> None:
     if hml_root.resolve() == out_root.resolve():
         return
@@ -155,7 +189,9 @@ def resolve_shard_motion_ids(args: argparse.Namespace) -> tuple[list[str], int, 
         ids = ids[: int(args.max_motions)]
     shard_index, num_shards = resolve_k8s_shard(num_shards=int(getattr(args, 'num_shards', 1) or 1), shard_index=int(getattr(args, 'shard_index', -1)) if int(getattr(args, 'shard_index', -1)) >= 0 else None)
     if num_shards > 1:
-        ids = shard_motion_ids(ids, shard_index, num_shards)
+        joints_root = str(getattr(args, 'joints_root', '') or '').strip() or None
+        lengths = estimate_motion_lengths(ids, hml_root=hml_root, out_root=out_root, joint_source=str(getattr(args, 'joint_source', 'auto') or 'auto'), joints_root=joints_root)
+        ids = shard_motion_ids(ids, shard_index, num_shards, lengths=lengths)
     symlink_metadata(hml_root, out_root)
     nimble_b3d_dir(out_root).mkdir(parents=True, exist_ok=True)
     return (ids, shard_index, num_shards, hml_root, out_root)

@@ -7,6 +7,8 @@ metadata:
     app: sindyffuse-compute-normalization
 spec:
   backoffLimit: 3
+  ttlSecondsAfterFinished: 86400
+  activeDeadlineSeconds: 7200
   template:
     metadata:
       labels:
@@ -20,15 +22,13 @@ spec:
         imagePullPolicy: IfNotPresent
         workingDir: /mnt/SINDyffuse
         env:
-        - name: PREPROCESS_NUM_SHARDS
-          value: "180"
         - name: SINDYFFUSE_RUN_LOG_ID
-          value: "RUN_LOG_ID_PLACEHOLDER"
+          value: "normalization"
         command: ["/bin/bash", "-c"]
         args:
         - |
           source deploy/scripts/job-env.sh
-          python scripts/compute_normalization.py --wait --num_shards 180
+          python scripts/compute_normalization.py --wait --num_shards "${PREPROCESS_NUM_SHARDS}"
         resources:
           limits:
             memory: 2Gi

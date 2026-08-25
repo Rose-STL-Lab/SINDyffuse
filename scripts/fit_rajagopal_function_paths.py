@@ -23,7 +23,7 @@ from datasets.nimble_dataset import read_q_segment
 from datasets.splits import all_motion_ids, load_split_ids
 from nimble.muscle_activation import opensim_quiet
 from nimble.rajagopal_coord_map import RajagopalCoordMapping, build_rajagopal_coord_mapping, write_coordinates_mot
-from nimble.rajagopal_model import function_based_path_set_path, prepare_unlocked_rajagopal_base
+from nimble.rajagopal_model import function_based_path_set_path, prepare_welded_unlocked_rajagopal_base
 DEFAULT_SAMPLE_MOTIONS = 200
 DEFAULT_SAMPLE_SEED = 42
 COORDINATE_TABLE_SUBSAMPLE_STRIDE = 5
@@ -236,18 +236,39 @@ def _run_path_fitter(*, base_model: Path, mot_paths: list[Path], num_threads: in
         raise RuntimeError(f'PolynomialPathFitter did not write expected output: {generated}')
     return generated
 
-def fit_function_paths(*, out_root: Path, sample_motions: int=DEFAULT_SAMPLE_MOTIONS, fps: float=20.0, ik_num_shards: int=1, seed: int=DEFAULT_SAMPLE_SEED, num_threads: int | None=None, num_workers: int=0) -> dict:
+def fit_function_paths(*, out_root: Path, sample_motions: int=DEFAULT_SAMPLE_MOTIONS, fps: float=20.0, ik_num_shards: int=1, seed: int=DEFAULT_SAMPLE_SEED, num_threads: int | None=None, num_workers: int=0, force: bool=False) -> dict:
+    out_xml = function_based_path_set_path()
+    if out_xml.is_file() and not force:
+        meta = {
+            'output_xml': str(out_xml),
+            'skipped': True,
+            'skip_reason': 'existing function-based path set',
+            'mtp_welded': True,
+            'path_fit_model': 'rajagopal_unlocked_mtp_welded',
+        }
+        meta_path = out_xml.parent / 'path_fit_meta.json'
+        if meta_path.is_file():
+            try:
+                existing = json.loads(meta_path.read_text(encoding='utf-8'))
+                if isinstance(existing, dict):
+                    merged = dict(existing)
+                    merged.update(meta)
+                    meta = merged
+            except (OSError, json.JSONDecodeError):
+                pass
+        return meta
     ids = _sample_motion_ids(out_root, sample_motions, ik_num_shards=ik_num_shards, seed=seed)
     if not ids:
         raise RuntimeError('No motions available for path fitting')
-    out_xml = function_based_path_set_path()
     out_xml.parent.mkdir(parents=True, exist_ok=True)
     work_dir = Path(tempfile.mkdtemp(prefix='sindyffuse_path_fit_'))
     resolved_threads = configure_compute_threads(_resolve_num_threads(num_threads))
     workers = _resolve_num_workers(num_workers)
     try:
         with opensim_quiet('Off'):
-            base_model = prepare_unlocked_rajagopal_base(work_dir)
+            # Fit on welded-MTP Rajagopal so FunctionBasedPathSet does not reference mtp_angle_*
+            # (required for MocoTrack toe welding).
+            base_model = prepare_welded_unlocked_rajagopal_base(work_dir)
             mapping = build_rajagopal_coord_mapping(model_path=base_model)
             staging = work_dir / 'mot'
             staging.mkdir(parents=True, exist_ok=True)
@@ -258,7 +279,17 @@ def fit_function_paths(*, out_root: Path, sample_motions: int=DEFAULT_SAMPLE_MOT
             shutil.copy2(generated, out_xml)
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
-    meta = {'output_xml': str(out_xml), 'sample_motions': len(ids), 'sample_seed': int(seed), 'sampling': 'split_and_caption_stratified_systematic', 'motion_ids': ids[:10], 'num_threads': resolved_threads, 'num_workers': workers}
+    meta = {
+        'output_xml': str(out_xml),
+        'sample_motions': len(ids),
+        'sample_seed': int(seed),
+        'sampling': 'split_and_caption_stratified_systematic',
+        'motion_ids': ids[:10],
+        'num_threads': resolved_threads,
+        'num_workers': workers,
+        'mtp_welded': True,
+        'path_fit_model': 'rajagopal_unlocked_mtp_welded',
+    }
     (out_xml.parent / 'path_fit_meta.json').write_text(json.dumps(meta, indent=2), encoding='utf-8')
     return meta
 
@@ -271,10 +302,13 @@ def main() -> None:
     parser.add_argument('--num_shards', type=int, default=None, help='IK manifest shard count (PREPROCESS_NUM_SHARDS).')
     parser.add_argument('--num_threads', type=int, default=None, help='PolynomialPathFitter parallel threads (default: PATH_FIT_NUM_THREADS or cgroup CPU count).')
     parser.add_argument('--num_workers', type=int, default=0, help='B3D→.mot worker processes (default: PATH_FIT_NUM_WORKERS or cgroup CPU count).')
+    parser.add_argument('--force', action='store_true', help='Re-fit even if FunctionBasedPathSet.xml already exists.')
     args = parser.parse_args()
+    if not args.force and os.environ.get('PATH_FIT_FORCE', '').strip().lower() in {'1', 'true', 'yes', 'on'}:
+        args.force = True
     out_root = Path(args.out_root).expanduser().resolve()
     ik_num_shards = _resolve_ik_num_shards(args.num_shards)
-    result = fit_function_paths(out_root=out_root, sample_motions=int(args.sample_motions), fps=float(args.fps), ik_num_shards=ik_num_shards, seed=int(args.sample_seed), num_threads=args.num_threads, num_workers=int(args.num_workers))
+    result = fit_function_paths(out_root=out_root, sample_motions=int(args.sample_motions), fps=float(args.fps), ik_num_shards=ik_num_shards, seed=int(args.sample_seed), num_threads=args.num_threads, num_workers=int(args.num_workers), force=bool(args.force))
     print(json.dumps(result, indent=2))
 
 if __name__ == '__main__':
