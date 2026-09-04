@@ -1,4 +1,5 @@
-# Worker phase: kubectl apply -k deploy/jobs/preprocess-dataset/moco-track
+# Worker phase: OpenSimAD MinT activations on LaiUhlrich2022
+# kubectl apply -k deploy/jobs/preprocess-dataset/moco-track
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -6,6 +7,7 @@ metadata:
   labels:
     app: sindyffuse-preprocess-moco-track
     activation-method: opensimad
+    opensim-model: LaiUhlrich2022
 spec:
   parallelism: 180
   completions: 180
@@ -45,15 +47,19 @@ spec:
           value: "1.4"
         - name: MOCO_BUFFER_DURATION_S
           value: "0.14"
+        - name: TMPDIR
+          value: "/scratch"
+        - name: MOCO_TEMP_DIR
+          value: "/scratch"
         - name: SINDYFFUSE_RUN_LOG_ID
           value: "RUN_LOG_ID_PLACEHOLDER"
         command: ["/bin/bash", "-c"]
         args:
         - |
           source deploy/scripts/job-env.sh
-          # Indexed Job shard → unique run log (placeholder rewritten if still default).
-          export SINDYFFUSE_RUN_LOG_ID="moco_shard_${JOB_COMPLETION_INDEX:-0}"
-          python scripts/preprocess_moco.py --skip_normalization --num_workers 0
+          export SINDYFFUSE_RUN_LOG_ID="opensimad_shard_${JOB_COMPLETION_INDEX:-0}"
+          mkdir -p "${TMPDIR:-/scratch}"
+          python scripts/preprocess_moco.py --skip_normalization --num_workers 0 --activation_method opensimad
         resources:
           limits:
             memory: 32Gi
@@ -64,7 +70,11 @@ spec:
         volumeMounts:
         - name: data
           mountPath: /mnt
+        - name: scratch
+          mountPath: /scratch
       volumes:
       - name: data
         persistentVolumeClaim:
           claimName: sindyffuse
+      - name: scratch
+        emptyDir: {}

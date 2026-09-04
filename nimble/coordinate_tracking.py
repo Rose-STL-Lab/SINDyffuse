@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Sequence, Tuple
 import numpy as np
 import opensim as osim
-from nimble.muscle_activation import _storage_to_array
+from nimble.opensim_storage import storage_to_array as _storage_to_array
 from nimble.rajagopal_coord_map import NIMBLE_TO_OPENSIM_COORD, RajagopalCoordMapping, build_moco_states_table_processor, write_coordinates_mot
 
 # Default per-coordinate RMSE thresholds for post-Moco quality gates.

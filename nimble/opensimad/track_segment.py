@@ -4,13 +4,15 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Tuple
 import numpy as np
+# CasADi before OpenSim / vendor OpenSimAD imports.
+import casadi  # noqa: F401
 from nimble.moco_segment import SIM_GRF_COLS
 from nimble.muscle_activation import MuscleActivationConfig, muscle_names
 from nimble.opensimad import OPENSIM_MODEL_BASENAME
 from nimble.opensimad.mint_settings import mint_tracking_settings
 from nimble.opensimad.model_prep import ensure_ad_ready_artifacts
-from nimble.opensimad.paths import ad_contacts_model_path, ad_scaled_adjusted_model_path, external_function_dir, vendor_opencap_ad_dir
-from nimble.rajagopal_coord_map import build_rajagopal_coord_mapping, write_coordinates_mot
+from nimble.opensimad.paths import ad_contacts_model_path, ad_scaled_adjusted_model_path, external_function_dir, vendor_dummy_motion_path, vendor_opencap_ad_dir
+from nimble.lai_coord_map import build_lai_coord_mapping, write_coordinates_mot
 
 def _ensure_vendor_on_path() -> None:
     vendor = vendor_opencap_ad_dir()
@@ -92,13 +94,13 @@ def _parse_grf_mot(path: Path | None, *, n_frames: int, fps: float) -> np.ndarra
     return grf
 
 def solve_opensimad_segment(q: np.ndarray, *, cfg: MuscleActivationConfig, solve_dir: Path, mesh_interval: float | None=None) -> Tuple[np.ndarray, bool, Dict[str, Any], np.ndarray]:
-    """Run one MinT/OpenCap OpenSimAD tracking window on Rajagopal coordinates."""
+    """Run one MinT/OpenCap OpenSimAD tracking window on LaiUhlrich2022 coordinates."""
     ensure_ad_ready_artifacts(force=False)
     ext_dir = external_function_dir()
     if not (ext_dir / 'F_map.npy').is_file():
         raise FileNotFoundError(
             f'Missing OpenSimAD artifacts under {ext_dir}. '
-            'Run: python scripts/build_rajagopal_opensimad_ext.py'
+            'Run: python scripts/build_lai_opensimad_ext.py'
         )
     _ensure_vendor_on_path()
     arr = np.asarray(q, dtype=np.float64)
@@ -124,7 +126,7 @@ def solve_opensimad_segment(q: np.ndarray, *, cfg: MuscleActivationConfig, solve
         shutil.rmtree(ext_dst)
     shutil.copytree(ext_dir, ext_dst)
 
-    mapping = build_rajagopal_coord_mapping(model_path=ad_scaled_adjusted_model_path())
+    mapping = build_lai_coord_mapping(model_path=ad_scaled_adjusted_model_path())
     mot_path = kin_folder / 'segment.mot'
     write_coordinates_mot(arr, mot_path, fps=float(cfg.fps), mapping=mapping)
     (session / 'sessionMetadata.yaml').write_text(
@@ -137,6 +139,8 @@ def solve_opensimad_segment(q: np.ndarray, *, cfg: MuscleActivationConfig, solve
     settings['timeInterval'] = [0.0, float(t1)]
     if mesh_interval is not None and float(mesh_interval) > 0:
         settings['meshDensity'] = int(round(1.0 / float(mesh_interval)))
+    if cfg.moco_max_iterations is not None:
+        settings['max_iterations'] = int(cfg.moco_max_iterations)
 
     # Fake OpenCap baseDir so imports + opensimAD-install resolve under vendor.
     fake_base = solve_dir / 'opencap_base'
@@ -152,6 +156,14 @@ def solve_opensimad_segment(q: np.ndarray, *, cfg: MuscleActivationConfig, solve
         link.symlink_to(vendor, target_is_directory=True)
     except OSError:
         shutil.copytree(vendor, link, dirs_exist_ok=True)
+
+    # OpenCap polynomial fitting expects DummyMotion.mot under OpenSimPipeline/MuscleAnalysis.
+    dummy_src = vendor_dummy_motion_path()
+    dummy_dst = fake_base / 'OpenSimPipeline' / 'MuscleAnalysis' / 'DummyMotion.mot'
+    dummy_dst.parent.mkdir(parents=True, exist_ok=True)
+    if not dummy_src.is_file():
+        raise FileNotFoundError(f'Missing DummyMotion.mot at {dummy_src}')
+    shutil.copy2(dummy_src, dummy_dst)
 
     meta: Dict[str, Any] = {
         'activation_method': 'opensimad',

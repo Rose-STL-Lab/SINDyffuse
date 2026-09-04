@@ -2,42 +2,51 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Sequence, Tuple
 import numpy as np
-import torch
 from nimble.channels import BIOMECH_COMPONENT_KEYS
 from nimble.guidance import NimbleGuidanceConfig
-from nimble.muscle_activation import muscle_names, opensim_quiet
+from nimble.opensim_log import opensim_quiet
 from nimble.muscle_b3d import MUSCLE_ACTIVATION_ROWS
-from nimble.physics import physics_from_q
+
 N_BIO_TARGETS = len(BIOMECH_COMPONENT_KEYS)
 N_MUSCLE_TARGETS = int(MUSCLE_ACTIVATION_ROWS)
 N_SINDY_TARGETS = N_BIO_TARGETS + N_MUSCLE_TARGETS
 
+
 @lru_cache(maxsize=1)
 def muscle_channel_names() -> Tuple[str, ...]:
+    from nimble.muscle_activation import muscle_names
     with opensim_quiet('Off'):
         return tuple(muscle_names())
+
 
 @lru_cache(maxsize=1)
 def sindy_target_keys() -> Tuple[str, ...]:
     return tuple(BIOMECH_COMPONENT_KEYS) + muscle_channel_names()
 
-def default_physics_cfg(*, fps: float=20.0, max_frames: int | None=None) -> NimbleGuidanceConfig:
-    t_max = 64 if max_frames is None else int(max_frames)
-    return NimbleGuidanceConfig(max_physics_frames=t_max, physics_on_cpu=True, smooth_poses=True, smooth_cutoff_hz=6.0, mass_kg=70.0, g_mps2=9.81, contact_height_thresh_m=0.06, contact_speed_thresh_mps=1.2)
 
-def bio_matrix(q: np.ndarray, *, fps: float, guidance_cfg: NimbleGuidanceConfig | None=None) -> np.ndarray:
+def default_physics_cfg(*, fps: float = 20.0, max_frames: int | None = None) -> NimbleGuidanceConfig:
+    del fps
+    t_max = 64 if max_frames is None else int(max_frames)
+    return NimbleGuidanceConfig(max_physics_frames=t_max, physics_on_cpu=True)
+
+
+def bio_matrix(q: np.ndarray, *, fps: float, guidance_cfg: NimbleGuidanceConfig | None = None) -> np.ndarray:
+    """Soft OpenSim-keypoint bio proxy (nimblephysics removed). Returns [T, N_BIO]."""
+    del guidance_cfg, fps
+    from nimble.lai_features import keypoints_from_lai_q
     if q.ndim != 2:
         raise ValueError(f'Expected q [T, ndof], got {q.shape}')
     t = int(q.shape[0])
-    cfg = guidance_cfg or default_physics_cfg(fps=fps, max_frames=t)
-    x = torch.from_numpy(q.astype(np.float32))
-    with torch.no_grad():
-        comp = physics_from_q(x, guidance_cfg=cfg, dt=1.0 / max(float(fps), 1e-08), fps=float(fps))
-    cols = [comp[k].reshape(-1).cpu().numpy() for k in BIOMECH_COMPONENT_KEYS]
-    bio = np.stack(cols, axis=-1).astype(np.float32)
-    if bio.shape[0] != t:
-        bio = bio[:t]
+    kp = keypoints_from_lai_q(np.asarray(q, dtype=np.float64))
+    bio = np.zeros((t, N_BIO_TARGETS), dtype=np.float32)
+    feet_y = kp[:, [4, 5], 1]
+    pelvis_y = kp[:, 0, 1]
+    bio[:, 0] = np.clip(-feet_y.min(axis=1), 0.0, None).astype(np.float32)
+    bio[:, 1] = pelvis_y.astype(np.float32)
+    if t > 1:
+        bio[1:, 2] = np.linalg.norm(np.diff(kp[:, 0, :], axis=0), axis=1).astype(np.float32)
     return bio
+
 
 def targets_for_theta(bio: np.ndarray) -> np.ndarray:
     if bio.ndim != 2:
@@ -45,6 +54,7 @@ def targets_for_theta(bio: np.ndarray) -> np.ndarray:
     if bio.shape[0] < 2:
         return bio[:0]
     return bio[:-1, :].astype(np.float32)
+
 
 def build_sindy_targets(bio: np.ndarray, activations: np.ndarray) -> np.ndarray:
     bio_arr = np.asarray(bio, dtype=np.float32)
@@ -59,7 +69,8 @@ def build_sindy_targets(bio: np.ndarray, activations: np.ndarray) -> np.ndarray:
     y_act = targets_for_theta(act_arr)
     return np.concatenate([y_bio, y_act], axis=-1).astype(np.float32)
 
-def parse_target_weights(weights: Sequence[float] | None, *, n_targets: int=N_SINDY_TARGETS) -> np.ndarray:
+
+def parse_target_weights(weights: Sequence[float] | None, *, n_targets: int = N_SINDY_TARGETS) -> np.ndarray:
     if weights is None:
         return np.ones((int(n_targets),), dtype=np.float32)
     arr = np.asarray(weights, dtype=np.float32).reshape(-1)

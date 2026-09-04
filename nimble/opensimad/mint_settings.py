@@ -1,4 +1,4 @@
-"""MinT-aligned OpenSimAD / OpenCap tracking settings (Rajagopal @ 20 fps)."""
+"""MinT-aligned OpenSimAD / OpenCap tracking settings (LaiUhlrich2022 @ 20 fps)."""
 from __future__ import annotations
 from typing import Any, Dict
 from nimble.opensimad import OPENSIM_MODEL_BASENAME

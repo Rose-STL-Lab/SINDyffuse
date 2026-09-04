@@ -3,18 +3,38 @@ import argparse
 import os
 import tempfile
 import warnings
-from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
-import opensim as osim
-from nimble.rajagopal_coord_map import RAJAGOPAL_NIMBLE_DOF_NAMES
+from nimble.opensim_log import configure_opensim_logging, opensim_quiet
+from nimble.lai_coord_map import LAI_CACHE_DOF_NAMES, LAI_NUM_DOFS, lai_model_path
+from nimble.opensim_storage import storage_to_array as _storage_to_array
+
 ACTIVATION_METHODS: Tuple[str, ...] = ('opensimad', 'moco_track')
 
+
+def ensure_casadi_before_opensim() -> None:
+    """Import pip CasADi before OpenSim so the correct libcasadi is bound.
+
+    Scripts that use OpenSimAD must ``import casadi`` before any OpenSim import.
+    """
+    import sys
+    if 'opensim' in sys.modules and 'casadi' not in sys.modules:
+        raise RuntimeError(
+            'OpenSim was imported before CasADi. OpenSimAD requires '
+            '`import casadi` before any OpenSim import (ABI conflict on libcasadi).'
+        )
+    import casadi  # noqa: F401
+    del casadi
+
+
 def rajagopal_model_path() -> Path:
-    import nimblephysics as nimble
-    return Path(nimble.__file__).parent / 'models' / 'rajagopal_data' / 'Rajagopal2015.osim'
+    """Deprecated alias — returns LaiUhlrich2022 model path on the uhlrich branch."""
+    return lai_model_path()
+
+def opensim_model_path() -> Path:
+    return lai_model_path()
 
 @dataclass
 class MuscleActivationConfig:
@@ -131,59 +151,6 @@ def muscle_activation_config_from_args(args: argparse.Namespace, *, fps: float |
     parallel_seg = getattr(args, 'moco_parallel_segments', None)
     return MuscleActivationConfig(activation_method=resolve_activation_method(args), fps=float(fps if fps is not None else getattr(args, 'fps', base.fps)), mass_kg=float(mass_kg if mass_kg is not None else getattr(args, 'mass_kg', base.mass_kg)), mesh_interval=float(mesh) if mesh is not None else base.mesh_interval, moco_residual_force=_pick('moco_residual_force', 'moco_residual_force'), moco_reserve_optimal_force=_pick('moco_reserve_optimal_force', 'moco_reserve_optimal_force'), moco_reserve_scale=_pick('moco_reserve_scale', 'moco_reserve_scale'), moco_reserve_control_weight=_pick('moco_reserve_control_weight', 'moco_reserve_control_weight'), moco_convergence_tolerance=_pick('moco_convergence_tolerance', 'moco_convergence_tolerance'), moco_max_iterations=int(_pick('moco_max_iterations', 'moco_max_iterations', cast=int)), moco_states_tracking_weight=_pick('moco_states_tracking_weight', 'moco_states_tracking_weight'), moco_states_speed_tracking_weight=_pick('moco_states_speed_tracking_weight', 'moco_states_speed_tracking_weight'), moco_aux_coord_tracking_weight=_pick('moco_aux_coord_tracking_weight', 'moco_aux_coord_tracking_weight'), moco_reference_lowpass_hz=0.0 if bool(getattr(args, 'moco_no_reference_lowpass', False)) else float(getattr(args, 'moco_reference_lowpass_hz', None) if getattr(args, 'moco_reference_lowpass_hz', None) is not None else base.moco_reference_lowpass_hz), moco_apply_tracked_states_to_guess=not bool(getattr(args, 'moco_no_apply_tracked_guess', False)), moco_minimize_implicit_aux_derivatives=not bool(getattr(args, 'moco_no_implicit_aux_derivatives', False)), moco_weld_toe_joints=not bool(getattr(args, 'moco_no_weld_toes', False)), moco_multi_contact=not bool(getattr(args, 'moco_no_multi_contact', False)), moco_adaptive_mesh=not bool(getattr(args, 'moco_no_adaptive_mesh', False)), moco_adaptive_mesh_speed_deg_s=_pick('moco_adaptive_mesh_speed_deg_s', 'moco_adaptive_mesh_speed_deg_s'), moco_adaptive_mesh_interval=_pick('moco_adaptive_mesh_interval', 'moco_adaptive_mesh_interval'), moco_contact_toe_radius_m=_pick('moco_contact_toe_radius_m', 'moco_contact_toe_radius_m'), moco_use_function_based_paths=not bool(getattr(args, 'moco_no_function_based_paths', False)), moco_parallel_segments=int(parallel_seg) if parallel_seg is not None else base.moco_parallel_segments, opensim_log_level=str(getattr(args, 'opensim_log_level', base.opensim_log_level)), keep_temp=bool(keep_temp), moco_core_duration_s=float(getattr(args, 'moco_core_duration_s', None) if getattr(args, 'moco_core_duration_s', None) is not None else base.moco_core_duration_s), moco_buffer_duration_s=float(getattr(args, 'moco_buffer_duration_s', None) if getattr(args, 'moco_buffer_duration_s', None) is not None else base.moco_buffer_duration_s), moco_stitch_blend_s=float(getattr(args, 'moco_stitch_blend_s', None) if getattr(args, 'moco_stitch_blend_s', None) is not None else base.moco_stitch_blend_s))
 
-def _normalize_opensim_log_level(level: str) -> str:
-    key = str(level).strip().lower()
-    if key in ('', 'silent', 'none', 'quiet'):
-        return 'Off'
-    return str(level).strip()
-
-def configure_opensim_logging(level: str='Off') -> None:
-    try:
-        osim.Logger.setLevelString(_normalize_opensim_log_level(level))
-    except Exception:
-        pass
-
-def _opensim_stdio_suppressed(level: str) -> bool:
-    return _normalize_opensim_log_level(level) == 'Off'
-
-@contextmanager
-def _suppress_process_stdio():
-    devnull_fd = os.open(os.devnull, os.O_WRONLY)
-    stdout_fd = os.dup(1)
-    stderr_fd = os.dup(2)
-    try:
-        os.dup2(devnull_fd, 1)
-        os.dup2(devnull_fd, 2)
-        yield
-    finally:
-        os.dup2(stdout_fd, 1)
-        os.dup2(stderr_fd, 2)
-        os.close(stdout_fd)
-        os.close(stderr_fd)
-        os.close(devnull_fd)
-
-@contextmanager
-def opensim_quiet(level: str='Off'):
-    normalized = _normalize_opensim_log_level(level)
-    prev = osim.Logger.getLevelString()
-    configure_opensim_logging(normalized)
-    if _opensim_stdio_suppressed(normalized):
-        with _suppress_process_stdio():
-            try:
-                yield
-            finally:
-                try:
-                    osim.Logger.setLevelString(prev)
-                except Exception:
-                    pass
-    else:
-        try:
-            yield
-        finally:
-            try:
-                osim.Logger.setLevelString(prev)
-            except Exception:
-                pass
 
 @dataclass
 class MuscleActivationResult:
@@ -201,12 +168,13 @@ class MuscleActivationResult:
         return int(self.activations.shape[1])
 
 def muscle_names(model: Any | None=None) -> Tuple[str, ...]:
+    import opensim as osim
     if model is None:
         with opensim_quiet('Off'):
-            model = osim.Model(str(rajagopal_model_path()))
+            model = osim.Model(str(opensim_model_path()))
             model.initSystem()
     muscles = model.getMuscles()
-    return tuple((muscles.get(i).getName() for i in range(muscles.getSize())))
+    return tuple((muscles.get(i).getName() for i in range(muscles.getSize()) if muscles.get(i).getName() != 'default'))
 
 def activation_column_for_muscle(label: str, muscle: str) -> bool:
     lab = str(label).strip()
@@ -215,33 +183,13 @@ def activation_column_for_muscle(label: str, muscle: str) -> bool:
     needle = f'/{muscle}/activation'
     return lab.endswith(needle) or needle in lab
 
-def _storage_to_array(storage: Any) -> Tuple[np.ndarray, List[str]]:
-    labels: List[str] = []
-    for i in range(storage.getColumnLabels().size()):
-        labels.append(storage.getColumnLabels().get(i))
-    rows: List[List[float]] = []
-    times: List[float] = []
-    for i in range(storage.getSize()):
-        sv = storage.getStateVector(i)
-        d = sv.getData()
-        times.append(float(sv.getTime()))
-        rows.append([float(d.get(j)) for j in range(d.size())])
-    data = np.asarray(rows, dtype=np.float64)
-    if not labels:
-        return (data, labels)
-    if str(labels[0]).strip().lower() == 'time' and data.ndim == 2:
-        if data.shape[1] == len(labels) - 1:
-            data = np.column_stack([np.asarray(times, dtype=np.float64), data])
-        elif data.shape[1] == len(labels):
-            data[:, 0] = np.asarray(times, dtype=np.float64)
-    return (data, labels)
 
 def _validate_q_input(q: np.ndarray) -> np.ndarray:
     arr = np.asarray(q, dtype=np.float64)
     if arr.ndim != 2:
         raise ValueError(f'Expected q [T, ndof], got {arr.shape}')
-    if arr.shape[1] != len(RAJAGOPAL_NIMBLE_DOF_NAMES):
-        raise ValueError(f'Expected q [T, {len(RAJAGOPAL_NIMBLE_DOF_NAMES)}], got {arr.shape}')
+    if arr.shape[1] != LAI_NUM_DOFS:
+        raise ValueError(f'Expected q [T, {LAI_NUM_DOFS}] ({LAI_CACHE_DOF_NAMES[0]}…), got {arr.shape}')
     return arr
 
 def _activation_work_dir(cfg: MuscleActivationConfig, *, prefix: str) -> Tuple[Path, bool]:
@@ -255,6 +203,8 @@ def _activation_work_dir(cfg: MuscleActivationConfig, *, prefix: str) -> Tuple[P
 def compute_muscle_activation(q: np.ndarray, *, cfg: MuscleActivationConfig | None=None) -> MuscleActivationResult:
     cfg = cfg or MuscleActivationConfig()
     method = normalize_activation_method(cfg.activation_method)
+    if method == 'opensimad':
+        ensure_casadi_before_opensim()
     configure_opensim_logging(cfg.opensim_log_level)
     arr = _validate_q_input(q)
     prefix = 'sindyffuse_opensimad_' if method == 'opensimad' else 'sindyffuse_moco_'
@@ -263,8 +213,11 @@ def compute_muscle_activation(q: np.ndarray, *, cfg: MuscleActivationConfig | No
         if method == 'opensimad':
             from nimble.opensimad_track import run_opensimad_track
             return run_opensimad_track(arr, cfg=cfg, work_dir=work_dir)
-        from nimble.moco_track import run_moco_track
-        return run_moco_track(arr, cfg=cfg, work_dir=work_dir)
+        raise RuntimeError(
+            'activation_method=moco_track is not supported on the uhlrich branch '
+            '(LaiUhlrich2022 31-DOF + CasADi-before-OpenSim breaks opensim.moco). '
+            'Use --activation_method opensimad (default).'
+        )
     finally:
         if cleanup:
             import shutil

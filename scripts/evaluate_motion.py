@@ -9,9 +9,9 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 from common.io import load_json
-from common.paths import nimble_b3d_dir, resolve_data_root, resolve_repo_path
+from common.paths import lai_cache_dir, resolve_data_root, resolve_repo_path
 from common.run_logging import RunLogger, add_run_log_cli_args, run_logged_main
-from datasets.nimble_dataset import read_q_frames
+from datasets.lai_cache import motion_npz_path, read_motion_npz
 from datasets.splits import load_split_ids
 from eval.aggregate import sem, summarize_with_bootstrap
 from eval.biomechanical import compute_biomechanical_metrics
@@ -19,7 +19,7 @@ from eval.protocol import BOOTSTRAP_REPLICATES, FPS, NUM_SAMPLES_PER_CAPTION
 from eval.text_alignment import text_alignment_bundle
 
 def _load_norm_stats(data_root: Path) -> tuple[np.ndarray, np.ndarray]:
-    cache = nimble_b3d_dir(data_root)
+    cache = lai_cache_dir(data_root)
     mean = np.load(cache / 'Mean.npy').astype(np.float32)
     std = np.load(cache / 'Std.npy').astype(np.float32)
     return (mean, std)
@@ -48,14 +48,10 @@ def _discover_generation_files(generations_dir: Path, motion_id: str) -> List[Pa
     return []
 
 def _load_reference_q(data_root: Path, motion_id: str) -> np.ndarray:
-    b3d_path = nimble_b3d_dir(data_root) / f'{motion_id}.b3d'
-    if not b3d_path.is_file():
-        raise FileNotFoundError(f'Missing reference B3D: {b3d_path}')
-    import nimblephysics as nimble
-    subj = nimble.biomechanics.SubjectOnDisk(str(b3d_path))
-    trial = 0
-    n = int(subj.getTrialLength(trial))
-    return read_q_frames(subj, trial, 0, n)
+    npz_path = motion_npz_path(lai_cache_dir(data_root), motion_id)
+    if not npz_path.is_file():
+        raise FileNotFoundError(f'Missing reference NPZ: {npz_path}')
+    return np.asarray(read_motion_npz(npz_path)['q'], dtype=np.float32)
 
 def evaluate_biomechanical_split(*, data_root: Path, generations_dir: Path, motion_ids: List[str], fps: float, mass_kg: float, height_thresh_m: float, speed_thresh_mps: float) -> Dict[str, Any]:
     mean, std = _load_norm_stats(data_root)

@@ -47,8 +47,8 @@ def load_activation_surrogate_guidance(checkpoint: str | Path, *, device: torch.
     std_q: Optional[torch.Tensor] = None
     if bool(payload.get('normalize_q', False)) and data_root:
         import numpy as np
-        from common.paths import nimble_b3d_dir
-        cache = nimble_b3d_dir(data_root)
+        from common.paths import lai_cache_dir
+        cache = lai_cache_dir(data_root)
         mean_p, std_p = (cache / 'Mean.npy', cache / 'Std.npy')
         if mean_p.is_file() and std_p.is_file():
             mean_q = torch.from_numpy(np.load(mean_p).astype(np.float32))

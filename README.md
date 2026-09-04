@@ -1,12 +1,12 @@
 # SINDyffuse
 
-Text-conditioned human motion diffusion with **SINDy** biomechanics targets and **Nimble/OpenSim** physics guidance.
+Text-conditioned human motion diffusion with **SINDy** biomechanics targets and optional **OpenSim** CPU guidance (paper baselines).
 
-HumanML3D joint trajectories are retargeted to the Rajagopal 2015 musculoskeletal model, cached as Nimble B3D files, and used to train:
+HumanML3D joint trajectories are retargeted to **LaiUhlrich2022** (OpenSim IK + OpenSimAD), cached as per-motion **NPZ** files, and used to train:
 
 1. **SINDy** — text → sparse coefficients for **120 targets** (40 L_bio + 80 muscle activations)  
-2. **Activation surrogate** — fast `q` → 80 muscle activations (OpenSim labels at preprocess)  
-3. **Diffusion** — text → motion with SINDy guidance (`loss_diff + lambda_sindy * loss_sindy`)  
+2. **Activation surrogate** — fast `q` → 80 muscle activations (OpenSimAD labels at preprocess)  
+3. **Diffusion** — text → motion with SINDy guidance by default (`loss_diff + lambda_sindy * loss_sindy`); `guidance=opensim` is an optional slow CPU baseline  
 
 ## Setup
 
@@ -15,7 +15,7 @@ conda env create -f env/environment.yaml
 conda activate sindyffuse
 ```
 
-OpenSim and the Rajagopal `.osim` model come from the `opensim` and `nimblephysics` conda/pip packages (no bundled geometry in this repo).
+OpenSim comes from the `opensim` conda package. The Lai model lives under `models/lai_uhlrich/`. Optional Geometry meshes: local folder or `LAI_GEOMETRY_SRC` (not required for IK / OpenSimAD).
 
 Point at your HumanML3D checkout:
 
@@ -27,12 +27,13 @@ export HUMANML3D_ROOT=/path/to/HumanML3D   # optional; default: datasets/HumanML
 
 ```
 datasets/HumanML3D/          # not committed (~20GB)
-  new_joint_vecs/
+  new_joints/ | joints/
   texts/
   train.txt, val.txt, test.txt
-  nimble_b3d/                # canonical B3D cache (IK + Moco — one folder)
-    {motion_id}.b3d
-    Mean.npy, Std.npy
+  lai_cache/                 # per-motion NPZ (IK + OpenSimAD)
+    {motion_id}.npz          # q [T,31], activations, mask, GRF, features
+    Mean.npy, Std.npy        # q mean/std [31]
+    cache_meta.json
 ```
 
 ## Pipeline
@@ -43,34 +44,23 @@ Run entry points from the repo root:
 cd /path/to/SINDyffuse
 ```
 
-### 1. Preprocess (four-job pipeline)
-
-Production preprocessing is **four sequential jobs** sharing the same Python scripts for local runs and Kubernetes indexed jobs:
+### 1. Preprocess (IK → OpenSimAD → norm)
 
 | Job | Script | Purpose |
 |-----|--------|---------|
-| 1 — IK | `scripts/preprocess_ik.py` | joints → `q`, SINDy/guidance features, zero activations |
-| 2 — Path fit | `scripts/fit_rajagopal_function_paths.py` | one-time `FunctionBasedPathSet.xml` from 200 stratified IK B3D samples on **MTP-welded** Rajagopal (OpenSimAD-compatible) |
-| 3 — Activations | `scripts/preprocess_moco.py` | MinT/OpenSimAD (default) or MocoTrack: muscle activations + GRF + validity mask |
-| 3b — OpenSimAD ext | `scripts/build_rajagopal_opensimad_ext.py` | one-shot AD model + CasADi external function `F` (required before OpenSimAD workers) |
-| 4 — Norm | `scripts/compute_normalization.py` | merge moco manifests → `Mean.npy` / `Std.npy` |
+| 1 — IK | `scripts/preprocess_ik.py` | joints → `lai_cache/{id}.npz` with `q` (+ placeholders) |
+| 2 — OpenSimAD ext | `scripts/build_lai_opensimad_ext.py` | one-shot AD model + CasADi external function `F` |
+| 3 — Activations | `scripts/preprocess_moco.py` | MinT/OpenSimAD → activations + GRF + validity mask (patches NPZ) |
+| 4 — Norm | `scripts/compute_normalization.py` | merge manifests → `Mean.npy` / `Std.npy` |
 
 ```bash
 python scripts/preprocess_ik.py --max_motions 5
-python scripts/fit_rajagopal_function_paths.py --sample_motions 200
-python scripts/build_rajagopal_opensimad_ext.py
-python scripts/preprocess_moco.py --max_motions 5
+python scripts/build_lai_opensimad_ext.py
+python scripts/preprocess_moco.py --max_motions 5 --activation_method opensimad
 python scripts/compute_normalization.py --num_shards 1 --wait
 ```
 
-**Path fit (Job 2)** — two execution modes:
-
-| Mode | Where | Command |
-|------|-------|---------|
-| **A — Super-node** | Local / dev pod | `python scripts/fit_rajagopal_function_paths.py --sample_motions 200` (optional `--num_workers`, `--num_threads`) |
-| **C — Cluster** | Kubernetes | `./deploy/scripts/preprocess-dataset-orchestrate.sh path-fit YOUR_NAMESPACE` |
-
-Cluster path-fit is a single Job (128 CPU / 256Gi). Same pattern for the full pipeline: `./deploy/scripts/preprocess-dataset-orchestrate.sh full YOUR_NAMESPACE`.
+Path-fit (`fit_rajagopal_function_paths.py`) is **not** required on this branch (OpenSimAD uses polynomial MT paths).
 
 **Kubernetes (full preprocess pipeline):**
 
@@ -82,8 +72,7 @@ Or run stages individually:
 
 ```bash
 ./deploy/scripts/preprocess-dataset-orchestrate.sh ik YOUR_NAMESPACE
-./deploy/scripts/preprocess-dataset-orchestrate.sh path-fit YOUR_NAMESPACE
-./deploy/scripts/preprocess-dataset-orchestrate.sh moco YOUR_NAMESPACE
+./deploy/scripts/preprocess-dataset-orchestrate.sh opensimad YOUR_NAMESPACE
 ```
 
 Optional direct Job apply (without local orchestrator):
@@ -94,15 +83,15 @@ kubectl apply -k deploy/jobs/preprocess-dataset/inverse_kinematics -n YOUR_NAMES
 
 **IK quality gates (Job 1):** structural checks only — valid `q`, ≥ 2 frames, and all frames must converge (`success_ratio = 1`). HumanML3D joint-position fit stats are recorded for diagnostics but are **not** used to reject motions. Failed IK motions are `ik_failed` in the manifest; activation skips them via prior status only.
 
-**Activation gates (Job 3, MinT gap policy):** a motion is `ok` if **≥1** OpenSimAD/Moco segment succeeds. Failed segments leave **NaN gaps** and `muscle_activation_mask=0`. Whole-motion coordinate RMSE is diagnostic only (no longer hard-fails the clip). Manifest statuses: `ik_ok` / `ik_failed` (Job 1), `ok` / `moco_failed` / `moco_skipped` (Job 3).
+**Activation gates (Job 3, MinT gap policy):** a motion is `ok` if **≥1** OpenSimAD segment succeeds. Failed segments leave **NaN gaps** and `muscle_activation_mask=0`. Whole-motion coordinate RMSE is diagnostic only (no longer hard-fails the clip). Manifest statuses: `ik_ok` / `ik_failed` (Job 1), `ok` / `moco_failed` / `moco_skipped` (Job 3).
 
-By default, activation K8s pods run **6 concurrent segments** (`MOCO_PARALLEL_SEGMENTS=6`, MinT) with **2500** Ipopt iterations and mesh interval **0.02 s** (50 colloc pts/s). Set `ACTIVATION_METHOD=moco_track` to use legacy OpenSim MocoTrack.
+By default, activation K8s pods run **6 concurrent segments** (`MOCO_PARALLEL_SEGMENTS=6`, MinT) with **2500** Ipopt iterations and mesh interval **0.02 s** (50 colloc pts/s). Activation method is **OpenSimAD** only on this branch (`moco_track` requires removed nimblephysics).
 
-Each `.b3d` stores generalized coordinates plus custom channels: `guidance_features`, `sindy_features`, `muscle_activations` `[80, T]`, and `sim_grf` `[18, T]` plus `muscle_activation_mask` `[1, T]`.
+Each `{id}.npz` stores generalized coordinates `q` `[T, 31]` plus `muscle_activations` `[T, 80]`, `muscle_activation_mask` `[T]`, `sim_grf` `[T, 18]`, and SINDy feature rows.
 
-At **20 fps**, segmented Moco uses **28-frame cores**, **3-frame buffers**, and **34-frame solve windows** (1.4 s core / 0.14 s buffer).
+At **20 fps**, segmented OpenSimAD uses **28-frame cores**, **3-frame buffers**, and **34-frame solve windows** (1.4 s core / 0.14 s buffer).
 
-**MocoTrack / OpenSimAD** — segmented trajectory optimization with foot contact: ground offset → 1.4 s windows → seam stitch (MinT). Default backend is **OpenSimAD** (OpenCap/CasADi); `moco_track` remains for A/B. Reference coordinates are low-pass filtered at **6 Hz**. Failed segments leave **NaN gaps**; the validity mask marks good frames. Training uses gap-aware window indexing (`nimble/gap_utils.py`).
+**OpenSimAD** — segmented trajectory optimization with foot contact: ground offset → 1.4 s windows → seam stitch (MinT). Reference coordinates are low-pass filtered at **6 Hz**. Failed segments leave **NaN gaps**; the validity mask marks good frames. Training uses gap-aware window indexing (`nimble/gap_utils.py`).
 
 OpenSim console output is **hidden by default** (`--opensim_log_level Off`).
 
@@ -112,7 +101,6 @@ Useful flags: `--activation_method`, `--moco_core_duration_s`, `--moco_buffer_du
 
 ```bash
 kubectl delete job sindyffuse-preprocess-moco-track -n YOUR_NAMESPACE   # before redeploy
-kubectl apply -k deploy/jobs/preprocess-dataset/fit-function-paths -n YOUR_NAMESPACE
 kubectl apply -k deploy/jobs/preprocess-dataset/build-opensimad-ext -n YOUR_NAMESPACE
 kubectl apply -k deploy/jobs/preprocess-dataset/inverse_kinematics -n YOUR_NAMESPACE
 ```
@@ -125,11 +113,11 @@ python scripts/preprocess_moco.py --max_motions 8 --num_shards 4 --shard_index 0
 python scripts/compute_normalization.py --num_shards 4 --wait
 ```
 
-After upgrading the B3D schema (e.g. L_bio v2 with 40 `guidance_features` rows), **re-run preprocess** without `--skip_existing` on old caches.
+After upgrading the lai_cache NPZ schema, **re-run preprocess** without `--skip_existing` on old caches.
 
 ### 2. Train SINDy
 
-Requires B3D cache with **MocoTrack muscle activations** (`scripts/preprocess_moco.py`).
+Requires `lai_cache/` with **OpenSimAD muscle activations** (`scripts/preprocess_moco.py`).
 
 ```bash
 python scripts/train_sindy.py --output results/sindy
@@ -151,7 +139,7 @@ Config: `configs/train_surrogate.json` (500 epochs, batch 32, lr 1e-3; lowest va
 python scripts/train_diffusion.py --config configs/train_diffusion.json --out_dir results/diffusion
 ```
 
-Config: `configs/train_diffusion.json`. With `guidance=sindy`, loss is **diffusion denoising + SINDy consistency** only (no Nimble term). SINDy guidance compares `Θ(q)·Ξ(text)` to `actual(q)` where bio channels use FK physics and muscle channels use the **activation surrogate** at inference time. Set `train.sindy_checkpoint_dir` and `train.surrogate_checkpoint_dir`.
+Config: `configs/train_diffusion.json`. With `guidance=sindy`, loss is **diffusion denoising + SINDy consistency** (default). Optional `guidance=opensim` is a slow OpenSim FK soft-constraint baseline. SINDy guidance compares `Θ(q)·Ξ(text)` to `actual(q)` where bio channels use OpenSim keypoints and muscle channels use the **activation surrogate**. Set `train.sindy_checkpoint_dir` and `train.surrogate_checkpoint_dir`.
 
 ### 5. Generate motion
 
@@ -165,7 +153,7 @@ python scripts/generate_motion.py --checkpoint results/diffusion/latest.pt \
 
 ### 6. Evaluate
 
-Requires generated motions as NPZ files (`motion` array `[T, 37]`) under `--generations_dir`, plus HumanML3D B3D cache for biomechanical metrics.
+Requires generated motions as NPZ files (`motion` array `[T, 31]`) under `--generations_dir`, plus HumanML3D `lai_cache/` for biomechanical metrics.
 
 ```bash
 python scripts/evaluate_motion.py \
@@ -199,7 +187,8 @@ Job manifests live under `deploy/`. Configure your image and PVC in `deploy/comp
 kubectl apply -k deploy/jobs/preprocess-dataset/inverse_kinematics -n YOUR_NAMESPACE
 kubectl apply -k deploy/jobs/train-sindy -n YOUR_NAMESPACE
 kubectl apply -k deploy/jobs/train-surrogate -n YOUR_NAMESPACE
-kubectl apply -k deploy/jobs/train-diffusion/nimble -n YOUR_NAMESPACE
+kubectl apply -k deploy/jobs/train-diffusion/sindy -n YOUR_NAMESPACE
+kubectl apply -k deploy/jobs/train-diffusion/opensim -n YOUR_NAMESPACE  # optional CPU baseline
 
 # Interactive dev shell on the cluster
 kubectl apply -k deploy/dev
@@ -214,9 +203,9 @@ See [deploy/README.md](deploy/README.md) for image build, storage setup, and the
 
 | Path | Role |
 |------|------|
-| `scripts/preprocess_ik.py` | Job 1: HumanML3D → IK B3D cache |
-| `scripts/preprocess_moco.py` | Job 3: MocoTrack on IK B3D cache |
-| `scripts/fit_rajagopal_function_paths.py` | Job 2: function-based muscle paths |
+| `scripts/preprocess_ik.py` | Job 1: HumanML3D → `lai_cache/` NPZ |
+| `scripts/preprocess_moco.py` | Job 3: OpenSimAD activations → patch NPZ |
+| `scripts/build_lai_opensimad_ext.py` | One-shot OpenSimAD external function build |
 | `scripts/compute_normalization.py` | Merge shard manifests; compute `Mean.npy` / `Std.npy` |
 | `scripts/train_sindy.py` | Train SINDy text→Xi model |
 | `scripts/train_surrogate.py` | Train q→activation surrogate |
@@ -227,7 +216,8 @@ See [deploy/README.md](deploy/README.md) for image build, storage setup, and the
 | `env/environment.yaml` | Conda environment |
 | `env/Dockerfile` | Container image (local build) |
 | `deploy/` | Kubernetes job manifests (see `deploy/README.md`) |
-| `nimble/` | IK, B3D I/O, OpenSim muscle activation, Rajagopal guidance |
+| `nimble/` | OpenSim IK / OpenSimAD helpers (no nimblephysics) |
+| `datasets/lai_cache.py` | Per-motion NPZ schema + I/O |
 | `surrogate/` | Differentiable activation surrogate (ML) |
 | `sindy/` | SINDy library, dataset, training |
 | `diffusion/` | Text-conditioned motion diffusion |
@@ -250,5 +240,5 @@ python scripts/preprocess_ik.py --max_motions 1 --opensim_log_level Warn
 python scripts/preprocess_moco.py --max_motions 1 --opensim_log_level Warn
 ```
 
-- Re-run preprocess after upgrading B3D schema (e.g. adding `muscle_activations`).  
-- If Ctrl+C does not stop Moco: `pkill -9 -f "python scripts/preprocess_moco.py"`.
+- Re-run preprocess after upgrading the NPZ schema (e.g. adding `muscle_activations`).  
+- If Ctrl+C does not stop activation workers: `pkill -9 -f "python scripts/preprocess_moco.py"`.

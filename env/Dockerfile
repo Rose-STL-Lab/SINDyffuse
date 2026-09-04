@@ -1,6 +1,6 @@
 FROM nvidia/cuda:13.1.2-cudnn-runtime-ubuntu24.04
 
-LABEL org.opencontainers.image.description="SINDyffuse: diffusion + SINDy + Nimble/OpenSim physics"
+LABEL org.opencontainers.image.description="SINDyffuse: diffusion + SINDy + OpenSim / OpenSimAD"
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CONDA_DIR=/opt/conda
@@ -54,10 +54,15 @@ COPY env/constraints.txt /mnt/constraints.txt
 COPY env/patch_opensim_moco.py /mnt/patch_opensim_moco.py
 
 # Build a self-consistent env in-image (no runtime package repair in jobs).
+# OpenSim may leave conda libcasadi.so* in $ENV/lib; those ABI-clash with pip
+# casadi==3.7.1 (undefined symbol copy_elision_min_size). Remove them, then pin pip.
 RUN mamba env create -f /mnt/environment.yaml && \
     ENV_DIR=${CONDA_DIR}/envs/sindyffuse && \
     PY=${ENV_DIR}/bin/python && \
     export PIP_CONSTRAINT=/mnt/constraints.txt && \
+    mamba remove -n sindyffuse -y --force casadi || true && \
+    rm -f ${ENV_DIR}/lib/libcasadi.so* ${ENV_DIR}/lib/libcasadi_* && \
+    rm -rf ${ENV_DIR}/casadi && \
     ${PY} -m pip install --no-deps --force-reinstall 'casadi==3.7.1' && \
     ${PY} -m pip install --force-reinstall 'numpy>=1.25,<1.26' && \
     python3 /mnt/patch_opensim_moco.py && \
@@ -65,23 +70,29 @@ RUN mamba env create -f /mnt/environment.yaml && \
     conda clean --all --yes && \
     rm -rf /opt/conda/pkgs/* /root/.cache/pip
 
-ENV LD_LIBRARY_PATH=${CONDA_DIR}/envs/sindyffuse/lib:${LD_LIBRARY_PATH}
+# Append conda libs (do not prepend): prepending $ENV/lib makes the dynamic linker
+# prefer OpenSim leftovers over pip casadi's bundled libcasadi.
+ENV LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:${CONDA_DIR}/envs/sindyffuse/lib
 
-# Verify OpenSim and CasADi independently, then verify the AD import order.
+# Verify OpenSim alone, CasADi alone, then CasADi-before-OpenSim (OpenSimAD order).
 RUN ENV_DIR=${CONDA_DIR}/envs/sindyffuse && PY=${ENV_DIR}/bin/python && \
+    test -z "$(ls ${ENV_DIR}/lib/libcasadi.so* 2>/dev/null)" && echo 'no conda libcasadi leftovers' && \
     ${PY} -c "\
 import numpy as np; \
 import scipy, sklearn, joblib, torch, torchvision, clip; \
-import nimblephysics as nimble; \
 import opensim; \
 assert np.__version__.startswith('1.25'), np.__version__; \
-assert hasattr(nimble, 'biomechanics'); \
 assert hasattr(opensim, 'Model'); \
 print('numpy', np.__version__); \
 print('torch', torch.__version__, 'cuda', torch.cuda.is_available()); \
 print('opensim', opensim.GetVersion()); \
-print('opensim.moco', hasattr(opensim, 'MocoStudy'))" && \
-    ${PY} -c "import casadi; print('casadi', casadi.__version__)" && \
+print('opensim.moco', hasattr(opensim, 'MocoStudy')); \
+import importlib.util; \
+assert importlib.util.find_spec('nimblephysics') is None, 'nimblephysics must not be installed'" && \
+    ${PY} -c "\
+import casadi; \
+assert casadi.__version__.startswith('3.7.1'), casadi.__version__; \
+print('casadi', casadi.__version__)" && \
     ${PY} -c "\
 import casadi, opensim; \
 assert hasattr(opensim, 'Model'); \

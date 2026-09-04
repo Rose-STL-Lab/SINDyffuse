@@ -1,18 +1,19 @@
+# Deprecated alias: use deploy/jobs/train-diffusion/opensim
 # Apply: kubectl apply -k deploy/jobs/train-diffusion/nimble
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: sindyffuse-diffusion-train-nimble
+  name: sindyffuse-diffusion-train-opensim
   labels:
-    app: sindyffuse-diffusion-train-nimble
-    guidance: nimble
+    app: sindyffuse-diffusion-train-opensim
+    guidance: opensim
 spec:
   backoffLimit: 0
   template:
     metadata:
       labels:
-        app: sindyffuse-diffusion-train-nimble
-        guidance: nimble
+        app: sindyffuse-diffusion-train-opensim
+        guidance: opensim
     spec:
       restartPolicy: Never
       containers:
@@ -27,7 +28,7 @@ spec:
         args:
         - |
           source deploy/scripts/job-env.sh
-          python scripts/train_diffusion.py --guidance nimble --preload
+          python scripts/train_diffusion.py --guidance opensim --preload
         resources:
           limits:
             nvidia.com/gpu: 1

@@ -14,4 +14,4 @@ run_phase sindyffuse-build-opensimad-ext "${BASE}/build-opensimad-ext" 6h "opens
 run_phase sindyffuse-preprocess-moco-track "${BASE}/moco-track" 168h "opensimad-track"
 run_phase sindyffuse-compute-normalization "${BASE}/normalization" 2h "normalization"
 
-echo "OpenSimAD (MinT) + normalization pipeline complete."
+echo "LaiUhlrich2022 OpenSimAD (MinT) + normalization pipeline complete."

@@ -13,7 +13,7 @@ _REPO = Path(__file__).resolve().parent.parent
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 from common.cpu import configure_compute_threads, detect_usable_cpus
-from common.paths import default_humanml3d_root, humanml3d_text_dir, nimble_b3d_dir
+from common.paths import default_humanml3d_root, humanml3d_text_dir, lai_cache_dir
 # OpenSim initializes OpenMP/MKL pools at import; configure before nimble imports it.
 _path_fit_threads = os.environ.get('PATH_FIT_NUM_THREADS', '').strip()
 if _path_fit_threads.isdigit():
@@ -115,9 +115,9 @@ def _sample_motion_ids(out_root: Path, sample_motions: int, *, ik_num_shards: in
     ok_ids = sorted(mid for mid, row in ik_index.items() if row.get('status') == 'ik_ok')
     if ok_ids:
         return _diverse_sample_motion_ids(out_root, ok_ids, sample_motions, seed=seed)
-    b3d_dir = nimble_b3d_dir(out_root)
-    if b3d_dir.is_dir():
-        ids = sorted(p.stem for p in b3d_dir.glob('*.b3d') if p.is_file())
+    cache_dir = lai_cache_dir(out_root)
+    if cache_dir.is_dir():
+        ids = sorted(p.stem for p in cache_dir.glob('*.npz') if p.is_file() and p.stem not in ('Mean', 'Std'))
         if ids:
             return _diverse_sample_motion_ids(out_root, ids, sample_motions, seed=seed)
     ids = all_motion_ids(out_root)
@@ -181,10 +181,10 @@ def _resolve_num_workers(num_workers: int) -> int:
     return detect_usable_cpus()
 
 def _convert_motion_to_mot(*, sid: str, out_root: Path, staging: Path, fps: float, mapping: RajagopalCoordMapping) -> Path | None:
-    b3d = nimble_b3d_dir(out_root) / f'{sid}.b3d'
-    if not b3d.is_file():
+    npz = lai_cache_dir(out_root) / f'{sid}.npz'
+    if not npz.is_file():
         return None
-    q = read_q_segment(str(b3d))
+    q = read_q_segment(str(npz))
     mot = staging / f'{sid}.mot'
     write_coordinates_mot(q, mot, fps=float(fps), mapping=mapping)
     return mot

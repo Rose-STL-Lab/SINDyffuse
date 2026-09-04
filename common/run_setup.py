@@ -2,9 +2,9 @@ from __future__ import annotations
 import os
 from datetime import datetime
 from pathlib import Path
-from common.paths import activation_surrogate_latest_link, default_humanml3d_root, nimble_b3d_dir, repo_root, resolve_data_root, resolve_repo_path, results_dir, sindy_latest_link
+from common.paths import activation_surrogate_latest_link, default_humanml3d_root, lai_cache_dir, nimble_b3d_dir, repo_root, resolve_data_root, resolve_repo_path, results_dir, sindy_latest_link
 PINNED_OUT_DIR_ENV = 'SINDYFFUSE_TRAIN_OUT_DIR'
-__all__ = ['PINNED_OUT_DIR_ENV', 'default_config_path', 'new_run_dir', 'require_nimble_b3d', 'require_nimble_normalization', 'require_sindy_checkpoint', 'require_surrogate_checkpoint', 'resolve_run_dir', 'resolve_training_data_root', 'apply_preprocess_job_env']
+__all__ = ['PINNED_OUT_DIR_ENV', 'default_config_path', 'new_run_dir', 'require_lai_cache', 'require_lai_normalization', 'require_nimble_b3d', 'require_nimble_normalization', 'require_sindy_checkpoint', 'require_surrogate_checkpoint', 'resolve_run_dir', 'resolve_training_data_root', 'apply_preprocess_job_env']
 
 def default_config_path(name: str) -> Path:
     return repo_root() / 'configs' / name
@@ -17,8 +17,8 @@ def new_run_dir(family: str, *, guidance: str | None=None) -> Path:
         return results_dir() / 'activation_surrogate' / 'runs' / ts
     if family == 'diffusion':
         mode = str(guidance or '').strip().lower()
-        if mode not in {'none', 'sindy', 'nimble'}:
-            raise ValueError(f'diffusion runs require guidance=none|sindy|nimble, got {guidance!r}')
+        if mode not in {'none', 'sindy', 'opensim'}:
+            raise ValueError(f'diffusion runs require guidance=none|sindy|opensim, got {guidance!r}')
         return results_dir() / 'diffusion' / mode / 'runs' / ts
     raise ValueError(f'unknown run family: {family!r}')
 
@@ -42,18 +42,26 @@ def resolve_run_dir(output: str | Path | None, *, family: str, guidance: str | N
 def resolve_training_data_root(data_root: str | Path | None) -> str:
     return resolve_data_root(str(data_root).strip() if data_root else None)
 
-def require_nimble_b3d(data_root: str | Path) -> Path:
-    cache = nimble_b3d_dir(data_root)
+def require_lai_cache(data_root: str | Path) -> Path:
+    cache = lai_cache_dir(data_root)
     if not cache.is_dir():
-        raise FileNotFoundError(f'Nimble B3D cache required at {cache}. Run scripts/preprocess_ik.py and scripts/preprocess_moco.py first.')
+        raise FileNotFoundError(f'Lai NPZ cache required at {cache}. Run scripts/preprocess_ik.py and scripts/preprocess_moco.py first.')
     return cache
 
+def require_lai_normalization(data_root: str | Path) -> None:
+    cache = require_lai_cache(data_root)
+    mean_p = cache / 'Mean.npy'
+    std_p = cache / 'Std.npy'
+    if not mean_p.is_file() or not std_p.is_file():
+        raise FileNotFoundError(f'Missing {mean_p} or {std_p}. Run scripts/compute_normalization.py first.')
+
+def require_nimble_b3d(data_root: str | Path) -> Path:
+    """Deprecated alias for require_lai_cache."""
+    return require_lai_cache(data_root)
+
 def require_nimble_normalization(data_root: str | Path) -> None:
-    cache = require_nimble_b3d(data_root)
-    mean_path = cache / 'Mean.npy'
-    std_path = cache / 'Std.npy'
-    if not mean_path.is_file() or not std_path.is_file():
-        raise FileNotFoundError(f'Missing {mean_path} or {std_path}. Run scripts/compute_normalization.py first.')
+    """Deprecated alias for require_lai_normalization."""
+    require_lai_normalization(data_root)
 
 def require_sindy_checkpoint() -> Path:
     ckpt = sindy_latest_link() / 'text_to_xi.pt'

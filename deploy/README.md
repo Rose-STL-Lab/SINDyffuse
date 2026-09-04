@@ -17,7 +17,7 @@ deploy/
   jobs/
     preprocess-dataset/
       inverse_kinematics/       # IndexedJob (180 × 1 CPU)
-      fit-function-paths/       # single Job (sample → B3D→.mot → OpenSim fit on welded MTP)
+      fit-function-paths/       # legacy path-fit (skipped on uhlrich; OpenSimAD polynomials)
       build-opensimad-ext/      # one-shot OpenSimAD F codegen
       moco-track/
         job.yaml                # IndexedJob OpenSimAD (MinT) workers
@@ -27,8 +27,9 @@ deploy/
     train-surrogate/
     train-diffusion/
       none/
-      nimble/
+      opensim/                # optional slow OpenSim CPU guidance baseline
       sindy/
+      nimble/                 # deprecated alias → opensim
   dev/                        # long-running interactive pod
 ```
 
@@ -40,7 +41,7 @@ deploy/
 | `python scripts/benchmark_moco_parallel.py ...` | `kubectl apply -k deploy/jobs/benchmark-moco-parallel` |
 | `python scripts/train_sindy.py ...` | `kubectl apply -k deploy/jobs/train-sindy` |
 | `python scripts/train_surrogate.py ...` | `kubectl apply -k deploy/jobs/train-surrogate` |
-| `python scripts/train_diffusion.py ...` | `kubectl apply -k deploy/jobs/train-diffusion/{none,nimble,sindy}` |
+| `python scripts/train_diffusion.py ...` | `kubectl apply -k deploy/jobs/train-diffusion/{none,opensim,sindy}` |
 
 ## Container image (GHCR)
 
@@ -110,7 +111,7 @@ Checklist aligned with [NRP cluster policies](https://nrp.ai/documentation/userd
 
 **backoffLimit:** Indexed preprocess jobs retry failed shard pods a limited number of times before the Job fails (IK: 32; moco: 64). Single-pod jobs (normalization, path-fit): 3.
 
-**SKIP_EXISTING:** Not set in job manifests (default: reprocess all motions). To skip existing B3D files on retry, set env `SKIP_EXISTING=1` at apply time or add it to your local overlay.
+**SKIP_EXISTING:** Not set in job manifests (default: reprocess all motions). To skip existing lai_cache NPZ files on retry, set env `SKIP_EXISTING=1` at apply time or add it to your local overlay.
 
 **Image:** `deploy/components/cluster-config` rewrites `sindyffuse:latest` → `ncking/sindyffuse:latest`. Every job kustomization must include that component.
 
@@ -186,7 +187,7 @@ kubectl apply -k deploy/jobs/train-surrogate
 
 # Train diffusion — pick guidance mode
 kubectl apply -k deploy/jobs/train-diffusion/none
-kubectl apply -k deploy/jobs/train-diffusion/nimble
+kubectl apply -k deploy/jobs/train-diffusion/opensim
 kubectl apply -k deploy/jobs/train-diffusion/sindy
 ```
 
@@ -312,7 +313,7 @@ Activation workers default to `ACTIVATION_METHOD=opensimad` with `MOCO_PARALLEL_
 3. `./deploy/scripts/preprocess-dataset-orchestrate.sh moco`  # builds OpenSimAD ext, then activation workers, then normalization
 4. `train-sindy`
 5. `train-surrogate`
-6. `train-diffusion/{none,nimble,sindy}`
+6. `train-diffusion/{none,opensim,sindy}`
 
 Single entry point for the full preprocess pipeline:
 

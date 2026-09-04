@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import Any, List, Tuple
 import numpy as np
 import torch
-from nimble.rajagopal_kin import IDX_FOOT_L, IDX_FOOT_R, IDX_PELVIS, keypoints_numpy, keypoints_torch
+from nimble.rajagopal_kin import IDX_FOOT_L, IDX_FOOT_R, IDX_PELVIS
 
 def features_from_keypoints(keypoints: np.ndarray, fps: float) -> Tuple[np.ndarray, np.ndarray, List[str], List[str]]:
     kp = np.asarray(keypoints, dtype=np.float32)
@@ -71,19 +71,18 @@ def features_from_keypoints_torch(keypoints: torch.Tensor, fps: float) -> Tuple[
     return (u, c, u_names, c_names)
 
 def features_from_q(q: np.ndarray, sk: Any, fps: float) -> Tuple[np.ndarray, np.ndarray, List[str], List[str]]:
-    kp = keypoints_numpy(sk, q)
-    return features_from_keypoints(kp, fps=fps)
+    del sk
+    from nimble.lai_features import features_from_lai_q
+    return features_from_lai_q(q, fps=fps)
 
 def features_from_q_torch(q: torch.Tensor, sk: Any, fps: float, *, use_torch_fk: bool=False) -> Tuple[torch.Tensor, torch.Tensor, List[str], List[str]]:
-    b, _, _ = q.shape
-    rows = []
-    fk = bool(use_torch_fk and q.device.type != 'cpu')
-    for i in range(b):
-        if fk:
-            kp = keypoints_torch(q[i])
-        else:
-            kp = torch.from_numpy(keypoints_numpy(sk, q[i].detach().cpu().numpy()))
-            kp = kp.to(device=q.device, dtype=q.dtype)
-        rows.append(kp.unsqueeze(0))
-    kp_b = torch.cat(rows, dim=0)
-    return features_from_keypoints_torch(kp_b, fps=fps)
+    del sk, use_torch_fk
+    from nimble.lai_features import features_from_lai_q
+    rows_u, rows_c = [], []
+    un: List[str] = []
+    cn: List[str] = []
+    for i in range(int(q.shape[0])):
+        u, c, un, cn = features_from_lai_q(q[i].detach().cpu().numpy(), fps=fps)
+        rows_u.append(torch.from_numpy(u).to(device=q.device, dtype=q.dtype))
+        rows_c.append(torch.from_numpy(c).to(device=q.device, dtype=q.dtype))
+    return (torch.stack(rows_u, dim=0), torch.stack(rows_c, dim=0), un, cn)

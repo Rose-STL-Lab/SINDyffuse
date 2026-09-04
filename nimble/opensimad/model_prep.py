@@ -4,9 +4,17 @@ from pathlib import Path
 from typing import Tuple
 import opensim as osim
 import numpy as np
-from nimble.muscle_activation import MuscleActivationConfig, opensim_quiet, rajagopal_model_path
-from nimble.opensimad.paths import ad_base_model_path, ad_contacts_model_path, ad_scaled_adjusted_model_path, opensimad_dir
-from nimble.rajagopal_model import _MOCO_TOE_JOINTS, function_based_path_set_path, unlock_rajagopal_coordinates
+from nimble.muscle_activation import opensim_quiet
+from nimble.lai_coord_map import unlock_lai_coordinates
+from nimble.opensimad.paths import (
+    ad_base_model_path,
+    ad_contacts_model_path,
+    ad_scaled_adjusted_model_path,
+    lai_uhlrich_model_path,
+    opensimad_dir,
+)
+
+_MOCO_TOE_JOINTS: Tuple[str, ...] = ('mtp_r', 'mtp_l')
 
 # OpenCap-style multi-sphere foot contacts (utilsProcessing.generate_model_with_contacts).
 _REFERENCE_CONTACT_SPHERES = {
@@ -24,20 +32,22 @@ _REFERENCE_CONTACT_SPHERES = {
     's6_l': {'radius': 0.032, 'location': np.array([0.045, -0.01, -0.061856956754965199]), 'socket_frame': 'toes_l'},
 }
 
-def prepare_welded_unlocked_rajagopal(work_dir: Path | None=None, *, force: bool=False) -> Path:
-    """Unlocked coordinates + MTP joints welded (OpenSimAD-compatible; no locked DOFs)."""
+def prepare_welded_unlocked_lai(work_dir: Path | None=None, *, force: bool=False) -> Path:
+    """Unlocked coordinates + MTP joints welded (OpenSimAD-compatible)."""
     out_dir = Path(work_dir) if work_dir is not None else opensimad_dir()
     out_dir.mkdir(parents=True, exist_ok=True)
-    out = out_dir / 'rajagopal_unlocked_mtp_welded.osim'
+    out = out_dir / 'lai_uhlrich_unlocked_mtp_welded.osim'
     if out.is_file() and not force:
         return out
+    src = lai_uhlrich_model_path()
+    if not src.is_file():
+        raise FileNotFoundError(f'Missing LaiUhlrich model at {src}')
     with opensim_quiet('Off'):
-        model = osim.Model(str(rajagopal_model_path()))
-        unlock_rajagopal_coordinates(model)
+        model = osim.Model(str(src))
+        unlock_lai_coordinates(model)
         joints = osim.StdVectorString()
         for name in _MOCO_TOE_JOINTS:
             joints.append(name)
-        # ReplaceJointsWithWelds via ModelProcessor for robustness across OpenSim versions.
         tmp = out_dir / '_tmp_unlocked.osim'
         model.initSystem()
         model.printToXML(str(tmp))
@@ -50,12 +60,7 @@ def prepare_welded_unlocked_rajagopal(work_dir: Path | None=None, *, force: bool
     return out
 
 def _replace_simm_splines_in_spatial_transforms(model: osim.Model) -> None:
-    """Apply the MinT/OpenSimAD spline compatibility preprocessing.
-
-    OpenSimAD's generated model supports PolynomialFunction but not SimmSpline.
-    Fit a degree-five polynomial to each spatial-transform spline, matching the
-    upstream MinT/OpenSimAD model-preparation convention.
-    """
+    """OpenSimAD supports PolynomialFunction but not SimmSpline."""
     converted = []
     for index in range(model.get_JointSet().getSize()):
         joint = model.get_JointSet().get(index)
@@ -90,22 +95,17 @@ def _replace_simm_splines_in_spatial_transforms(model: osim.Model) -> None:
         print('OpenSimAD spline compatibility: replaced ' + ', '.join(converted))
 
 def prepare_ad_base_model(*, force: bool=False) -> Path:
-    """Write AD base model: welded MTP + function-based paths applied."""
+    """Write AD base model: welded MTP + spline compatibility."""
     out = ad_base_model_path()
     out.parent.mkdir(parents=True, exist_ok=True)
     if out.is_file() and not force:
         return out
-    welded = prepare_welded_unlocked_rajagopal(out.parent, force=force)
-    path_set = function_based_path_set_path()
+    welded = prepare_welded_unlocked_lai(out.parent, force=force)
     with opensim_quiet('Off'):
-        mp = osim.ModelProcessor(str(welded))
-        if path_set.is_file():
-            mp.append(osim.ModOpReplacePathsWithFunctionBasedPaths(str(path_set)))
-        model = mp.process()
+        model = osim.Model(str(welded))
         _replace_simm_splines_in_spatial_transforms(model)
         model.initSystem()
         model.printToXML(str(out))
-    # OpenCap naming alias (no contacts yet).
     scaled = ad_scaled_adjusted_model_path()
     shutil.copy2(out, scaled)
     return out

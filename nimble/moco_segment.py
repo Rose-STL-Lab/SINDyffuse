@@ -5,9 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Sequence, Tuple
 import numpy as np
 from nimble.muscle_activation import MuscleActivationConfig, MuscleActivationResult, muscle_names, opensim_quiet, rajagopal_model_path
-from nimble.rajagopal_coord_map import RAJAGOPAL_NIMBLE_DOF_NAMES
-from nimble.rajagopal_kin import foot_body_indices
-PELVIS_TY_COL = int(RAJAGOPAL_NIMBLE_DOF_NAMES.index('ground_pelvis_4'))
+from nimble.lai_coord_map import PELVIS_TY_COL
 SIM_GRF_COLS = 18
 SIM_GRF_CHANNEL_NAMES: Tuple[str, ...] = ('ground_force_left_vx', 'ground_force_left_vy', 'ground_force_left_vz', 'ground_torque_left_x', 'ground_torque_left_y', 'ground_torque_left_z', 'ground_force_right_vx', 'ground_force_right_vy', 'ground_force_right_vz', 'ground_torque_right_x', 'ground_torque_right_y', 'ground_torque_right_z', 'ground_force_vertical', 'ground_force_left_norm', 'ground_force_right_norm', 'ground_torque_left_norm', 'ground_torque_right_norm', 'grf_trust')
 
@@ -66,15 +64,7 @@ def _body_origin_y(sk: Any, body_idx: int, q_row: np.ndarray) -> float:
     return float(pos[1])
 
 def foot_contact_point_min_y(sk: Any, q: np.ndarray, *, foot_body_names: Sequence[str]=('calcn_l', 'calcn_r'), sphere_offset_y_m: float=-0.02) -> float:
-    left_idx, right_idx = foot_body_indices(sk)
-    body_idxs = (left_idx, right_idx)
-    q_arr = np.asarray(q, dtype=np.float64)
-    min_y = float('inf')
-    for t in range(int(q_arr.shape[0])):
-        for bi in body_idxs:
-            y = _body_origin_y(sk, bi, q_arr[t]) + float(sphere_offset_y_m)
-            min_y = min(min_y, y)
-    return float(min_y) if math.isfinite(min_y) else 0.0
+    raise RuntimeError('Nimble foot FK removed; OpenSimAD uses apply_ground_offset_lai_q instead')
 
 def apply_ground_offset_q(q: np.ndarray, sk: Any, cfg: MuscleActivationConfig, *, foot_body_names: Sequence[str]=('calcn_l', 'calcn_r')) -> Tuple[np.ndarray, float]:
     q_arr = np.asarray(q, dtype=np.float64).copy()

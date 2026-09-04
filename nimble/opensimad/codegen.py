@@ -4,7 +4,7 @@ import shutil
 import sys
 from pathlib import Path
 
-# CasADi before OpenSim (see scripts/build_rajagopal_opensimad_ext.py).
+# CasADi before OpenSim (see scripts/build_lai_opensimad_ext.py).
 import casadi  # noqa: F401
 
 from nimble.opensimad.model_prep import ensure_ad_ready_artifacts
@@ -17,11 +17,11 @@ def _ensure_vendor_on_path() -> Path:
         sys.path.insert(0, str(vendor))
     return vendor
 
-def build_rajagopal_opensimad_external(*, force: bool=False, use_expression_graph: bool=True) -> Path:
-    """Generate OpenSimAD external function F for the AD-ready Rajagopal contacts model.
+def build_lai_opensimad_external(*, force: bool=False, use_expression_graph: bool=True) -> Path:
+    """Generate OpenSimAD external function F for the AD-ready LaiUhlrich2022 contacts model.
 
     Downloads OpenCap's opensimAD-install toolchain on first run (Linux/macOS/Windows).
-    Artifacts land in models/rajagopal/opensimad/ExternalFunction/.
+    Artifacts land in models/lai_uhlrich/opensimad/ExternalFunction/.
     """
     ensure_ad_ready_artifacts(force=force)
     out_dir = external_function_dir()
@@ -88,3 +88,6 @@ def build_rajagopal_opensimad_external(*, force: bool=False, use_expression_grap
     if not (out_dir / 'F_map.npy').is_file():
         raise RuntimeError(f'OpenSimAD codegen failed; missing F_map.npy under {out_dir}')
     return out_dir
+
+# Back-compat alias for older scripts/tests.
+build_rajagopal_opensimad_external = build_lai_opensimad_external

@@ -6,7 +6,9 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 import opensim as osim
 from common.working_directory import working_directory
-from nimble.muscle_activation import MuscleActivationConfig, MuscleActivationResult, _storage_to_array, activation_column_for_muscle, muscle_names, opensim_quiet, rajagopal_model_path
+from nimble.muscle_activation import MuscleActivationConfig, MuscleActivationResult, activation_column_for_muscle, muscle_names, rajagopal_model_path
+from nimble.opensim_log import opensim_quiet
+from nimble.opensim_storage import storage_to_array as _storage_to_array
 from nimble.rajagopal_model import build_activation_model_processor, muscle_names_from_processor, unlock_rajagopal_coordinates
 from nimble.moco_segment import SIM_GRF_COLS
 from nimble.coordinate_tracking import build_moco_reference_coordinates, calculate_coordinate_tracking_errors, extract_simulated_coordinates
@@ -405,12 +407,8 @@ def _solve_moco_track(q: np.ndarray, *, cfg: MuscleActivationConfig, solve_dir: 
     return (activations, solve_ok, solve_meta, out_sto, grf)
 
 def run_moco_track(q: np.ndarray, *, cfg: MuscleActivationConfig, work_dir: Path) -> MuscleActivationResult:
-    _sweep_repo_root_moco_artifacts()
-    arr = np.asarray(q, dtype=np.float64)
-    t_len = int(arr.shape[0])
-    if t_len < 2:
-        raise ValueError(f'Need at least 2 frames for MocoTrack, got {t_len}')
-    from nimble.moco_segment import run_moco_track_segmented
-    from nimble.physics import load_model
-    sk = load_model().skeleton
-    return run_moco_track_segmented(arr, cfg=cfg, work_dir=work_dir, skeleton=sk)
+    del q, cfg, work_dir
+    raise RuntimeError(
+        'MocoTrack requires nimblephysics skeleton FK, which was removed. '
+        'Use activation_method=opensimad (LaiUhlrich2022 + OpenSimAD) instead.'
+    )

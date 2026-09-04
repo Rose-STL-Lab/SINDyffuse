@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Callable
 import numpy as np
 from common.cpu import configure_compute_threads, resolve_k8s_shard, resolve_preprocess_parallelism
-from common.paths import NIMBLE_B3D_SUBDIR, default_humanml3d_root, humanml3d_text_dir, nimble_b3d_dir
+from common.paths import LAI_CACHE_SUBDIR, NIMBLE_B3D_SUBDIR, default_humanml3d_root, humanml3d_text_dir, lai_cache_dir, nimble_b3d_dir
 from common.run_logging import DualTqdm, RunLogger, dual_tqdm, null_logger
 from datasets.splits import all_motion_ids, shard_motion_ids
 from nimble.activation_gates import manifest_gate_reason
@@ -157,7 +157,7 @@ def resolve_shard_motion_ids(args: argparse.Namespace) -> tuple[list[str], int, 
     if num_shards > 1:
         ids = shard_motion_ids(ids, shard_index, num_shards)
     symlink_metadata(hml_root, out_root)
-    nimble_b3d_dir(out_root).mkdir(parents=True, exist_ok=True)
+    lai_cache_dir(out_root).mkdir(parents=True, exist_ok=True)
     return (ids, shard_index, num_shards, hml_root, out_root)
 
 def add_common_preprocess_args(parser: argparse.ArgumentParser) -> None:

@@ -4,17 +4,30 @@ from typing import List, Tuple
 import numpy as np
 import torch
 from torch.utils.data import Dataset
-import nimblephysics as nimble
-from common.paths import nimble_b3d_dir
-from datasets.nimble_dataset import read_q_frames
-from datasets.splits import kinematics_pass_index, load_split_ids
-from nimble.b3d_io import b3d_has_muscle_activations, b3d_has_sindyffuse_custom_values, read_muscle_activations_frames
-from nimble.gap_utils import is_nan_placeholder_activations, motion_has_valid_activations, read_activation_validity_mask_frames, window_is_valid
+from common.paths import lai_cache_dir
+from datasets.lai_cache import mean_path, motion_npz_path, read_motion_npz, std_path
+from datasets.splits import load_split_ids
+from nimble.gap_utils import is_nan_placeholder_activations, window_is_valid
 from nimble.muscle_b3d import is_zero_placeholder_activations
 
-class ActivationB3DDataset(Dataset):
 
-    def __init__(self, data_root: str, *, split: str='train', window_size: int=64, window_stride: int=16, normalize_q: bool=True, max_motions: int=0, skip_zero_placeholders: bool=True, skip_invalid_activations: bool=True, zero_atol: float=1e-08, min_valid_fraction: float=0.95):
+class ActivationB3DDataset(Dataset):
+    """Lai NPZ activation windows (class name kept for config compatibility)."""
+
+    def __init__(
+        self,
+        data_root: str,
+        *,
+        split: str = 'train',
+        window_size: int = 64,
+        window_stride: int = 16,
+        normalize_q: bool = True,
+        max_motions: int = 0,
+        skip_zero_placeholders: bool = True,
+        skip_invalid_activations: bool = True,
+        zero_atol: float = 1e-08,
+        min_valid_fraction: float = 0.95,
+    ):
         self.data_root = Path(data_root)
         self.split = str(split)
         self.window_size = int(window_size)
@@ -24,86 +37,90 @@ class ActivationB3DDataset(Dataset):
         self.skip_invalid_activations = bool(skip_invalid_activations)
         self.min_valid_fraction = float(min_valid_fraction)
         self.zero_atol = float(zero_atol)
-        self.b3d_dir = nimble_b3d_dir(self.data_root)
-        if not self.b3d_dir.is_dir():
-            raise FileNotFoundError(f'Missing {self.b3d_dir}. Run preprocess pipeline first.')
+        self.cache_dir = lai_cache_dir(self.data_root)
+        if not self.cache_dir.is_dir():
+            raise FileNotFoundError(f'Missing {self.cache_dir}. Run preprocess pipeline first.')
         self.mean: np.ndarray | None = None
         self.std: np.ndarray | None = None
         if self.normalize_q:
-            mean_p, std_p = (self.b3d_dir / 'Mean.npy', self.b3d_dir / 'Std.npy')
-            if not mean_p.is_file() or not std_p.is_file():
-                raise FileNotFoundError(f'Nimble Q stats missing under {self.b3d_dir}. Run scripts/compute_normalization.py (writes Mean.npy / Std.npy).')
-            self.mean = np.load(mean_p).astype(np.float32)
-            self.std = np.load(std_p).astype(np.float32)
+            mp, sp = mean_path(self.cache_dir), std_path(self.cache_dir)
+            if not mp.is_file() or not sp.is_file():
+                raise FileNotFoundError(
+                    f'Lai Q stats missing under {self.cache_dir}. Run scripts/compute_normalization.py.'
+                )
+            self.mean = np.load(mp).astype(np.float32)
+            self.std = np.load(sp).astype(np.float32)
         ids = load_split_ids(self.data_root, self.split)
         if int(max_motions) > 0:
-            ids = ids[:int(max_motions)]
-        self._windows: List[Tuple[str, int, int]] = []
+            ids = ids[: int(max_motions)]
+        self._windows: List[Tuple[str, int]] = []
         self.num_motions_seen = 0
         self.num_motions_kept = 0
         self.num_motions_skipped_zero = 0
         self.num_motions_skipped_nan = 0
         self.num_windows_skipped_gap = 0
         self.num_motions_skipped_other = 0
+        self.num_motions_skipped_corrupt = 0
+        self._cache: dict[str, dict] = {}
         for sid in ids:
-            b3d_path = self.b3d_dir / f'{sid}.b3d'
-            if not b3d_path.is_file():
+            npz_path = motion_npz_path(self.cache_dir, sid)
+            if not npz_path.is_file():
                 self.num_motions_skipped_other += 1
                 continue
             self.num_motions_seen += 1
-            subj = nimble.biomechanics.SubjectOnDisk(str(b3d_path))
-            if not b3d_has_sindyffuse_custom_values(subj):
-                self.num_motions_skipped_other += 1
+            try:
+                data = read_motion_npz(npz_path)
+            except Exception:
+                self.num_motions_skipped_corrupt += 1
                 continue
-            if not b3d_has_muscle_activations(subj):
-                self.num_motions_skipped_other += 1
-                continue
-            tlen = int(subj.getTrialLength(0))
+            act = data['muscle_activations']
+            mask = data['muscle_activation_mask']
+            tlen = int(data['num_frames'])
             if tlen < self.window_size:
                 self.num_motions_skipped_other += 1
                 continue
-            if self.skip_zero_placeholders or self.skip_invalid_activations:
-                act = read_muscle_activations_frames(subj, 0, 0, tlen)
-                if self.skip_invalid_activations and is_nan_placeholder_activations(act):
-                    self.num_motions_skipped_nan += 1
-                    continue
-                if self.skip_invalid_activations and (not motion_has_valid_activations(subj, 0, tlen)):
-                    self.num_motions_skipped_nan += 1
-                    continue
-                if self.skip_zero_placeholders and is_zero_placeholder_activations(act, atol=self.zero_atol):
-                    self.num_motions_skipped_zero += 1
-                    continue
+            if self.skip_invalid_activations and is_nan_placeholder_activations(act):
+                self.num_motions_skipped_nan += 1
+                continue
+            if self.skip_invalid_activations and float(np.sum(mask > 0.5)) <= 0.0:
+                self.num_motions_skipped_nan += 1
+                continue
+            if self.skip_zero_placeholders and is_zero_placeholder_activations(act, atol=self.zero_atol):
+                self.num_motions_skipped_zero += 1
+                continue
             self.num_motions_kept += 1
+            self._cache[str(npz_path)] = data
             for st in range(0, tlen - self.window_size + 1, self.window_stride):
                 if self.skip_invalid_activations:
-                    act_win = read_muscle_activations_frames(subj, 0, st, self.window_size)
-                    try:
-                        mask_win = read_activation_validity_mask_frames(subj, 0, st, self.window_size)
-                    except Exception:
-                        mask_win = np.ones((self.window_size,), dtype=np.float32)
+                    act_win = act[st : st + self.window_size]
+                    mask_win = mask[st : st + self.window_size]
                     if not window_is_valid(mask_win, act_win, min_valid_fraction=self.min_valid_fraction):
                         self.num_windows_skipped_gap += 1
                         continue
-                self._windows.append((str(b3d_path), 0, int(st)))
+                self._windows.append((str(npz_path), int(st)))
         if not self._windows:
-            raise ValueError(f'No activation windows for split={self.split!r} under {self.b3d_dir}. Re-run preprocess pipeline to embed muscle_activations (skipped_zero={self.num_motions_skipped_zero}).')
-        self._subj_cache: dict[str, nimble.biomechanics.SubjectOnDisk] = {}
+            raise ValueError(
+                f'No activation windows for split={self.split!r} under {self.cache_dir}. '
+                f'Re-run preprocess (skipped_zero={self.num_motions_skipped_zero}).'
+            )
 
     def __len__(self) -> int:
         return len(self._windows)
 
-    def _get_subj(self, path: str) -> nimble.biomechanics.SubjectOnDisk:
-        if path not in self._subj_cache:
-            self._subj_cache[path] = nimble.biomechanics.SubjectOnDisk(path)
-        return self._subj_cache[path]
+    def _get(self, path: str) -> dict:
+        if path not in self._cache:
+            self._cache[path] = read_motion_npz(path)
+        return self._cache[path]
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        b3d_path, trial, start = self._windows[idx]
+        npz_path, start = self._windows[idx]
         n = self.window_size
-        subj = self._get_subj(b3d_path)
-        kin = kinematics_pass_index(subj, trial)
-        q = read_q_frames(subj, trial, start, n, kin=kin).astype(np.float32)
-        act = read_muscle_activations_frames(subj, trial, start, n).astype(np.float32)
+        data = self._get(npz_path)
+        q = np.asarray(data['q'][start : start + n], dtype=np.float32)
+        act = np.asarray(data['muscle_activations'][start : start + n], dtype=np.float32)
         if self.mean is not None and self.std is not None:
             q = (q - self.mean) / np.maximum(self.std, 1e-08)
         return (torch.from_numpy(q), torch.from_numpy(act))
+
+
+ActivationLaiDataset = ActivationB3DDataset

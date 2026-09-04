@@ -14,15 +14,15 @@ from torch.utils.data.distributed import DistributedSampler
 from common.clip_model import load_clip
 from common.distributed import cleanup_distributed, get_rank, get_world_size, init_distributed, is_main_process, log_main, log_gpu_diagnostics, maybe_relaunch_with_torchrun, model_state_dict, parse_distributed_enabled, resolve_nproc_per_node, should_auto_relaunch_torchrun, resolve_train_device, seed_all, setup_spawn_if_distributed, wrap_ddp
 from common.io import load_json, save_json
-from common.paths import diffusion_latest_link, nimble_b3d_dir, resolve_data_root, resolve_repo_path, update_latest_symlink
-from common.run_setup import default_config_path, require_nimble_b3d, require_nimble_normalization, require_sindy_checkpoint, require_surrogate_checkpoint, resolve_repo_checkpoint, resolve_run_dir, resolve_training_data_root
+from common.paths import diffusion_latest_link, lai_cache_dir, resolve_data_root, resolve_repo_path, update_latest_symlink
+from common.run_setup import default_config_path, require_lai_cache, require_lai_normalization, require_sindy_checkpoint, require_surrogate_checkpoint, resolve_repo_checkpoint, resolve_run_dir, resolve_training_data_root
 from common.run_logging import RunLogger, add_run_log_cli_args, get_run_logger, run_logged_main
 from diffusion.clip import clip_encode
 from diffusion.config import GuidanceMode
 from diffusion.workers import num_workers
 from diffusion.registry import get_dataset
 from diffusion.model import DiffusionTransformer, GaussianDiffusionSchedule
-from nimble.guidance import build_nimble_guidance
+from nimble.guidance import build_opensim_guidance
 from sindy.guidance import LearnedSINDyGuidance
 
 def _collate(batch):
@@ -36,12 +36,13 @@ def _prepare_diffusion_config(config_path: Path, *, guidance: str='', data_root:
     train_cfg = cfg.setdefault('train', {})
     data_cfg = cfg.setdefault('data', {})
     if str(guidance).strip():
-        train_cfg['guidance'] = str(guidance).strip().lower()
+        g = str(guidance).strip().lower()
+        train_cfg['guidance'] = 'opensim' if g == 'nimble' else g
     if str(data_root).strip():
         data_cfg['data_root'] = resolve_training_data_root(data_root)
     else:
         data_cfg['data_root'] = resolve_training_data_root(data_cfg.get('data_root'))
-    data_cfg['dataset'] = 'nimble'
+    data_cfg['dataset'] = 'lai'
     for key in ('sindy_checkpoint_dir', 'surrogate_checkpoint_dir'):
         raw = str(train_cfg.get(key, '')).strip()
         if raw:
@@ -50,8 +51,8 @@ def _prepare_diffusion_config(config_path: Path, *, guidance: str='', data_root:
 
 def _validate_diffusion_inputs(cfg: dict) -> GuidanceMode:
     data_root = resolve_data_root(cfg.get('data', {}).get('data_root'))
-    require_nimble_b3d(data_root)
-    require_nimble_normalization(data_root)
+    require_lai_cache(data_root)
+    require_lai_normalization(data_root)
     mode = GuidanceMode(str(cfg.get('train', {}).get('guidance', 'sindy')).strip().lower())
     if mode == GuidanceMode.SINDY:
         require_sindy_checkpoint()
@@ -61,10 +62,6 @@ def _validate_diffusion_inputs(cfg: dict) -> GuidanceMode:
 def train(config_path: str, out_dir: str, *, preload: bool=False) -> None:
     cfg = load_json(config_path)
     dist_cfg = cfg.get('distributed') if isinstance(cfg.get('distributed'), dict) else {}
-    _g_pre = str((cfg.get('train') or {}).get('guidance', '')).strip().lower()
-    if _g_pre == 'nimble' and int(np.__version__.split('.', maxsplit=1)[0]) >= 2:
-        get_run_logger().progress(f'ERROR: numpy {np.__version__} is incompatible with nimblephysics marker IK (segfault). Rebuild conda env: conda env update -n sindyffuse -f environment.yaml --prune')
-        sys.exit(1)
     use_ddp = init_distributed(distributed_cfg=dist_cfg)
     if not use_ddp:
         log_gpu_diagnostics()
@@ -72,14 +69,14 @@ def train(config_path: str, out_dir: str, *, preload: bool=False) -> None:
     data_cfg = cfg.get('data', {})
     model_cfg = cfg.get('model', {})
     train_cfg = cfg.get('train', {})
-    dataset_name = str(data_cfg.get('dataset', 'nimble'))
+    dataset_name = str(data_cfg.get('dataset', 'lai'))
     data_root = resolve_data_root(data_cfg.get('data_root'))
-    cache = nimble_b3d_dir(data_root)
+    cache = lai_cache_dir(data_root)
     if not cache.is_dir():
-        raise FileNotFoundError(f'Nimble B3D cache required at {cache}. Run preprocess pipeline first.')
+        raise FileNotFoundError(f'Lai NPZ cache required at {cache}. Run preprocess pipeline first.')
     _preload = bool(preload or data_cfg.get('preload', False))
     train_ds = get_dataset(dataset_name, data_root=data_root, split='train', window_size=int(data_cfg.get('window_size', 64)), fps=int(data_cfg.get('fps', 20)), normalize=bool(data_cfg.get('normalize', True)), preload=_preload)
-    log_main('[train] data.preload=True: q trajectories loaded into RAM' if _preload else '[train] data.preload=False: reading B3D windows on demand')
+    log_main('[train] data.preload=True: q trajectories loaded into RAM' if _preload else '[train] data.preload=False: reading NPZ windows on demand')
     device = resolve_train_device(str(train_cfg.get('device', 'auto')))
     per_gpu_batch = int(train_cfg.get('batch_size', 32))
     global_batch = per_gpu_batch * get_world_size()
@@ -105,29 +102,29 @@ def train(config_path: str, out_dir: str, *, preload: bool=False) -> None:
     _g = str(train_cfg.get('guidance', 'sindy')).strip().lower()
     guidance_mode = GuidanceMode(_g)
     lambda_sindy = float(train_cfg.get('lambda_sindy', 0.1))
-    lambda_nimble = float(train_cfg.get('lambda_nimble', 0.1))
-    nimble_cfg = train_cfg.get('nimble_guidance') or {}
-    if not isinstance(nimble_cfg, dict):
-        nimble_cfg = {}
+    lambda_opensim = float(train_cfg.get('lambda_opensim', train_cfg.get('lambda_nimble', 0.1)))
+    opensim_cfg = train_cfg.get('opensim_guidance') or train_cfg.get('nimble_guidance') or {}
+    if not isinstance(opensim_cfg, dict):
+        opensim_cfg = {}
     sindy_dir_raw = str(train_cfg.get('sindy_checkpoint_dir', '')).strip()
     sindy_dir = str(resolve_repo_path(sindy_dir_raw)) if sindy_dir_raw else ''
     surrogate_dir_raw = str(train_cfg.get('surrogate_checkpoint_dir', '')).strip()
     surrogate_dir = str(resolve_repo_path(surrogate_dir_raw)) if surrogate_dir_raw else ''
     sindy_guidance = None
-    nimble_guidance = None
+    opensim_guidance = None
     if guidance_mode == GuidanceMode.SINDY:
         if not sindy_dir:
             raise ValueError('Default guidance=sindy requires train.sindy_checkpoint_dir')
         if not surrogate_dir:
             raise ValueError('guidance=sindy requires train.surrogate_checkpoint_dir')
         sindy_guidance = LearnedSINDyGuidance(sild_dir=sindy_dir, data_root=data_root, fps=float(data_cfg.get('fps', 20.0)), clip_model_name=clip_model_name, surrogate_checkpoint=surrogate_dir)
-    elif guidance_mode == GuidanceMode.NIMBLE:
-        nimble_guidance = build_nimble_guidance(data_root=data_root, fps=float(data_cfg.get('fps', 20.0)), nimble_cfg=nimble_cfg if isinstance(nimble_cfg, dict) else {}, window_frames=int(data_cfg.get('window_size', 64)))
+    elif guidance_mode == GuidanceMode.OPENSIM:
+        opensim_guidance = build_opensim_guidance(data_root=data_root, fps=float(data_cfg.get('fps', 20.0)), opensim_cfg=opensim_cfg if isinstance(opensim_cfg, dict) else {}, window_frames=int(data_cfg.get('window_size', 64)))
     log_main(f'[train] guidance={guidance_mode.value} dataset={dataset_name} feature_dim={train_ds.feature_dim} device={device} per_gpu_batch={per_gpu_batch} global_batch={global_batch} world_size={get_world_size()} distributed={use_ddp} data_root={data_root}')
     if guidance_mode == GuidanceMode.SINDY:
         log_main(f'[train] lambda_sindy={lambda_sindy} sindy_dir={sindy_dir!r} surrogate_dir={surrogate_dir!r}')
-    if guidance_mode == GuidanceMode.NIMBLE:
-        log_main(f"[train] lambda_nimble={lambda_nimble} nimble.time_reduce={(nimble_guidance.nimble_settings.time_reduce if nimble_guidance else 'n/a')} nimble.robust={(nimble_guidance.nimble_settings.robust if nimble_guidance else 'n/a')} nimble.t_weight={(nimble_guidance.nimble_settings.t_weight_schedule if nimble_guidance else 'n/a')} nimble.max_frames={(nimble_guidance.nimble_settings.max_physics_frames if nimble_guidance else 'n/a')}")
+    if guidance_mode == GuidanceMode.OPENSIM:
+        log_main(f"[train] lambda_opensim={lambda_opensim} opensim.time_reduce={(opensim_guidance.cfg.time_reduce if opensim_guidance else 'n/a')} opensim.max_frames={(opensim_guidance.cfg.max_physics_frames if opensim_guidance else 'n/a')}")
     out = Path(out_dir)
     if is_main_process():
         out.mkdir(parents=True, exist_ok=True)
@@ -170,10 +167,9 @@ def train(config_path: str, out_dir: str, *, preload: bool=False) -> None:
             if guidance_mode == GuidanceMode.SINDY and sindy_guidance is not None:
                 raw_guide, guide_stats = sindy_guidance.loss_and_stats(x0_pred, captions=text_in, device=device)
                 loss_guidance = float(lambda_sindy) * raw_guide
-            elif guidance_mode == GuidanceMode.NIMBLE and nimble_guidance is not None:
-                raw_guide, guide_stats = nimble_guidance.loss_and_stats(x0_pred)
-                t_weight = nimble_guidance.guidance_weight(t=t, total_timesteps=int(sched.timesteps))
-                loss_guidance = float(lambda_nimble) * t_weight * raw_guide
+            elif guidance_mode == GuidanceMode.OPENSIM and opensim_guidance is not None:
+                raw_guide, guide_stats = opensim_guidance.loss_and_stats(x0_pred)
+                loss_guidance = float(lambda_opensim) * raw_guide
             loss = loss_diff + loss_guidance
             opt.zero_grad(set_to_none=True)
             loss.backward()
@@ -183,8 +179,8 @@ def train(config_path: str, out_dir: str, *, preload: bool=False) -> None:
                 msg = f'step={step} loss={float(loss.item()):.6f} diff={float(loss_diff.item()):.6f} guide={float(loss_guidance.item()):.6f}'
                 if guidance_mode == GuidanceMode.SINDY and guide_stats:
                     msg += f" sindy_bio={guide_stats.get('sindy_bio_mse', 0.0):.4f} sindy_muscle={guide_stats.get('sindy_muscle_mse', 0.0):.4f} guide_scalar={guide_stats.get('sindy_guidance_scalar', 0.0):.4f}"
-                if guidance_mode == GuidanceMode.NIMBLE and guide_stats:
-                    msg += f" nimble_vel={guide_stats.get('nimble_vel', 0.0):.4f} nimble_acc={guide_stats.get('nimble_acc', 0.0):.4f} nimble_tau={guide_stats.get('nimble_torque', 0.0):.4f} nimble_jerk={guide_stats.get('nimble_jerk', 0.0):.4f} nimble_eff={guide_stats.get('nimble_effort', 0.0):.4f} nimble_contact_gap={guide_stats.get('nimble_contact_gap', 0.0):.4f} guide_scalar={guide_stats.get('nimble_guidance_scalar', 0.0):.4f}"
+                if guidance_mode == GuidanceMode.OPENSIM and guide_stats:
+                    msg += f" opensim_foot={guide_stats.get('opensim_foot_penalty', 0.0):.4f} opensim_vel={guide_stats.get('opensim_vel_penalty', 0.0):.4f} guide_scalar={guide_stats.get('opensim_guidance_scalar', 0.0):.4f}"
                 get_run_logger().progress(msg)
             if step % save_every == 0 and is_main_process():
                 torch.save({'model_state': model_state_dict(model), 'step': step, 'feature_dim': int(train_ds.feature_dim)}, out / f'ckpt_step_{step:07d}.pt')
@@ -197,7 +193,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description='Train text-conditioned diffusion model with guidance modes.')
     parser.add_argument('--config', default=str(default_config_path('train_diffusion.json')), help='Path to train_diffusion.json')
     parser.add_argument('--out_dir', default='', help='Output directory (default: results/diffusion/<guidance>/runs/<timestamp>)')
-    parser.add_argument('--guidance', default='', choices=['', 'none', 'sindy', 'nimble'], help='Override train.guidance from config')
+    parser.add_argument('--guidance', default='', choices=['', 'none', 'sindy', 'opensim', 'nimble'], help='Override train.guidance from config (nimble alias=opensim)')
     parser.add_argument('--data_root', default='', help='Override data.data_root (default: datasets/HumanML3D or HUMANML3D_ROOT)')
     parser.add_argument('--preload', action='store_true', help='Load q trajectories into RAM before training (default: read B3D on demand)')
     add_run_log_cli_args(parser)

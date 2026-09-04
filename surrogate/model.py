@@ -2,11 +2,11 @@ from __future__ import annotations
 from typing import Any, Dict
 import torch
 import torch.nn as nn
-from nimble.rajagopal_coord_map import RAJAGOPAL_NIMBLE_DOF_NAMES
+from nimble.lai_coord_map import LAI_NUM_DOFS
 
 class ActivationSurrogate(nn.Module):
 
-    def __init__(self, *, input_dim: int=len(RAJAGOPAL_NIMBLE_DOF_NAMES), output_dim: int=80, hidden_dim: int=256, num_layers: int=3, dropout: float=0.1):
+    def __init__(self, *, input_dim: int=LAI_NUM_DOFS, output_dim: int=80, hidden_dim: int=256, num_layers: int=3, dropout: float=0.1):
         super().__init__()
         self.input_dim = int(input_dim)
         self.output_dim = int(output_dim)
@@ -30,7 +30,7 @@ class ActivationSurrogate(nn.Module):
 
 class TransformerActivationSurrogate(nn.Module):
 
-    def __init__(self, *, input_dim: int=len(RAJAGOPAL_NIMBLE_DOF_NAMES), output_dim: int=80, d_model: int=128, num_layers: int=3, num_heads: int=4, dim_feedforward: int=128, dropout: float=0.1, max_seq_len: int=196):
+    def __init__(self, *, input_dim: int=LAI_NUM_DOFS, output_dim: int=80, d_model: int=128, num_layers: int=3, num_heads: int=4, dim_feedforward: int=128, dropout: float=0.1, max_seq_len: int=196):
         super().__init__()
         self.input_dim = int(input_dim)
         self.output_dim = int(output_dim)

@@ -31,10 +31,6 @@ def shard_motion_ids(ids: list[str], shard_index: int, num_shards: int) -> list[
     return ids[i::n]
 
 def kinematics_pass_index(subj: Any, trial: int) -> int:
-    import nimblephysics as nimble
-    n = int(subj.getTrialNumProcessingPasses(trial))
-    for i in range(n):
-        ptype = str(subj.getProcessingPassType(i)).upper()
-        if 'KINEMATICS' in ptype:
-            return i
+    """Deprecated no-op for NPZ cache (single kinematics stream)."""
+    del subj, trial
     return 0

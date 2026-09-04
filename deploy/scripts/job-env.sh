@@ -17,6 +17,9 @@ fi
 
 # K8s NVIDIA device plugin often sets NVIDIA_VISIBLE_DEVICES but not CUDA_VISIBLE_DEVICES.
 # Must be exported before Python imports torch.
+if [[ "${CUDA_VISIBLE_DEVICES:-}" == "void" ]]; then
+  unset CUDA_VISIBLE_DEVICES
+fi
 if [[ -z "${CUDA_VISIBLE_DEVICES:-}" && -n "${NVIDIA_VISIBLE_DEVICES:-}" ]]; then
   export CUDA_VISIBLE_DEVICES="${NVIDIA_VISIBLE_DEVICES}"
 fi

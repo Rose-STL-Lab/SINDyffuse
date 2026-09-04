@@ -3,9 +3,10 @@ from typing import Dict, Optional
 import numpy as np
 import torch
 from nimble.contact import estimate_contact_from_feet
+from nimble.lai_features import keypoints_from_lai_q
 from nimble.ops import finite_diff
-from nimble.physics import load_model
-from nimble.rajagopal_kin import COM_KEYPOINT_INDICES, IDX_FOOT_L, IDX_FOOT_R, IDX_PELVIS, keypoints_numpy
+from nimble.rajagopal_kin import COM_KEYPOINT_INDICES, IDX_FOOT_L, IDX_FOOT_R, IDX_PELVIS
+
 
 def compute_fidelity(q: np.ndarray, q_ref: np.ndarray, mean: np.ndarray, std: np.ndarray) -> float:
     q = np.asarray(q, dtype=np.float64)
@@ -17,12 +18,12 @@ def compute_fidelity(q: np.ndarray, q_ref: np.ndarray, mean: np.ndarray, std: np
     mse = np.mean((q_n - q_ref_n) ** 2)
     return float(np.sqrt(mse))
 
-def compute_biomechanical_metrics(q: np.ndarray, *, fps: float=20.0, q_ref: Optional[np.ndarray]=None, mean: Optional[np.ndarray]=None, std: Optional[np.ndarray]=None, mass_kg: float=70.0, height_thresh_m: float=0.06, speed_thresh_mps: float=1.2) -> Dict[str, float]:
+
+def compute_biomechanical_metrics(q: np.ndarray, *, fps: float = 20.0, q_ref: Optional[np.ndarray] = None, mean: Optional[np.ndarray] = None, std: Optional[np.ndarray] = None, mass_kg: float = 70.0, height_thresh_m: float = 0.06, speed_thresh_mps: float = 1.2) -> Dict[str, float]:
     q = np.asarray(q, dtype=np.float32)
     if q.ndim != 2:
         raise ValueError(f'Expected q [T, ndof], got {q.shape}')
-    sk = load_model().skeleton
-    kp = keypoints_numpy(sk, q)
+    kp = keypoints_from_lai_q(q)
     dt = 1.0 / float(fps)
     kp_t = torch.from_numpy(kp)
     pelvis = kp_t[:, IDX_PELVIS, :]
@@ -32,7 +33,11 @@ def compute_biomechanical_metrics(q: np.ndarray, *, fps: float=20.0, q_ref: Opti
     root_acc = float(torch.linalg.norm(root_a, dim=1).mean().item())
     foot_l = kp_t[:, IDX_FOOT_L, :]
     foot_r = kp_t[:, IDX_FOOT_R, :]
-    com_pos = kp_t[:, list(COM_KEYPOINT_INDICES), :].mean(dim=1)
+    # COM proxy: mean of available keypoints (pelvis + feet when K is sparse)
+    com_idx = [i for i in COM_KEYPOINT_INDICES if i < kp_t.shape[1]]
+    if not com_idx:
+        com_idx = [IDX_PELVIS]
+    com_pos = kp_t[:, com_idx, :].mean(dim=1)
     com_v = finite_diff(com_pos, dt)
     com_a = finite_diff(com_v, dt)
     contact = estimate_contact_from_feet(foot_l, foot_r, com_a, dt, mass_kg=float(mass_kg), height_thresh_m=float(height_thresh_m), speed_thresh_mps=float(speed_thresh_mps))

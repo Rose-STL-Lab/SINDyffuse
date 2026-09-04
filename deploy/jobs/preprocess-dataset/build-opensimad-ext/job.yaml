@@ -15,8 +15,8 @@ spec:
       restartPolicy: Never
       containers:
       - name: sindyffuse-build-opensimad-ext
-        image: ncking/sindyffuse:latest
-        imagePullPolicy: Always
+        image: sindyffuse:latest
+        imagePullPolicy: IfNotPresent
         workingDir: /mnt/SINDyffuse
         env:
         - name: SINDYFFUSE_RUN_LOG_ID
@@ -25,7 +25,7 @@ spec:
         args:
         - |
           source deploy/scripts/job-env.sh
-          python scripts/build_rajagopal_opensimad_ext.py --force
+          python scripts/build_lai_opensimad_ext.py --force
         resources:
           limits:
             memory: 32Gi

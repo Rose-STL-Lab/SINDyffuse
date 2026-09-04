@@ -1,5 +1,5 @@
-# SINDyffuse: diffusion + SINDy + Nimble physics + OpenSim (future experiments).
-# OpenSim 4.5.2 (py311np125) requires numpy 1.25.x; SINDyffuse stays on numpy 1.x (<2).
+# SINDyffuse: diffusion + SINDy + OpenSim / OpenSimAD (LaiUhlrich2022).
+# OpenSim 4.5.2 (py311np125) requires numpy 1.25.x.
 name: sindyffuse
 channels:
   - pytorch
@@ -28,8 +28,9 @@ dependencies:
   - pytorch-cuda=12.4
   - torchvision
   - torchaudio
+  # CasADi is not listed here: opensim may pull a conda casadi that conflicts with
+  # OpenSimAD. env/Dockerfile removes conda casadi and pins pip casadi==3.7.1.
   - pip:
-      - nimblephysics
       - polyscope>=2.3.0
       - clip @ git+https://github.com/openai/CLIP.git
       - ftfy

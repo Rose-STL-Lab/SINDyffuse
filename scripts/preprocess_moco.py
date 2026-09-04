@@ -7,47 +7,47 @@ from pathlib import Path
 _REPO = Path(__file__).resolve().parent.parent
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
+# CasADi before any OpenSim import (OpenSim ships a conflicting libcasadi).
+import casadi  # noqa: F401
 from common.cpu import bootstrap_moco_compute_threads, configure_compute_threads, resolve_preprocess_parallelism
-# OpenSim initializes OpenMP/MKL pools at import; configure before any nimble/opensim import.
+# OpenSim initializes OpenMP/MKL pools at import; configure before any opensim import.
 _BOOTSTRAP_MOCO_THREADS = bootstrap_moco_compute_threads()
-from common.paths import nimble_b3d_dir
+from common.paths import lai_cache_dir
 from common.preprocess_runner import add_common_preprocess_args, load_stage_manifest_index, manifest_path, resolve_shard_motion_ids, run_preprocess_loop
 from common.run_setup import apply_preprocess_job_env
 from common.run_logging import add_run_log_cli_args, null_logger, run_log_session
-from nimble.export import clear_export_caches, patch_b3d_moco
-from nimble.muscle_activation import add_muscle_activation_cli_args, configure_opensim_logging, muscle_activation_config_from_args, muscle_activation_config_from_dict, muscle_activation_config_to_dict, opensim_quiet
+from nimble.export import clear_export_caches, npz_has_activations, patch_npz_activations
+from nimble.muscle_activation import add_muscle_activation_cli_args, configure_opensim_logging, muscle_activation_config_from_args, muscle_activation_config_from_dict, muscle_activation_config_to_dict
+from nimble.opensim_log import opensim_quiet
 
 def _process_one_moco(item: tuple) -> dict:
     sid, out_root_s, skip_existing, verbose_log_path, act_cfg_json, ik_status, ik_stats_json = item
     if verbose_log_path:
         os.environ['SINDYFFUSE_VERBOSE_LOG'] = str(verbose_log_path)
-    out_b3d = nimble_b3d_dir(Path(out_root_s)) / f'{sid}.b3d'
-    if skip_existing and out_b3d.is_file():
-        subj_ok = False
+    out_npz = lai_cache_dir(Path(out_root_s)) / f'{sid}.npz'
+    if skip_existing and out_npz.is_file():
         try:
-            import nimblephysics as nimble
-            from nimble.b3d_io import b3d_has_muscle_activations
-            subj = nimble.biomechanics.SubjectOnDisk(str(out_b3d))
-            subj_ok = b3d_has_muscle_activations(subj)
+            if npz_has_activations(out_npz):
+                return {'id': sid, 'status': 'skipped', 'path': str(out_npz), 'skip_reason': 'existing opensimad npz'}
         except Exception:
-            subj_ok = False
-        if subj_ok:
-            return {'id': sid, 'status': 'skipped', 'path': str(out_b3d), 'skip_reason': 'existing moco b3d'}
-    if not out_b3d.is_file():
-        return {'id': sid, 'status': 'moco_skipped', 'error': 'missing IK B3D', 'moco_skipped_reason': 'missing B3D'}
+            pass
+    if not out_npz.is_file():
+        return {'id': sid, 'status': 'moco_skipped', 'error': 'missing IK NPZ', 'moco_skipped_reason': 'missing NPZ'}
     act_cfg = muscle_activation_config_from_dict(json.loads(act_cfg_json))
     ik_stats = json.loads(ik_stats_json) if ik_stats_json else {}
     try:
         with opensim_quiet(act_cfg.opensim_log_level):
-            stats, num_dofs, meta_strings, manifest_status = patch_b3d_moco(out_b3d, trial_name=sid, act_cfg=act_cfg, ik_manifest_status=ik_status, ik_stats=ik_stats)
+            stats, num_dofs, meta_strings, manifest_status = patch_npz_activations(
+                out_npz, trial_name=sid, act_cfg=act_cfg, ik_manifest_status=ik_status, ik_stats=ik_stats
+            )
     except Exception as exc:
         return {'id': sid, 'status': 'error', 'error': str(exc)}
     clear_export_caches()
-    row = {'id': sid, 'status': manifest_status, 'path': str(out_b3d), 'num_dofs': int(num_dofs), 'ik_stats': stats}
+    row = {'id': sid, 'status': manifest_status, 'path': str(out_npz), 'num_dofs': int(num_dofs), 'ik_stats': stats}
     if manifest_status == 'moco_skipped':
         row['moco_skipped_reason'] = meta_strings.get('moco_skipped_reason') or meta_strings.get('ik_gate_reason') or 'preflight gate'
     if manifest_status == 'moco_failed':
-        row['coordinate_tracking_gate_reason'] = meta_strings.get('moco_failed_reason') or meta_strings.get('coordinate_tracking_gate_reason') or meta_strings.get('error') or 'moco failed'
+        row['coordinate_tracking_gate_reason'] = meta_strings.get('moco_failed_reason') or meta_strings.get('coordinate_tracking_gate_reason') or meta_strings.get('error') or 'opensimad failed'
     if meta_strings:
         row['meta'] = meta_strings
     return row
@@ -68,15 +68,15 @@ def run_preprocess_moco(args: argparse.Namespace, logger) -> None:
     parallel_segments = int(getattr(args, 'moco_parallel_segments', act_cfg.moco_parallel_segments) or 1)
     motion_workers, moco_threads = resolve_preprocess_parallelism(int(args.num_workers), moco_parallel_motions=int(getattr(args, 'moco_parallel_motions', 1) or 1), moco_parallel_segments=parallel_segments, num_shards=num_shards)
     moco_threads = configure_compute_threads(moco_threads)
-    logger.progress(f'Moco threads: bootstrap={_BOOTSTRAP_MOCO_THREADS} resolved={moco_threads} motion_workers={motion_workers}')
+    logger.progress(f'OpenSimAD threads: bootstrap={_BOOTSTRAP_MOCO_THREADS} resolved={moco_threads} motion_workers={motion_workers}')
     manifest_file = manifest_path(out_root, shard_index, num_shards, stage='moco')
     ok, err, skip = run_preprocess_loop(work=work, process_one=_process_one_moco, manifest_file=manifest_file, motion_workers=motion_workers, moco_threads=moco_threads, ok_statuses={'ok'}, logger=logger)
-    logger.progress(f'Done (moco): {ok} ok, {err} failed/skipped, {skip} skipped existing')
+    logger.progress(f'Done (opensimad): {ok} ok, {err} failed/skipped, {skip} skipped existing')
     if ok == 0 and skip == 0:
         sys.exit(1)
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description='Job 3: OpenSimAD (MinT) / MocoTrack muscle activations on IK B3D cache')
+    parser = argparse.ArgumentParser(description='Job 3: OpenSimAD (MinT) muscle activations on Lai IK NPZ cache')
     add_common_preprocess_args(parser)
     parser.add_argument('--moco_parallel_motions', type=int, default=1)
     add_muscle_activation_cli_args(parser)
@@ -88,7 +88,6 @@ def main() -> None:
     else:
         from nimble.muscle_activation import normalize_activation_method
         args.activation_method = normalize_activation_method(str(args.activation_method))
-    # Unique per-shard run log id so parallel workers do not share one log file.
     if not str(os.environ.get('SINDYFFUSE_RUN_LOG_ID', '')).strip() or str(os.environ.get('SINDYFFUSE_RUN_LOG_ID', '')).strip() == 'RUN_LOG_ID_PLACEHOLDER':
         shard = os.environ.get('JOB_COMPLETION_INDEX') or os.environ.get('PREPROCESS_SHARD_INDEX') or ''
         if str(shard).strip().isdigit():

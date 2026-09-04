@@ -98,7 +98,7 @@ def compute_normalization(args: argparse.Namespace, logger: RunLogger | None=Non
 def main() -> None:
     parser = argparse.ArgumentParser(description='Merge shard preprocess manifests and compute Nimble q Mean.npy / Std.npy')
     default_root = default_humanml3d_root()
-    parser.add_argument('--out_root', default=default_root, help='Dataset root containing nimble_b3d/ and shard manifests')
+    parser.add_argument('--out_root', default=default_root, help='Dataset root containing lai_cache/ and shard manifests')
     parser.add_argument('--num_shards', type=int, default=0, help='Number of preprocess shards to merge (default: PREPROCESS_NUM_SHARDS env or 1)')
     parser.add_argument('--wait', action='store_true', help='Poll until all shard manifests exist before merging')
     parser.add_argument('--timeout_hours', type=float, default=48.0, help='Max wait time when --wait is set (default 48)')

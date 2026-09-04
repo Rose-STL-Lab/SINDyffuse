@@ -1,8 +1,10 @@
 from __future__ import annotations
 import os
 from pathlib import Path
-NIMBLE_B3D_SUBDIR = 'nimble_b3d'
-__all__ = ['NIMBLE_B3D_SUBDIR', 'cleanup_preprocess_manifests', 'default_datasets_dir', 'default_humanml3d_root', 'humanml3d_text_dir', 'nimble_b3d_dir', 'repo_root', 'resolve_data_root', 'resolve_repo_path', 'results_dir', 'sindy_latest_link', 'activation_surrogate_latest_link', 'diffusion_latest_link', 'update_latest_symlink']
+LAI_CACHE_SUBDIR = 'lai_cache'
+# Deprecated alias — prefer LAI_CACHE_SUBDIR / lai_cache_dir.
+NIMBLE_B3D_SUBDIR = LAI_CACHE_SUBDIR
+__all__ = ['LAI_CACHE_SUBDIR', 'NIMBLE_B3D_SUBDIR', 'cleanup_preprocess_manifests', 'default_datasets_dir', 'default_humanml3d_root', 'humanml3d_text_dir', 'lai_cache_dir', 'nimble_b3d_dir', 'repo_root', 'resolve_data_root', 'resolve_repo_path', 'results_dir', 'sindy_latest_link', 'activation_surrogate_latest_link', 'diffusion_latest_link', 'update_latest_symlink']
 
 def repo_root() -> Path:
     return Path(__file__).resolve().parent.parent
@@ -16,9 +18,13 @@ def default_humanml3d_root() -> str:
         return explicit
     return str(default_datasets_dir() / 'HumanML3D')
 
-def nimble_b3d_dir(data_root: str | Path, *, subdir: str | None=None) -> Path:
-    name = str(subdir).strip() if subdir else NIMBLE_B3D_SUBDIR
+def lai_cache_dir(data_root: str | Path, *, subdir: str | None=None) -> Path:
+    name = str(subdir).strip() if subdir else LAI_CACHE_SUBDIR
     return Path(data_root).expanduser().resolve() / name
+
+def nimble_b3d_dir(data_root: str | Path, *, subdir: str | None=None) -> Path:
+    """Deprecated alias for lai_cache_dir (NPZ cache)."""
+    return lai_cache_dir(data_root, subdir=subdir)
 
 def humanml3d_text_dir(data_root: str | Path) -> Path:
     root = Path(data_root).expanduser().resolve()

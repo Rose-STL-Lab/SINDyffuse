@@ -2,12 +2,14 @@ from __future__ import annotations
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from multiprocessing import get_context
 from pathlib import Path
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Dict, List
 import numpy as np
-from nimble.moco_segment import apply_ground_offset_q, plan_moco_segments, segment_frame_counts, stitch_segment_mask, stitch_segment_values
+import casadi  # noqa: F401
+from nimble.moco_segment import plan_moco_segments, segment_frame_counts, stitch_segment_mask, stitch_segment_values
 from nimble.muscle_activation import MuscleActivationConfig, MuscleActivationResult, muscle_names, opensim_quiet
 from nimble.opensimad.mint_settings import MINT_PARALLEL_SEGMENTS
 from nimble.opensimad.track_segment import solve_opensimad_segment
+from nimble.opensim_ik import apply_ground_offset_lai_q
 
 def _solve_one_segment_job(args: tuple) -> tuple:
     spec_index, q_seg, cfg_dict, solve_dir_s, mesh_interval = args
@@ -17,17 +19,14 @@ def _solve_one_segment_job(args: tuple) -> tuple:
         q_seg, cfg=cfg, solve_dir=Path(solve_dir_s), mesh_interval=mesh_interval)
     return (int(spec_index), activations, bool(solve_ok), solve_meta, grf)
 
-def run_opensimad_segmented(q: np.ndarray, *, cfg: MuscleActivationConfig, work_dir: Path, skeleton: Any | None=None) -> MuscleActivationResult:
+def run_opensimad_segmented(q: np.ndarray, *, cfg: MuscleActivationConfig, work_dir: Path) -> MuscleActivationResult:
     from nimble.muscle_activation import muscle_activation_config_to_dict
     arr = np.asarray(q, dtype=np.float64)
     t_len = int(arr.shape[0])
     segments = plan_moco_segments(t_len, float(cfg.fps), core_s=float(cfg.moco_core_duration_s), buffer_s=float(cfg.moco_buffer_duration_s))
     if not segments:
         raise ValueError(f'No segments for length {t_len}')
-    if skeleton is not None:
-        arr, ground_shift = apply_ground_offset_q(arr, skeleton, cfg)
-    else:
-        ground_shift = 0.0
+    arr, ground_shift = apply_ground_offset_lai_q(arr, sphere_offset_y_m=float(cfg.moco_contact_sphere_offset_y_m))
     names_ref = muscle_names()
     n_muscles = len(names_ref)
     blend_frames, _ = segment_frame_counts(float(cfg.fps), core_s=float(cfg.moco_stitch_blend_s), buffer_s=float(cfg.moco_buffer_duration_s))
@@ -35,7 +34,6 @@ def run_opensimad_segmented(q: np.ndarray, *, cfg: MuscleActivationConfig, work_
     parallel = max(1, int(cfg.moco_parallel_segments or MINT_PARALLEL_SEGMENTS))
     cfg_dict = muscle_activation_config_to_dict(cfg)
 
-    # Pre-create segment dirs and jobs.
     jobs = []
     for spec in segments:
         seg_dir = work_dir / f'segment_{spec.index:04d}'
@@ -92,7 +90,6 @@ def run_opensimad_segmented(q: np.ndarray, *, cfg: MuscleActivationConfig, work_
     stitched_grf = stitch_segment_values(t_len, segments, core_grf, blend_frames=blend_frames, stitch_seams=True)
     validity_mask = stitch_segment_mask(t_len, segments, segment_ok)
     success_count = int(sum((1 for ok in segment_ok if ok)))
-    # OpenSimAD path: no separate Moco coordinate table extraction; leave tracking empty (gap policy).
     pooled_tracking: Dict[str, Any] = {}
     meta: Dict[str, Any] = {
         'activation_method': 'opensimad',
@@ -111,10 +108,9 @@ def run_opensimad_segmented(q: np.ndarray, *, cfg: MuscleActivationConfig, work_
         'coordinate_tracking': pooled_tracking,
         'max_translational_coord_rmse_m': 0.0,
         'max_rotational_coord_rmse_deg': 0.0,
+        'opensim_model': 'LaiUhlrich2022',
     }
     return MuscleActivationResult(activations=stitched_act.astype(np.float32), muscle_names=tuple(names_ref), metadata=meta, forces=stitched_grf.astype(np.float32))
 
 def run_opensimad_track(q: np.ndarray, *, cfg: MuscleActivationConfig, work_dir: Path) -> MuscleActivationResult:
-    from nimble.physics import load_model
-    sk = load_model().skeleton
-    return run_opensimad_segmented(np.asarray(q, dtype=np.float64), cfg=cfg, work_dir=work_dir, skeleton=sk)
+    return run_opensimad_segmented(np.asarray(q, dtype=np.float64), cfg=cfg, work_dir=work_dir)

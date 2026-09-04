@@ -56,9 +56,9 @@ def train_activation_surrogate(*, data_root: str, output: str, split: str='train
     except ValueError:
         val_ds = None
     logger = get_run_logger()
-    logger.progress(f'train split={split}: windows={len(train_ds)} motions_kept={train_ds.num_motions_kept} skipped_zero={train_ds.num_motions_skipped_zero}')
+    logger.progress(f'train split={split}: windows={len(train_ds)} motions_kept={train_ds.num_motions_kept} skipped_zero={train_ds.num_motions_skipped_zero} skipped_corrupt={train_ds.num_motions_skipped_corrupt}')
     if val_ds is not None:
-        logger.progress(f'val split={val_split}: windows={len(val_ds)} motions_kept={val_ds.num_motions_kept} skipped_zero={val_ds.num_motions_skipped_zero}')
+        logger.progress(f'val split={val_split}: windows={len(val_ds)} motions_kept={val_ds.num_motions_kept} skipped_zero={val_ds.num_motions_skipped_zero} skipped_corrupt={val_ds.num_motions_skipped_corrupt}')
     per_gpu_batch = int(batch_size)
     train_sampler = None
     val_sampler = None
@@ -143,7 +143,7 @@ def train_activation_surrogate(*, data_root: str, output: str, split: str='train
             _save_checkpoint(best_path, epoch=int(epochs) - 1, val_loss=history[-1]['val_loss'] if history else float('nan'))
     if not is_main_process():
         return {'checkpoint': str(latest_path), 'best_checkpoint': str(best_path), 'train_windows': len(train_ds), 'val_windows': len(val_ds) if val_ds is not None else 0, 'best_val_loss': best_val}
-    metrics = {'checkpoint': str(latest_path), 'best_checkpoint': str(best_path), 'train_windows': len(train_ds), 'val_windows': len(val_ds) if val_ds is not None else 0, 'train_motions_kept': int(train_ds.num_motions_kept), 'train_motions_skipped_zero': int(train_ds.num_motions_skipped_zero), 'val_motions_kept': int(val_ds.num_motions_kept) if val_ds is not None else 0, 'val_motions_skipped_zero': int(val_ds.num_motions_skipped_zero) if val_ds is not None else 0, 'best_val_loss': best_val, 'history': history}
+    metrics = {'checkpoint': str(latest_path), 'best_checkpoint': str(best_path), 'train_windows': len(train_ds), 'val_windows': len(val_ds) if val_ds is not None else 0, 'train_motions_kept': int(train_ds.num_motions_kept), 'train_motions_skipped_zero': int(train_ds.num_motions_skipped_zero), 'train_motions_skipped_corrupt': int(train_ds.num_motions_skipped_corrupt), 'val_motions_kept': int(val_ds.num_motions_kept) if val_ds is not None else 0, 'val_motions_skipped_zero': int(val_ds.num_motions_skipped_zero) if val_ds is not None else 0, 'val_motions_skipped_corrupt': int(val_ds.num_motions_skipped_corrupt) if val_ds is not None else 0, 'best_val_loss': best_val, 'history': history}
     (out_dir / 'train_metrics.json').write_text(json.dumps(metrics, indent=2), encoding='utf-8')
     update_latest_symlink(run_dir=out_dir, latest_link=activation_surrogate_latest_link())
     return metrics

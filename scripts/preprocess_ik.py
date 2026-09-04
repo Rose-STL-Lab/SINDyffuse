@@ -11,28 +11,28 @@ from common.run_setup import apply_preprocess_job_env
 from common.run_logging import add_run_log_cli_args, null_logger, run_log_session
 from datasets.hml3d_joints import default_joints_root, load_hml3d_joint_positions
 from datasets.nimble_dataset import compute_nimble_normalization_stats
-from nimble.export import clear_export_caches, export_ik_to_b3d
-from nimble.muscle_activation import configure_opensim_logging, opensim_quiet
-from common.paths import nimble_b3d_dir
+from nimble.export import clear_export_caches, export_ik_to_npz
+from nimble.opensim_log import configure_opensim_logging, opensim_quiet
+from common.paths import lai_cache_dir
 
 def _process_one_ik(item: tuple) -> dict:
     sid, hml_root_s, out_root_s, skip_existing, joint_source, joints_root_s, verbose_log_path, fps, mass_kg, height_m = item
     if verbose_log_path:
         os.environ['SINDYFFUSE_VERBOSE_LOG'] = str(verbose_log_path)
-    out_b3d = nimble_b3d_dir(Path(out_root_s)) / f'{sid}.b3d'
-    if skip_existing and out_b3d.is_file():
-        return {'id': sid, 'status': 'skipped', 'path': str(out_b3d)}
+    out_npz = lai_cache_dir(Path(out_root_s)) / f'{sid}.npz'
+    if skip_existing and out_npz.is_file():
+        return {'id': sid, 'status': 'skipped', 'path': str(out_npz)}
     try:
         joints, _ = load_hml3d_joint_positions(Path(hml_root_s), sid, joint_source=joint_source, joints_root=Path(joints_root_s) if joints_root_s else None)
     except FileNotFoundError:
         return {'id': sid, 'status': 'error', 'error': 'missing or invalid motion'}
     try:
         with opensim_quiet('Off'):
-            stats, num_dofs, meta_strings, manifest_status = export_ik_to_b3d(joints, out_b3d, trial_name=sid, fps=float(fps), mass_kg=float(mass_kg), height_m=float(height_m))
+            stats, num_dofs, meta_strings, manifest_status = export_ik_to_npz(joints, out_npz, trial_name=sid, fps=float(fps), mass_kg=float(mass_kg), height_m=float(height_m))
     except Exception as exc:
         return {'id': sid, 'status': 'error', 'error': str(exc)}
     clear_export_caches()
-    row = {'id': sid, 'status': manifest_status, 'path': str(out_b3d), 'num_dofs': int(num_dofs), 'ik_stats': stats}
+    row = {'id': sid, 'status': manifest_status, 'path': str(out_npz), 'num_dofs': int(num_dofs), 'ik_stats': stats}
     if manifest_status == 'ik_failed':
         reason = meta_strings.get('ik_gate_reason')
         if reason:
@@ -61,7 +61,7 @@ def run_preprocess_ik(args: argparse.Namespace, logger) -> None:
         compute_nimble_normalization_stats(out_root)
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description='Job 1: HumanML3D joints → IK B3D cache')
+    parser = argparse.ArgumentParser(description='Job 1: HumanML3D joints → Lai OpenSim IK NPZ cache')
     add_common_preprocess_args(parser)
     add_run_log_cli_args(parser)
     args = parser.parse_args()
