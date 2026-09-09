@@ -57,6 +57,9 @@ spec:
         args:
         - |
           source deploy/scripts/job-env.sh
+          # Ensure OpenSimAD runtime deps (pip casadi==3.7.1, seaborn/pyyaml if needed).
+          # preprocess_moco.py imports casadi at module import time.
+          source deploy/scripts/ensure-casadi.sh
           export SINDYFFUSE_RUN_LOG_ID="opensimad_shard_${JOB_COMPLETION_INDEX:-0}"
           mkdir -p "${TMPDIR:-/scratch}"
           python scripts/preprocess_moco.py --skip_normalization --num_workers 0 --activation_method opensimad

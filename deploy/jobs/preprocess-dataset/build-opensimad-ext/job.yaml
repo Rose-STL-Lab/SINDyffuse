@@ -25,6 +25,9 @@ spec:
         args:
         - |
           source deploy/scripts/job-env.sh
+          # Incomplete images/envs often lack pip casadi and vendor imports
+          # (seaborn/pyyaml). Mirrors env/Dockerfile + environment.yaml pins.
+          source deploy/scripts/ensure-casadi.sh
           python scripts/build_lai_opensimad_ext.py --force
         resources:
           limits:
