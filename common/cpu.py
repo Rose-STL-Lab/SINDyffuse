@@ -41,16 +41,18 @@ def detect_usable_cpus() -> int:
     env = os.environ.get('MOCO_NUM_THREADS', '').strip()
     if env.isdigit():
         return max(1, int(env))
+    # Prefer cgroup quota over sched_getaffinity: on K8s affinity often
+    # reports host CPUs while the pod is limited to requests.cpu.
+    for detector in (_cgroup_v2_cpu_count, _cgroup_v1_cpu_count):
+        n = detector()
+        if n is not None and n > 0:
+            return n
     try:
         affinity = len(os.sched_getaffinity(0))
         if affinity > 0:
             return affinity
     except (AttributeError, NotImplementedError, OSError):
         pass
-    for detector in (_cgroup_v2_cpu_count, _cgroup_v1_cpu_count):
-        n = detector()
-        if n is not None and n > 0:
-            return n
     return max(1, int(os.cpu_count() or 1))
 
 def configure_compute_threads(num_threads: int) -> int:

@@ -121,9 +121,9 @@ def apply_preprocess_job_env(args) -> None:
     elif os.environ.get('OPENSIMAD_MESH_INTERVAL'):
         args.moco_mesh_interval = float(os.environ['OPENSIMAD_MESH_INTERVAL'].strip())
     if os.environ.get('MOCO_PARALLEL_SEGMENTS'):
-        args.moco_parallel_segments = env_int('MOCO_PARALLEL_SEGMENTS', 6)
+        args.moco_parallel_segments = env_int('MOCO_PARALLEL_SEGMENTS', 1)
     elif os.environ.get('OPENSIMAD_PARALLEL_SEGMENTS'):
-        args.moco_parallel_segments = env_int('OPENSIMAD_PARALLEL_SEGMENTS', 6)
+        args.moco_parallel_segments = env_int('OPENSIMAD_PARALLEL_SEGMENTS', 1)
     if os.environ.get('ACTIVATION_METHOD'):
         args.activation_method = os.environ['ACTIVATION_METHOD'].strip()
     log_dir = str(getattr(args, 'log_dir', '') or '').strip()

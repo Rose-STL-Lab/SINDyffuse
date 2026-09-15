@@ -131,10 +131,20 @@ def solve_with_bounds(opti, tolerance, useExpressionGraphFunction, max_iteration
     
     prob = {'x': opti.x, 'f': opti.f, 'g': new_g}
     s_opts = {}
-    if useExpressionGraphFunction:
-        s_opts["expand"] = True
-    else:
-        s_opts["expand"] = False
+    # OpenCap historically set expand=True with expression-graph F.py. For the
+    # full MinT Lai NLP that materializes a multi-100Gi SX graph and OOMs.
+    # Default OFF; opt in with OPENSIMAD_EXPAND_NLP=1 (or true/yes/on).
+    expand_nlp = False
+    raw_expand = os.environ.get('OPENSIMAD_EXPAND_NLP', '').strip().lower()
+    if raw_expand in ('1', 'true', 'yes', 'on'):
+        expand_nlp = True
+    elif raw_expand in ('0', 'false', 'no', 'off'):
+        expand_nlp = False
+    # Legacy: only expand when explicitly requested; ignore useExpressionGraphFunction.
+    _ = useExpressionGraphFunction
+    s_opts["expand"] = bool(expand_nlp)
+    if expand_nlp:
+        print('WARNING: OPENSIMAD_EXPAND_NLP enabled; CasADi expand can exceed 64-160Gi RSS')
     s_opts["ipopt.hessian_approximation"] = "limited-memory"
     s_opts["ipopt.mu_strategy"] = "adaptive"
     s_opts["ipopt.max_iter"] = int(max_iterations)

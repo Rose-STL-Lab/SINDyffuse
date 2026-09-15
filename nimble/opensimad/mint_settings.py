@@ -9,10 +9,19 @@ MINT_CONVERGENCE_TOLERANCE = 1e-3
 MINT_MAX_ITERATIONS = 2500
 MINT_CORE_DURATION_S = 1.4
 MINT_BUFFER_DURATION_S = 0.14
-MINT_PARALLEL_SEGMENTS = 6
+# Default 1 for K8s memory safety; raise via MOCO_PARALLEL_SEGMENTS when RAM allows.
+MINT_PARALLEL_SEGMENTS = 1
 # OpenCap uses ipopt_tolerance as decade exponent: tol = 10**(-ipopt_tolerance).
 # 1e-3 => ipopt_tolerance=3.
 MINT_IPOPT_TOLERANCE = 3
+
+def _prefer_expression_graph_function() -> bool:
+    """Use F.py when F.so is missing; prefer compiled external when present."""
+    try:
+        from nimble.opensimad.paths import external_function_dir
+        return not (external_function_dir() / 'F.so').is_file()
+    except Exception:
+        return True
 
 def mint_tracking_settings(*, mass_kg: float=70.0, height_m: float=1.75, trial_name: str='segment') -> Dict[str, Any]:
     """OpenCap get_setup('other') tuned to MinT mesh/tol/iters; MTP welded off."""
@@ -23,7 +32,8 @@ def mint_tracking_settings(*, mass_kg: float=70.0, height_m: float=1.75, trial_n
         'height_m': float(height_m),
         'treadmill_speed': 0,
         'contact_side': 'all',
-        'useExpressionGraphFunction': True,
+        # F.py path is fine without CasADi expand (see solve_with_bounds + OPENSIMAD_EXPAND_NLP).
+        'useExpressionGraphFunction': _prefer_expression_graph_function(),
         'withMTP': False,
         'withArms': True,
         'withLumbarCoordinateActuators': True,

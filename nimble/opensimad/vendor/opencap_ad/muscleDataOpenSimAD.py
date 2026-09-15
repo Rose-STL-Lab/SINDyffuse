@@ -53,6 +53,40 @@ def getMTParameters(pathModel, muscles, loadMTParameters,
        
     return mtParameters
 
+def _default_polynomial_fit_threads(host_cpus: int) -> int:
+    """Cap MuscleAnalysis joblib workers for K8s / large hosts.
+
+    OpenCap defaulted to ``cpu_count()-2``, which on bare-metal nodes (e.g.
+    256 CPUs) spawns ~254 OpenSim processes and OOMs. Prefer MOCO_NUM_THREADS,
+    then cgroup quota, then a small fixed cap — never raw host cpu_count.
+    """
+    env = os.environ.get('MOCO_NUM_THREADS', '').strip()
+    if env.isdigit():
+        return max(1, int(env))
+    # cgroup v2
+    try:
+        with open('/sys/fs/cgroup/cpu.max', 'r', encoding='utf-8') as f:
+            parts = f.read().strip().split()
+        if len(parts) >= 2 and parts[0] != 'max':
+            quota, period = int(parts[0]), int(parts[1])
+            if quota > 0 and period > 0:
+                return max(1, min(host_cpus, quota // period))
+    except (OSError, ValueError):
+        pass
+    # cgroup v1
+    for root in ('/sys/fs/cgroup/cpu,cpuacct', '/sys/fs/cgroup'):
+        try:
+            with open(f'{root}/cpu.cfs_quota_us', 'r', encoding='utf-8') as f:
+                quota = int(f.read().strip())
+            with open(f'{root}/cpu.cfs_period_us', 'r', encoding='utf-8') as f:
+                period = int(f.read().strip())
+            if quota > 0 and period > 0:
+                return max(1, min(host_cpus, quota // period))
+        except (OSError, ValueError):
+            continue
+    # Unconstrained: keep MA sequential-ish to avoid memory blowups.
+    return 1
+
 # %% Extract muscle-tendon lenghts and moment arms.
 # We extract data from varying limb postures, such as to later fit polynomials
 # to approximate muscle tendon lenghts, velocities, and moment arms.
@@ -205,12 +239,16 @@ def getPolynomialData(loadPolynomialData, pathModelFolder, modelName='',
             data = table.getMatrix().to_numpy() # data in degrees w/o time
             pathModel = os.path.join(pathModelFolder, modelName + '.osim')
             # Set number of threads.
-            if nThreads == None:
-                nThreads = multiprocessing.cpu_count()-2 # default
-            if nThreads < 1:
-                nThreads = 1
-            elif nThreads > multiprocessing.cpu_count():
-                nThreads = multiprocessing.cpu_count()                
+            # CRITICAL (K8s): never default to multiprocessing.cpu_count()-2.
+            # On large nodes that is 250+ concurrent OpenSim MuscleAnalysis
+            # workers and OOMs past 100Gi+. Prefer MOCO_NUM_THREADS / cgroup.
+            host_cpus = max(1, int(multiprocessing.cpu_count() or 1))
+            if nThreads is None:
+                nThreads = _default_polynomial_fit_threads(host_cpus)
+            nThreads = max(1, int(nThreads))
+            if nThreads > host_cpus:
+                nThreads = host_cpus
+            print(f'Polynomial MuscleAnalysis n_jobs={nThreads} (host_cpus={host_cpus})')
             # Generate muscle tendon lengths and moment arms (in parallel).
             slice_size = int(np.floor(data.shape[0]/nThreads))
             rest = data.shape[0] % nThreads

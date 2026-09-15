@@ -1,5 +1,10 @@
 # Worker phase: OpenSimAD MinT activations on LaiUhlrich2022
 # kubectl apply -k deploy/jobs/preprocess-dataset/moco-track
+#
+# Memory notes (do not raise parallel segments without raising limits):
+# - CasADi NLP expand is OFF by default (OPENSIMAD_EXPAND_NLP=0); expand=True OOMs past 64-160Gi.
+# - Polynomial MuscleAnalysis uses MOCO_NUM_THREADS (not host cpu_count).
+# - Keep MOCO_PARALLEL_SEGMENTS=1 unless each pod has >>64Gi and expand stays off.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -40,13 +45,16 @@ spec:
         - name: MOCO_MESH_INTERVAL
           value: "0.02"
         - name: MOCO_PARALLEL_SEGMENTS
-          value: "6"
+          value: "1"
         - name: MOCO_NUM_THREADS
-          value: "3"
+          value: "1"
         - name: MOCO_CORE_DURATION_S
           value: "1.4"
         - name: MOCO_BUFFER_DURATION_S
           value: "0.14"
+        # Never enable unless you have 160Gi+ headroom; expand materializes the full SX NLP.
+        - name: OPENSIMAD_EXPAND_NLP
+          value: "0"
         - name: TMPDIR
           value: "/scratch"
         - name: MOCO_TEMP_DIR
@@ -57,7 +65,8 @@ spec:
         args:
         - |
           source deploy/scripts/job-env.sh
-          # Ensure OpenSimAD runtime deps (pip casadi==3.7.1, seaborn/pyyaml if needed).
+          # Runtime repair for incomplete images (no env rebuild): pip casadi==3.7.1,
+          # seaborn/pyyaml with deps under constraints.txt (pulls matplotlib; keeps numpy 1.25.x).
           # preprocess_moco.py imports casadi at module import time.
           source deploy/scripts/ensure-casadi.sh
           export SINDYFFUSE_RUN_LOG_ID="opensimad_shard_${JOB_COMPLETION_INDEX:-0}"
@@ -65,11 +74,11 @@ spec:
           python scripts/preprocess_moco.py --skip_normalization --num_workers 0 --activation_method opensimad
         resources:
           limits:
-            memory: 32Gi
-            cpu: "20"
+            memory: 48Gi
+            cpu: "4"
           requests:
-            memory: 32Gi
-            cpu: "20"
+            memory: 48Gi
+            cpu: "4"
         volumeMounts:
         - name: data
           mountPath: /mnt
@@ -80,4 +89,5 @@ spec:
         persistentVolumeClaim:
           claimName: sindyffuse
       - name: scratch
-        emptyDir: {}
+        emptyDir:
+          sizeLimit: 32Gi

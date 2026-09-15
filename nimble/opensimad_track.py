@@ -48,13 +48,31 @@ def run_opensimad_segmented(q: np.ndarray, *, cfg: MuscleActivationConfig, work_
                 idx, act, ok, meta, grf = _solve_one_segment_job(job)
                 results_by_index[idx] = (act, ok, meta, grf)
         else:
+            # Cap concurrent in-flight futures to max_workers so we do not
+            # pickle/queue every segment NLP up front.
             workers = min(parallel, len(jobs))
             ctx = get_context('spawn')
             with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as ex:
-                futs = [ex.submit(_solve_one_segment_job, job) for job in jobs]
-                for fut in as_completed(futs):
+                pending: set = set()
+                job_iter = iter(jobs)
+
+                def _submit_next() -> bool:
+                    try:
+                        job = next(job_iter)
+                    except StopIteration:
+                        return False
+                    pending.add(ex.submit(_solve_one_segment_job, job))
+                    return True
+
+                for _ in range(workers):
+                    if not _submit_next():
+                        break
+                while pending:
+                    fut = next(as_completed(pending))
+                    pending.remove(fut)
                     idx, act, ok, meta, grf = fut.result()
                     results_by_index[idx] = (act, ok, meta, grf)
+                    _submit_next()
 
     core_activations: List[np.ndarray] = []
     core_grf: List[np.ndarray] = []

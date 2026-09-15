@@ -70,7 +70,7 @@ class MuscleActivationConfig:
     moco_adaptive_mesh_speed_deg_s: float = 140.0
     moco_adaptive_mesh_interval: float = 0.02
     moco_use_function_based_paths: bool = True
-    moco_parallel_segments: int = 6
+    moco_parallel_segments: int = 1
     moco_core_duration_s: float = 1.4
     moco_buffer_duration_s: float = 0.14
     moco_stitch_blend_s: float = 0.14
@@ -132,7 +132,7 @@ def add_muscle_activation_cli_args(parser: argparse.ArgumentParser) -> None:
     grp.add_argument('--moco_adaptive_mesh_interval', type=float, default=None, help='Mesh interval when adaptive mesh triggers (default 0.01 s).')
     grp.add_argument('--moco_contact_toe_radius_m', type=float, default=None, help='Toe contact sphere radius in m (default 0.015).')
     grp.add_argument('--moco_no_function_based_paths', action='store_true', help='Use geometry muscle paths instead of function-based paths.')
-    grp.add_argument('--moco_parallel_segments', type=int, default=None, help='Concurrent segments per motion (default 6, MinT).')
+    grp.add_argument('--moco_parallel_segments', type=int, default=None, help='Concurrent segments per motion (default 1; raise carefully — each worker holds a full CasADi NLP).')
     # --opensim_log_level lives on add_common_preprocess_args; avoid duplicate when both are used.
     if not any('--opensim_log_level' in getattr(action, 'option_strings', ()) for action in parser._actions):
         grp.add_argument('--opensim_log_level', default='Off', choices=('Off', 'Critical', 'Error', 'Warn', 'Info', 'Debug'), help='OpenSim log verbosity during Moco/IK (default Off). Off also suppresses Rajagopal mesh warnings on the terminal.')
