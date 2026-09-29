@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import sys
+import tempfile
 from concurrent.futures import BrokenExecutor, ProcessPoolExecutor, as_completed
 from multiprocessing import get_context
 try:
@@ -52,11 +53,16 @@ def load_manifest_rows(path: Path) -> dict[str, dict]:
     rows: dict[str, dict] = {}
     if not path.is_file():
         return rows
-    for line in path.read_text(encoding='utf-8').splitlines():
+    for line in path.read_text(encoding='utf-8', errors='replace').splitlines():
         line = line.strip()
         if not line:
             continue
-        row = json.loads(line)
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            # A pod can be killed while appending its final line. Keep all prior
+            # fsynced checkpoints and retry the incomplete motion.
+            continue
         mid = str(row.get('id', ''))
         if mid:
             rows[mid] = row
@@ -69,6 +75,21 @@ def load_stage_manifest_index(out_root: Path, num_shards: int, *, stage: str) ->
     for shard_index in range(num_shards):
         merged.update(load_manifest_rows(manifest_path(out_root, shard_index, num_shards, stage=stage)))
     return merged
+
+def _rewrite_manifest_atomic(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f'.{path.name}.', dir=str(path.parent))
+    os.close(fd)
+    tmp = Path(tmp_name)
+    try:
+        with tmp.open('w', encoding='utf-8') as stream:
+            for row in rows:
+                stream.write(json.dumps(row, default=str) + '\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 def print_motion_progress(row: dict, *, logger: RunLogger) -> None:
     mid = str(row.get('id', ''))
@@ -86,7 +107,26 @@ def print_motion_progress(row: dict, *, logger: RunLogger) -> None:
 
 def run_preprocess_loop(*, work: list[tuple], process_one: Callable[[tuple], dict], manifest_file: Path, motion_workers: int, moco_threads: int, ok_statuses: set[str], logger: RunLogger, isolate_motion_process: bool=False) -> tuple[int, int, int]:
     ok = err = skip = 0
-    with manifest_file.open('w', encoding='utf-8') as mf:
+    manifest_file.parent.mkdir(parents=True, exist_ok=True)
+    existing = load_manifest_rows(manifest_file)
+    completed = {
+        mid: row for mid, row in existing.items()
+        if row.get('status') in ok_statuses or row.get('status') == 'skipped'
+    }
+    pending_work = [item for item in work if str(item[0]) not in completed]
+    for row in completed.values():
+        status = row.get('status')
+        if status in ok_statuses:
+            ok += 1
+        else:
+            skip += 1
+    if existing:
+        logger.progress(
+            f'Resuming {manifest_file.name}: {len(completed)} completed, '
+            f'{len(existing) - len(completed)} failed rows retried, {len(pending_work)} pending'
+        )
+        _rewrite_manifest_atomic(manifest_file, list(completed.values()))
+    with manifest_file.open('a', encoding='utf-8') as mf:
 
         def write_row(row: dict) -> None:
             mf.write(json.dumps(row, default=str) + '\n')
@@ -107,7 +147,7 @@ def run_preprocess_loop(*, work: list[tuple], process_one: Callable[[tuple], dic
                 pbar.update(1)
                 pbar.set_postfix({'last': str(row.get('id', '')), 'status': str(status)}, refresh=False)
 
-        pending = list(work)
+        pending = list(pending_work)
         while pending:
             batch = pending
             pending = []

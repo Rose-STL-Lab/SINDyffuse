@@ -2,9 +2,11 @@
 # kubectl apply -k deploy/jobs/preprocess-dataset/moco-track
 #
 # Memory notes (do not raise parallel segments without raising limits):
-# - CasADi NLP expand is OFF by default (OPENSIMAD_EXPAND_NLP=0); expand=True OOMs past 64-160Gi.
-# - Polynomial MuscleAnalysis uses MOCO_NUM_THREADS (not host cpu_count).
+# - CasADi NLP expand OFF (OPENSIMAD_EXPAND_NLP=0).
+# - Bounds jacobian rewrite OFF (OPENSIMAD_BOUNDS_REWRITE=0); rewrite alone can OOM.
+# - Workers require the compiled F.so and precomputed polynomial cache.
 # - Keep MOCO_PARALLEL_SEGMENTS=1 unless each pod has >>64Gi and expand stays off.
+# - ensure-casadi.sh also installs requests (utilsOpenSimAD import).
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -29,7 +31,7 @@ spec:
       containers:
       - name: sindyffuse-preprocess-moco-track
         image: sindyffuse:latest
-        imagePullPolicy: IfNotPresent
+        imagePullPolicy: Always
         workingDir: /mnt/SINDyffuse
         env:
         - name: PREPROCESS_NUM_SHARDS
@@ -55,6 +57,9 @@ spec:
         # Never enable unless you have 160Gi+ headroom; expand materializes the full SX NLP.
         - name: OPENSIMAD_EXPAND_NLP
           value: "0"
+        # Legacy jacobian→bounds rewrite OOMs on MinT Lai; keep off.
+        - name: OPENSIMAD_BOUNDS_REWRITE
+          value: "0"
         - name: TMPDIR
           value: "/scratch"
         - name: MOCO_TEMP_DIR
@@ -74,10 +79,10 @@ spec:
           python scripts/preprocess_moco.py --skip_normalization --num_workers 0 --activation_method opensimad
         resources:
           limits:
-            memory: 48Gi
+            memory: 64Gi
             cpu: "4"
           requests:
-            memory: 48Gi
+            memory: 64Gi
             cpu: "4"
         volumeMounts:
         - name: data

@@ -28,14 +28,26 @@ import shutil
 import importlib
 from scipy import signal
 from scipy.interpolate import interp1d
-import matplotlib.pyplot as plt
 import platform
 import urllib.request
-import requests
 import zipfile
-import seaborn as sns
 import subprocess
 import re
+
+# Optional / heavy imports — deferred so incomplete images fail at use-site
+# with a clear ensure-casadi install, and so module import stays light.
+try:
+    import requests
+except ImportError:  # pragma: no cover
+    requests = None
+try:
+    import matplotlib.pyplot as plt
+except ImportError:  # pragma: no cover
+    plt = None
+try:
+    import seaborn as sns
+except ImportError:  # pragma: no cover
+    sns = None
 
 from utils import (storage_to_numpy, storage_to_dataframe, 
                    download_kinematics, import_metadata, numpy_to_storage)
@@ -74,7 +86,60 @@ def interpolateNumpyArray_time(data, time, tIn, tEnd, N):
 
 # %% Solve problem with bounds instead of constraints.
 def solve_with_bounds(opti, tolerance, useExpressionGraphFunction, max_iterations=2500):
-    
+    """Solve Opti NLP.
+
+    The historical OpenCap path rewrites simple constraints into bounds via
+    ``ca.jacobian(opti.g, opti.x)`` + ``which_depends``. On the MinT Lai NLP
+    that alone can allocate tens–hundreds of GiB (even with expand=False).
+
+    Default: lightweight ``opti.solve`` with ``expand=False``.
+    Opt into the legacy bounds rewrite with ``OPENSIMAD_BOUNDS_REWRITE=1``
+    (still respects ``OPENSIMAD_EXPAND_NLP`` for CasADi expand).
+    """
+    expand_nlp = False
+    raw_expand = os.environ.get('OPENSIMAD_EXPAND_NLP', '').strip().lower()
+    if raw_expand in ('1', 'true', 'yes', 'on'):
+        expand_nlp = True
+    elif raw_expand in ('0', 'false', 'no', 'off'):
+        expand_nlp = False
+    _ = useExpressionGraphFunction
+
+    rewrite = os.environ.get('OPENSIMAD_BOUNDS_REWRITE', '').strip().lower() in (
+        '1', 'true', 'yes', 'on')
+    if not rewrite:
+        # Memory-safe path: keep Opti bounds/constraints as formulated.
+        print('solve_with_bounds: lightweight opti.solve (expand=%s)' % expand_nlp)
+        s_opts = {
+            "hessian_approximation": "limited-memory",
+            "mu_strategy": "adaptive",
+            "max_iter": int(max_iterations),
+            "tol": 10**(-tolerance),
+        }
+        p_opts = {"expand": bool(expand_nlp)}
+        if expand_nlp:
+            print('WARNING: OPENSIMAD_EXPAND_NLP enabled; CasADi expand can exceed 64-160Gi RSS')
+        opti.solver("ipopt", p_opts, s_opts)
+        try:
+            sol = opti.solve()
+            w_opt = sol.value(opti.x)
+            if not isinstance(w_opt, np.ndarray):
+                w_opt = np.asarray(w_opt, dtype=np.float64).reshape(-1, 1)
+            else:
+                w_opt = np.asarray(w_opt, dtype=np.float64).reshape(-1, 1)
+            stats = opti.stats()
+            return w_opt, stats
+        except Exception:
+            # Return best-effort iterate + stats for analyzeResults gating.
+            try:
+                w_opt = opti.debug.value(opti.x)
+                w_opt = np.asarray(w_opt, dtype=np.float64).reshape(-1, 1)
+            except Exception:
+                w_opt = np.zeros((opti.nx, 1), dtype=np.float64)
+            stats = opti.stats() if hasattr(opti, 'stats') else {'success': False}
+            return w_opt, stats
+
+    # ---- Legacy OpenCap bounds-rewrite path (high memory) ----
+    print('WARNING: OPENSIMAD_BOUNDS_REWRITE enabled; jacobian rewrite may OOM')
     # Get guess.
     guess = opti.debug.value(opti.x, opti.initial())
     # Sparsity pattern of the constraint Jacobian.
@@ -131,17 +196,6 @@ def solve_with_bounds(opti, tolerance, useExpressionGraphFunction, max_iteration
     
     prob = {'x': opti.x, 'f': opti.f, 'g': new_g}
     s_opts = {}
-    # OpenCap historically set expand=True with expression-graph F.py. For the
-    # full MinT Lai NLP that materializes a multi-100Gi SX graph and OOMs.
-    # Default OFF; opt in with OPENSIMAD_EXPAND_NLP=1 (or true/yes/on).
-    expand_nlp = False
-    raw_expand = os.environ.get('OPENSIMAD_EXPAND_NLP', '').strip().lower()
-    if raw_expand in ('1', 'true', 'yes', 'on'):
-        expand_nlp = True
-    elif raw_expand in ('0', 'false', 'no', 'off'):
-        expand_nlp = False
-    # Legacy: only expand when explicitly requested; ignore useExpressionGraphFunction.
-    _ = useExpressionGraphFunction
     s_opts["expand"] = bool(expand_nlp)
     if expand_nlp:
         print('WARNING: OPENSIMAD_EXPAND_NLP enabled; CasADi expand can exceed 64-160Gi RSS')
@@ -1902,7 +1956,11 @@ def download_file(url, file_name):
         
 # %% Download file given url (approach 2).
 def download_file_2(url, file_name):
-    
+    if requests is None:
+        raise ImportError(
+            "Missing 'requests' (needed to download OpenSimAD libraries). "
+            "Install with: python -m pip install 'requests>=2.31'"
+        )
     response = requests.get(url)
     open(file_name, 'wb').write(response.content)
     

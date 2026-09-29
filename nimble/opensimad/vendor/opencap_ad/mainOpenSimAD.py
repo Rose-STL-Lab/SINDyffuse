@@ -731,6 +731,9 @@ def run_tracking(baseDir, dataDir, subject, settings, case='0',
         'subtalar_angle_r': {'max': 35, 'min': -35},
         'mtp_angle_l': {'max': 5, 'min': -45},
         'mtp_angle_r': {'max': 5, 'min': -45}}
+    for coordinate, requested_bounds in settings.get('precomputedPolynomialBounds', {}).items():
+        if coordinate in polynomial_bounds:
+            polynomial_bounds[coordinate].update(requested_bounds)
     model_bounds = {
         'hip_flexion_l': {'max': 120, 'min': -30},
         'hip_flexion_r': {'max': 120, 'min': -30},
@@ -755,6 +758,11 @@ def run_tracking(baseDir, dataDir, subject, settings, case='0',
         dataToTrack_Qs_nsc, polynomial_bounds, model_bounds, coordinates_toTrack_l)
     type_bounds_polynomials = 'default'
     if len(updated_bounds) > 0:
+        if settings.get('requirePrecomputedPolynomials', False):
+            raise RuntimeError(
+                'Segment coordinates exceed the precomputed default polynomial bounds; '
+                'refusing trial-specific polynomial fitting in an activation worker.'
+            )
         # Modify the values of polynomial_bounds based on the values in
         # updated_bounds.  Also, create a dummy motion file specific to the
         # trial being processed.
@@ -783,6 +791,10 @@ def run_tracking(baseDir, dataDir, subject, settings, case='0',
                 or not os.path.exists(os.path.join(
                 pathModelFolder, model_full_name + '_polynomial_l_{}.npy'.format(type_bounds_polynomials)))):
             loadPolynomialData = False        
+        if not loadPolynomialData and settings.get('requirePrecomputedPolynomials', False):
+            raise RuntimeError(
+                'Required precomputed OpenSimAD polynomial files are missing from the segment model folder.'
+            )
         from muscleDataOpenSimAD import getPolynomialData
         polynomialData = {}
         polynomialData['r'] = getPolynomialData(

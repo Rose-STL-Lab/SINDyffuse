@@ -53,7 +53,14 @@ def compute_normalization(args: argparse.Namespace, logger: RunLogger | None=Non
     shard_meta: list[dict] = []
     for shard_index in range(num_shards):
         shard_path = _shard_manifest_path(out_root, shard_index, stage='moco')
-        shard_rows = _load_manifest_rows(shard_path)
+        # Restart-safe manifests may contain an earlier failed row followed by
+        # a successful retry. The final row for a motion is authoritative.
+        shard_rows_by_id: dict[str, dict] = {}
+        for row in _load_manifest_rows(shard_path):
+            mid = str(row.get('id', ''))
+            if mid:
+                shard_rows_by_id[mid] = row
+        shard_rows = list(shard_rows_by_id.values())
         shard_ok = shard_err = shard_skip = 0
         for row in shard_rows:
             mid = str(row.get('id', ''))

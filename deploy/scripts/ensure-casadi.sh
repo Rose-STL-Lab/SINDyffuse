@@ -75,4 +75,5 @@ fi
 
 _ensure_pip_mod seaborn 'seaborn>=0.13'
 _ensure_pip_mod yaml 'pyyaml>=6.0'
+_ensure_pip_mod requests 'requests>=2.31'
 _ensure_numpy_125

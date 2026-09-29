@@ -14,9 +14,10 @@ from nimble.opensimad.model_prep import ensure_ad_ready_artifacts
 from nimble.opensimad.paths import (
     ad_contacts_model_path,
     ad_scaled_adjusted_model_path,
+    compiled_external_path,
     external_function_dir,
-    promote_opensimad_polynomial_cache,
     stage_opensimad_polynomial_cache,
+    validate_opensimad_worker_artifacts,
     vendor_dummy_motion_path,
     vendor_opencap_ad_dir,
 )
@@ -104,12 +105,8 @@ def _parse_grf_mot(path: Path | None, *, n_frames: int, fps: float) -> np.ndarra
 def solve_opensimad_segment(q: np.ndarray, *, cfg: MuscleActivationConfig, solve_dir: Path, mesh_interval: float | None=None) -> Tuple[np.ndarray, bool, Dict[str, Any], np.ndarray]:
     """Run one MinT/OpenCap OpenSimAD tracking window on LaiUhlrich2022 coordinates."""
     ensure_ad_ready_artifacts(force=False)
+    validate_opensimad_worker_artifacts(load_library=True, deep=False)
     ext_dir = external_function_dir()
-    if not (ext_dir / 'F_map.npy').is_file():
-        raise FileNotFoundError(
-            f'Missing OpenSimAD artifacts under {ext_dir}. '
-            'Run: python scripts/build_lai_opensimad_ext.py'
-        )
     _ensure_vendor_on_path()
     arr = np.asarray(q, dtype=np.float64)
     n_frames = int(arr.shape[0])
@@ -135,7 +132,9 @@ def solve_opensimad_segment(q: np.ndarray, *, cfg: MuscleActivationConfig, solve
     ext_dst = model_folder / 'ExternalFunction'
     if ext_dst.exists():
         shutil.rmtree(ext_dst)
-    shutil.copytree(ext_dir, ext_dst)
+    ext_dst.mkdir(parents=True)
+    for source in (compiled_external_path(), ext_dir / 'F_map.npy'):
+        shutil.copy2(source, ext_dst / source.name)
 
     mapping = build_lai_coord_mapping(model_path=ad_scaled_adjusted_model_path())
     mot_path = kin_folder / 'segment.mot'
@@ -183,22 +182,18 @@ def solve_opensimad_segment(q: np.ndarray, *, cfg: MuscleActivationConfig, solve
     }
     try:
         from mainOpenSimAD import run_tracking
-        try:
-            run_tracking(
-                str(fake_base),
-                str(data_dir),
-                subject,
-                settings,
-                case='0',
-                solveProblem=True,
-                analyzeResults=True,
-                writeGUI=False,
-                computeKAM=False,
-                computeMCF=False,
-            )
-        finally:
-            # Publish MA/polynomial fits even if Ipopt fails later.
-            promote_opensimad_polynomial_cache(model_folder)
+        run_tracking(
+            str(fake_base),
+            str(data_dir),
+            subject,
+            settings,
+            case='0',
+            solveProblem=True,
+            analyzeResults=True,
+            writeGUI=False,
+            computeKAM=False,
+            computeMCF=False,
+        )
         act_mot = next(dyn_folder.glob('kinematics_activations_*.mot'), None)
         grf_mot = next(dyn_folder.glob('GRF_*.mot'), None)
         if act_mot is None:

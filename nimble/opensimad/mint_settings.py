@@ -14,14 +14,20 @@ MINT_PARALLEL_SEGMENTS = 1
 # OpenCap uses ipopt_tolerance as decade exponent: tol = 10**(-ipopt_tolerance).
 # 1e-3 => ipopt_tolerance=3.
 MINT_IPOPT_TOLERANCE = 3
-
-def _prefer_expression_graph_function() -> bool:
-    """Use F.py when F.so is missing; prefer compiled external when present."""
-    try:
-        from nimble.opensimad.paths import external_function_dir
-        return not (external_function_dir() / 'F.so').is_file()
-    except Exception:
-        return True
+MINT_POLYNOMIAL_BOUNDS: Dict[str, Dict[str, float]] = {
+    'hip_flexion_l': {'max': 120, 'min': -30},
+    'hip_flexion_r': {'max': 120, 'min': -30},
+    'hip_adduction_l': {'max': 30, 'min': -50},
+    'hip_adduction_r': {'max': 30, 'min': -50},
+    'hip_rotation_l': {'max': 40, 'min': -40},
+    'hip_rotation_r': {'max': 40, 'min': -40},
+    'knee_angle_l': {'max': 140, 'min': 0},
+    'knee_angle_r': {'max': 140, 'min': 0},
+    'ankle_angle_l': {'max': 50, 'min': -50},
+    'ankle_angle_r': {'max': 50, 'min': -50},
+    'subtalar_angle_l': {'max': 35, 'min': -35},
+    'subtalar_angle_r': {'max': 35, 'min': -35},
+}
 
 def mint_tracking_settings(*, mass_kg: float=70.0, height_m: float=1.75, trial_name: str='segment') -> Dict[str, Any]:
     """OpenCap get_setup('other') tuned to MinT mesh/tol/iters; MTP welded off."""
@@ -32,8 +38,13 @@ def mint_tracking_settings(*, mass_kg: float=70.0, height_m: float=1.75, trial_n
         'height_m': float(height_m),
         'treadmill_speed': 0,
         'contact_side': 'all',
-        # F.py path is fine without CasADi expand (see solve_with_bounds + OPENSIMAD_EXPAND_NLP).
-        'useExpressionGraphFunction': _prefer_expression_graph_function(),
+        # Production workers require the prebuilt dynamic library. F.py embeds a
+        # very large symbolic graph in every collocation interval and can OOM.
+        'useExpressionGraphFunction': False,
+        # Out-of-range segments become MinT-style gaps instead of launching an
+        # unbounded, trial-specific MuscleAnalysis fit inside a worker.
+        'requirePrecomputedPolynomials': True,
+        'precomputedPolynomialBounds': MINT_POLYNOMIAL_BOUNDS,
         'withMTP': False,
         'withArms': True,
         'withLumbarCoordinateActuators': True,

@@ -1,5 +1,5 @@
 from __future__ import annotations
-import os
+import platform
 import shutil
 import sys
 from pathlib import Path
@@ -8,7 +8,7 @@ from pathlib import Path
 import casadi  # noqa: F401
 
 from nimble.opensimad.model_prep import ensure_ad_ready_artifacts
-from nimble.opensimad.paths import ad_contacts_model_path, ad_scaled_adjusted_model_path, external_function_dir, opensimad_dir, vendor_opencap_ad_dir
+from nimble.opensimad.paths import ad_contacts_model_path, ad_scaled_adjusted_model_path, compiled_external_path, external_function_dir, external_function_metadata_path, opensimad_dir, validate_compiled_external, vendor_opencap_ad_dir, write_external_function_metadata
 from nimble.opensimad import OPENSIM_MODEL_BASENAME
 
 def _ensure_vendor_on_path() -> Path:
@@ -17,7 +17,7 @@ def _ensure_vendor_on_path() -> Path:
         sys.path.insert(0, str(vendor))
     return vendor
 
-def build_lai_opensimad_external(*, force: bool=False, use_expression_graph: bool=True) -> Path:
+def build_lai_opensimad_external(*, force: bool=False, use_expression_graph: bool=False) -> Path:
     """Generate OpenSimAD external function F for the AD-ready LaiUhlrich2022 contacts model.
 
     Downloads OpenCap's opensimAD-install toolchain on first run (Linux/macOS/Windows).
@@ -28,7 +28,17 @@ def build_lai_opensimad_external(*, force: bool=False, use_expression_graph: boo
     out_dir.mkdir(parents=True, exist_ok=True)
     ext_py = out_dir / 'F.py'
     ext_map = out_dir / 'F_map.npy'
-    if not force and ext_py.is_file() and ext_map.is_file():
+    ext_binary = compiled_external_path()
+    expected = ext_py if use_expression_graph else ext_binary
+    if force:
+        expected.unlink(missing_ok=True)
+        ext_map.unlink(missing_ok=True)
+        if not use_expression_graph:
+            external_function_metadata_path().unlink(missing_ok=True)
+    if not force and expected.is_file() and ext_map.is_file():
+        if use_expression_graph:
+            return out_dir
+        validate_compiled_external(load_library=True, require_metadata=True)
         return out_dir
 
     vendor = _ensure_vendor_on_path()
@@ -85,8 +95,18 @@ def build_lai_opensimad_external(*, force: bool=False, use_expression_graph: boo
                 else:
                     dest.unlink()
             shutil.move(str(p), str(dest))
-    if not (out_dir / 'F_map.npy').is_file():
-        raise RuntimeError(f'OpenSimAD codegen failed; missing F_map.npy under {out_dir}')
+    if not expected.is_file() or expected.stat().st_size <= 0 or not ext_map.is_file():
+        raise RuntimeError(
+            f'OpenSimAD codegen failed; expected {expected.name} and F_map.npy under {out_dir}'
+        )
+    if not use_expression_graph:
+        if platform.system() != 'Linux':
+            print(f'WARNING: compiled external was built for {platform.system()}, not Linux/Kubernetes')
+        validate_compiled_external(load_library=True, require_metadata=False)
+        write_external_function_metadata()
+        validate_compiled_external(load_library=True, require_metadata=True)
+        ext_py.unlink(missing_ok=True)
+        shutil.rmtree(out_dir / '__pycache__', ignore_errors=True)
     return out_dir
 
 # Back-compat alias for older scripts/tests.

@@ -49,13 +49,17 @@ cd /path/to/SINDyffuse
 | Job | Script | Purpose |
 |-----|--------|---------|
 | 1 — IK | `scripts/preprocess_ik.py` | joints → `lai_cache/{id}.npz` with `q` (+ placeholders) |
-| 2 — OpenSimAD ext | `scripts/build_lai_opensimad_ext.py` | one-shot AD model + CasADi external function `F` |
-| 3 — Activations | `scripts/preprocess_moco.py` | MinT/OpenSimAD → activations + GRF + validity mask (patches NPZ) |
-| 4 — Norm | `scripts/compute_normalization.py` | merge manifests → `Mean.npy` / `Std.npy` |
+| 2 — Compiled OpenSimAD ext | `scripts/build_lai_opensimad_ext.py` | one-shot AD model + validated `F.so` |
+| 3 — Polynomial cache | `scripts/build_lai_opensimad_polynomials.py` | one-time full-ROM muscle path fitting |
+| 4 — Canary | `scripts/run_opensimad_canary.py` | one MinT-sized solve before worker fan-out |
+| 5 — Activations | `scripts/preprocess_moco.py` | MinT/OpenSimAD → activations + GRF + validity mask (patches NPZ) |
+| 6 — Norm | `scripts/compute_normalization.py` | merge manifests → `Mean.npy` / `Std.npy` |
 
 ```bash
 python scripts/preprocess_ik.py --max_motions 5
 python scripts/build_lai_opensimad_ext.py
+python scripts/build_lai_opensimad_polynomials.py --num_threads 4
+python scripts/run_opensimad_canary.py
 python scripts/preprocess_moco.py --max_motions 5 --activation_method opensimad
 python scripts/compute_normalization.py --num_shards 1 --wait
 ```
@@ -83,9 +87,11 @@ kubectl apply -k deploy/jobs/preprocess-dataset/inverse_kinematics -n YOUR_NAMES
 
 **IK quality gates (Job 1):** structural checks only — valid `q`, ≥ 2 frames, and all frames must converge (`success_ratio = 1`). HumanML3D joint-position fit stats are recorded for diagnostics but are **not** used to reject motions. Failed IK motions are `ik_failed` in the manifest; activation skips them via prior status only.
 
-**Activation gates (Job 3, MinT gap policy):** a motion is `ok` if **≥1** OpenSimAD segment succeeds. Failed segments leave **NaN gaps** and `muscle_activation_mask=0`. Whole-motion coordinate RMSE is diagnostic only (no longer hard-fails the clip). Manifest statuses: `ik_ok` / `ik_failed` (Job 1), `ok` / `moco_failed` / `moco_skipped` (Job 3).
+**Activation gates (Job 5, MinT gap policy):** a motion is `ok` if **≥1** OpenSimAD segment succeeds. Failed segments leave **NaN gaps** and `muscle_activation_mask=0`. Whole-motion coordinate RMSE is diagnostic only (no longer hard-fails the clip). Manifest statuses: `ik_ok` / `ik_failed` (Job 1), `ok` / `moco_failed` / `moco_skipped` (Job 5).
 
-By default, activation K8s pods run **6 concurrent segments** (`MOCO_PARALLEL_SEGMENTS=6`, MinT) with **2500** Ipopt iterations and mesh interval **0.02 s** (50 colloc pts/s). Activation method is **OpenSimAD** only on this branch (`moco_track` requires removed nimblephysics).
+For memory safety, activation pods run **one segment at a time**, and each segment runs in a fresh spawned process. The cluster still runs up to 180 indexed pods in parallel. Settings remain MinT-aligned: **2500** Ipopt iterations, mesh interval **0.02 s** (50 collocation points/s), 1.4-second cores, and 0.14-second buffers.
+
+Workers require the prebuilt `F.so` and polynomial cache. They never fall back to the high-memory `F.py` expression graph or perform polynomial MuscleAnalysis lazily. A segment outside the precomputed full model range becomes a failed/gap segment rather than launching a worker-local fit.
 
 Each `{id}.npz` stores generalized coordinates `q` `[T, 31]` plus `muscle_activations` `[T, 80]`, `muscle_activation_mask` `[T]`, `sim_grf` `[T, 18]`, and SINDy feature rows.
 
@@ -102,7 +108,9 @@ Useful flags: `--activation_method`, `--moco_core_duration_s`, `--moco_buffer_du
 ```bash
 kubectl delete job sindyffuse-preprocess-moco-track -n YOUR_NAMESPACE   # before redeploy
 kubectl apply -k deploy/jobs/preprocess-dataset/build-opensimad-ext -n YOUR_NAMESPACE
-kubectl apply -k deploy/jobs/preprocess-dataset/inverse_kinematics -n YOUR_NAMESPACE
+kubectl apply -k deploy/jobs/preprocess-dataset/build-opensimad-polynomials -n YOUR_NAMESPACE
+kubectl apply -k deploy/jobs/preprocess-dataset/opensimad-canary -n YOUR_NAMESPACE
+kubectl apply -k deploy/jobs/preprocess-dataset/moco-track -n YOUR_NAMESPACE
 ```
 
 Local sharded test:
@@ -204,8 +212,10 @@ See [deploy/README.md](deploy/README.md) for image build, storage setup, and the
 | Path | Role |
 |------|------|
 | `scripts/preprocess_ik.py` | Job 1: HumanML3D → `lai_cache/` NPZ |
-| `scripts/preprocess_moco.py` | Job 3: OpenSimAD activations → patch NPZ |
-| `scripts/build_lai_opensimad_ext.py` | One-shot OpenSimAD external function build |
+| `scripts/build_lai_opensimad_ext.py` | One-shot compiled OpenSimAD `F.so` build |
+| `scripts/build_lai_opensimad_polynomials.py` | One-shot muscle polynomial cache build |
+| `scripts/run_opensimad_canary.py` | Validate one MinT-sized solve before fan-out |
+| `scripts/preprocess_moco.py` | Job 5: OpenSimAD activations → patch NPZ |
 | `scripts/compute_normalization.py` | Merge shard manifests; compute `Mean.npy` / `Std.npy` |
 | `scripts/train_sindy.py` | Train SINDy text→Xi model |
 | `scripts/train_surrogate.py` | Train q→activation surrogate |
@@ -241,4 +251,5 @@ python scripts/preprocess_moco.py --max_motions 1 --opensim_log_level Warn
 ```
 
 - Re-run preprocess after upgrading the NPZ schema (e.g. adding `muscle_activations`).  
+- Run the external-function, polynomial-cache, and canary stages before activation workers. Workers intentionally fail preflight when artifacts are missing or stale.
 - If Ctrl+C does not stop activation workers: `pkill -9 -f "python scripts/preprocess_moco.py"`.

@@ -1,0 +1,63 @@
+# One MinT-sized solve validates artifacts and memory before 180 workers launch.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sindyffuse-opensimad-canary
+  labels:
+    app: sindyffuse-opensimad-canary
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 14400
+  template:
+    metadata:
+      labels:
+        app: sindyffuse-opensimad-canary
+    spec:
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 300
+      containers:
+      - name: sindyffuse-opensimad-canary
+        image: sindyffuse:latest
+        imagePullPolicy: Always
+        workingDir: /mnt/SINDyffuse
+        env:
+        - name: MOCO_NUM_THREADS
+          value: "1"
+        - name: OPENSIMAD_EXPAND_NLP
+          value: "0"
+        - name: OPENSIMAD_BOUNDS_REWRITE
+          value: "0"
+        - name: TMPDIR
+          value: "/scratch"
+        - name: MOCO_TEMP_DIR
+          value: "/scratch"
+        - name: SINDYFFUSE_RUN_LOG_ID
+          value: opensimad-canary
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          source deploy/scripts/job-env.sh
+          source deploy/scripts/ensure-casadi.sh
+          mkdir -p /scratch
+          python scripts/run_opensimad_canary.py \
+            --mesh_interval 0.02 \
+            --max_iterations 2500
+        resources:
+          limits:
+            memory: 64Gi
+            cpu: "4"
+          requests:
+            memory: 64Gi
+            cpu: "4"
+        volumeMounts:
+        - name: data
+          mountPath: /mnt
+        - name: scratch
+          mountPath: /scratch
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: sindyffuse
+      - name: scratch
+        emptyDir:
+          sizeLimit: 32Gi

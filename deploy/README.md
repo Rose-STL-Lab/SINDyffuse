@@ -8,17 +8,19 @@ SINDyffuse runs locally via `scripts/*.py` and on Kubernetes via Job manifests i
 deploy/
   pvc.yaml                    # cluster PVC (apply once)
   scripts/
-    preprocess-dataset-orchestrate.sh  # entry: full | ik | path-fit | moco
+    preprocess-dataset-orchestrate.sh  # entry: full | ik | build-ext | build-polynomials | canary | moco
     k8s-orchestrate-lib.sh             # shared kubectl apply + wait helpers
     path-fit-orchestrate.sh            # single path-fit Job (sample → convert → fit)
-    moco-track-orchestrate.sh          # OpenSimAD ext → workers → normalization
+    moco-track-orchestrate.sh          # F.so → polynomials → canary → workers → normalization
   components/
     cluster-config/           # edit image + PVC here (applies to all jobs/dev pod)
   jobs/
     preprocess-dataset/
       inverse_kinematics/       # IndexedJob (180 × 1 CPU)
       fit-function-paths/       # legacy path-fit (skipped on uhlrich; OpenSimAD polynomials)
-      build-opensimad-ext/      # one-shot OpenSimAD F codegen
+      build-opensimad-ext/      # one-shot compiled OpenSimAD F.so
+      build-opensimad-polynomials/ # one-shot MuscleAnalysis/path cache
+      opensimad-canary/         # one MinT-sized validation solve
       moco-track/
         job.yaml                # IndexedJob OpenSimAD (MinT) workers
       normalization/            # Mean.npy / Std.npy after activation workers
@@ -35,7 +37,7 @@ deploy/
 
 | Local | Kubernetes |
 |-------|------------|
-| `python scripts/preprocess_ik.py ...` then `preprocess_moco.py` | `./deploy/scripts/preprocess-dataset-orchestrate.sh [full\|ik\|path-fit\|moco]` |
+| `python scripts/preprocess_ik.py ...` then the OpenSimAD setup/worker scripts | `./deploy/scripts/preprocess-dataset-orchestrate.sh [full\|ik\|build-ext\|build-polynomials\|canary\|moco]` |
 | `python scripts/compute_normalization.py ...` | `./deploy/scripts/preprocess-dataset-orchestrate.sh moco` or `kubectl apply -k deploy/jobs/preprocess-dataset/normalization` |
 | `python scripts/fit_rajagopal_function_paths.py ...` (Mode A local) | `./deploy/scripts/preprocess-dataset-orchestrate.sh path-fit YOUR_NAMESPACE` |
 | `python scripts/benchmark_moco_parallel.py ...` | `kubectl apply -k deploy/jobs/benchmark-moco-parallel` |
@@ -236,7 +238,7 @@ All manifests assume the PVC is mounted at `/mnt` with the repo at `/mnt/SINDyff
 
 Only **preprocess** jobs accept optional env: `PREPROCESS_NUM_SHARDS`, `PATH_FIT_SAMPLE_MOTIONS`, `PATH_FIT_NUM_THREADS`, `PATH_FIT_NUM_WORKERS`, `MAX_MOTIONS`, `SKIP_EXISTING` (omit `SKIP_EXISTING` to reprocess all motions).
 
-Preprocess uses Indexed worker Jobs (`parallelism=completions=180` for inverse kinematics and moco). Path-fit is a single Job. **Pipeline sequencing** is done by local scripts in `deploy/scripts/` (`kubectl apply` + `kubectl wait` from your laptop — no in-cluster orchestrator Jobs or RBAC). Normalization merges moco shard manifests after moco workers finish.
+Preprocess uses Indexed worker Jobs (`parallelism=completions=180` for inverse kinematics and activation). External-function compilation, polynomial fitting, canary validation, and normalization are single Jobs. **Pipeline sequencing** is done by local scripts in `deploy/scripts/` (`kubectl apply` + `kubectl wait` from your laptop — no in-cluster orchestrator Jobs or RBAC).
 
 ## Resource profiles
 
@@ -244,8 +246,10 @@ Preprocess uses Indexed worker Jobs (`parallelism=completions=180` for inverse k
 |-----|------|--------|------|
 | dev | 8–32 | 32–64Gi | — (add in pod.yaml if needed) |
 | preprocess-dataset/inverse_kinematics | 180 × 1 | 180 × 2Gi | — |
-| preprocess-dataset/build-opensimad-ext | 16 | 32Gi | — |
-| preprocess-dataset/moco-track | 180 × 20 | 180 × 32Gi | — |
+| preprocess-dataset/build-opensimad-ext | 16 | 128Gi | — |
+| preprocess-dataset/build-opensimad-polynomials | 16 | 96Gi | — |
+| preprocess-dataset/opensimad-canary | 4 | 64Gi | — |
+| preprocess-dataset/moco-track | 180 × 4 | 180 × 64Gi | — |
 | preprocess-dataset/normalization | 1 | 2Gi | — |
 | preprocess-dataset/fit-function-paths | 128 | 256Gi | — |
 | benchmark-moco-parallel | 64 | 64Gi | — |
@@ -272,7 +276,7 @@ If the pod only exposes one working GPU, training automatically falls back to si
 Set `NPROC_PER_NODE=1` or `SINDYFFUSE_NO_TORCHRUN=1` to force single-process training.
 Startup logs include `[distributed/gpu]` with rank, world size, device count, and `/dev/nvidia*` nodes.
 
-## Path fit (Job 2)
+## Legacy path fit
 
 **Mode A (local):** `python scripts/fit_rajagopal_function_paths.py --sample_motions 200` — single process, optional `--num_workers` / `--num_threads`.
 
@@ -287,33 +291,40 @@ Startup logs include `[distributed/gpu]` with rank, world size, device count, an
 |-----|-----------|------|
 | `sindyffuse-fit-function-paths` | 128 CPU, 256Gi | sample → B3D→`.mot` (ProcessPool) → merge → OpenSim path fit |
 
-Run after IK (Job 1) and before OpenSimAD ext build / activation workers (Job 3). Path fit must use the **MTP-welded** Rajagopal base so FunctionBasedPathSet does not reference `mtp_angle_*`.
+This Rajagopal path-fit stage is not used by the LaiUhlrich2022/OpenSimAD pipeline.
 
-## OpenSimAD external function (Job 3b)
+## OpenSimAD initialization Jobs
 
-One-shot CasADi external function build (workers only consume cached `F` / `F_map.npy`):
+OpenSimAD setup is deliberately serialized before the 180-worker fan-out:
 
 ```bash
-# Local supernode (same entrypoint as K8s)
-python scripts/build_rajagopal_opensimad_ext.py
+python scripts/build_lai_opensimad_ext.py --force
+python scripts/build_lai_opensimad_polynomials.py --force --num_threads 16
+python scripts/run_opensimad_canary.py
 
-# Cluster
+# Cluster stages (normally use the orchestrator below)
 kubectl apply -k deploy/jobs/preprocess-dataset/build-opensimad-ext -n YOUR_NAMESPACE
-# or via: ./deploy/scripts/moco-track-orchestrate.sh  (runs build then workers)
+kubectl apply -k deploy/jobs/preprocess-dataset/build-opensimad-polynomials -n YOUR_NAMESPACE
+kubectl apply -k deploy/jobs/preprocess-dataset/opensimad-canary -n YOUR_NAMESPACE
 ```
 
-Artifacts land under `models/rajagopal/opensimad/ExternalFunction/` (and the same path on the PVC).
+Artifacts land under `models/lai_uhlrich/opensimad/` on the PVC. The external build must produce a loadable `ExternalFunction/F.so`; `F.py` is not accepted by production workers because embedding that expression graph can exhaust 64–160+ GiB. The polynomial Job builds full-model-range left/right caches once in local scratch and publishes them atomically.
 
-Activation workers default to `ACTIVATION_METHOD=opensimad` with `MOCO_PARALLEL_SEGMENTS=6`, `MOCO_MAX_ITERATIONS=2500`, mesh `0.02` s. Set `ACTIVATION_METHOD=moco_track` for legacy A/B.
+The canary performs one 1.68-second solve with the same compiled function, polynomial cache, mesh, and memory limit used by workers. A failed canary stops orchestration before the indexed Job is created.
+
+Activation workers use `ACTIVATION_METHOD=opensimad`, `MOCO_PARALLEL_SEGMENTS=1`, `MOCO_NUM_THREADS=1`, `MOCO_MAX_ITERATIONS=2500`, and mesh `0.02` s. Each segment runs in a fresh spawned process so native CasADi/Ipopt memory is released at process exit. Shard manifests append/fsync after each motion and retain completed rows across pod retries.
 
 ## Pipeline order
 
 1. `./deploy/scripts/preprocess-dataset-orchestrate.sh ik` (or apply `inverse_kinematics/` Job)
-2. `./deploy/scripts/preprocess-dataset-orchestrate.sh path-fit`
-3. `./deploy/scripts/preprocess-dataset-orchestrate.sh moco`  # builds OpenSimAD ext, then activation workers, then normalization
-4. `train-sindy`
-5. `train-surrogate`
-6. `train-diffusion/{none,opensim,sindy}`
+2. compiled `F.so` Job
+3. polynomial-cache Job
+4. one-segment canary Job
+5. indexed activation workers
+6. normalization
+7. `train-sindy`
+8. `train-surrogate`
+9. `train-diffusion/{none,opensim,sindy}`
 
 Single entry point for the full preprocess pipeline:
 

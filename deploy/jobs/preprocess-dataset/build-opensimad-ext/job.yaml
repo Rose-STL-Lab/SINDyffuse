@@ -7,16 +7,18 @@ metadata:
     app: sindyffuse-build-opensimad-ext
 spec:
   backoffLimit: 3
+  activeDeadlineSeconds: 21600
   template:
     metadata:
       labels:
         app: sindyffuse-build-opensimad-ext
     spec:
       restartPolicy: Never
+      terminationGracePeriodSeconds: 300
       containers:
       - name: sindyffuse-build-opensimad-ext
         image: sindyffuse:latest
-        imagePullPolicy: IfNotPresent
+        imagePullPolicy: Always
         workingDir: /mnt/SINDyffuse
         env:
         - name: SINDYFFUSE_RUN_LOG_ID
@@ -28,13 +30,15 @@ spec:
           # Incomplete images/envs often lack pip casadi and vendor imports
           # (seaborn/pyyaml). Mirrors env/Dockerfile + environment.yaml pins.
           source deploy/scripts/ensure-casadi.sh
-          python scripts/build_lai_opensimad_ext.py --force
+          # Production workers require the compiled external. Never substitute
+          # the high-memory F.py expression graph.
+          python scripts/build_lai_opensimad_ext.py --force --no_expression_graph
         resources:
           limits:
-            memory: 32Gi
+            memory: 128Gi
             cpu: "16"
           requests:
-            memory: 32Gi
+            memory: 128Gi
             cpu: "16"
         volumeMounts:
         - name: data

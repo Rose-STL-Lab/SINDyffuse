@@ -1,0 +1,58 @@
+# One-shot: generate reusable MuscleAnalysis/polynomial caches before workers.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sindyffuse-build-opensimad-polynomials
+  labels:
+    app: sindyffuse-build-opensimad-polynomials
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 43200
+  template:
+    metadata:
+      labels:
+        app: sindyffuse-build-opensimad-polynomials
+    spec:
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 300
+      containers:
+      - name: sindyffuse-build-opensimad-polynomials
+        image: sindyffuse:latest
+        imagePullPolicy: Always
+        workingDir: /mnt/SINDyffuse
+        env:
+        - name: MOCO_NUM_THREADS
+          value: "16"
+        - name: TMPDIR
+          value: "/scratch"
+        - name: SINDYFFUSE_RUN_LOG_ID
+          value: build-opensimad-polynomials
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          source deploy/scripts/job-env.sh
+          source deploy/scripts/ensure-casadi.sh
+          mkdir -p /scratch/polynomial-cache
+          python scripts/build_lai_opensimad_polynomials.py \
+            --force \
+            --num_threads "${MOCO_NUM_THREADS}" \
+            --work_dir /scratch/polynomial-cache
+        resources:
+          limits:
+            memory: 96Gi
+            cpu: "16"
+          requests:
+            memory: 96Gi
+            cpu: "16"
+        volumeMounts:
+        - name: data
+          mountPath: /mnt
+        - name: scratch
+          mountPath: /scratch
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: sindyffuse
+      - name: scratch
+        emptyDir:
+          sizeLimit: 64Gi

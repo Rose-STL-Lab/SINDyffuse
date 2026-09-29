@@ -53,6 +53,12 @@ def _process_one_moco(item: tuple) -> dict:
     return row
 
 def run_preprocess_moco(args: argparse.Namespace, logger) -> None:
+    from nimble.opensimad.paths import validate_opensimad_worker_artifacts
+    artifacts = validate_opensimad_worker_artifacts(load_library=True, deep=False)
+    logger.progress(
+        'OpenSimAD preflight OK: '
+        f"{artifacts['external_function']['library']} + precomputed polynomial cache"
+    )
     ids, shard_index, num_shards, hml_root, out_root = resolve_shard_motion_ids(args)
     act_cfg = muscle_activation_config_from_args(args, fps=float(args.fps), mass_kg=float(args.mass_kg))
     act_cfg_json = json.dumps(muscle_activation_config_to_dict(act_cfg))
@@ -76,7 +82,7 @@ def run_preprocess_moco(args: argparse.Namespace, logger) -> None:
         sys.exit(1)
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description='Job 3: OpenSimAD (MinT) muscle activations on Lai IK NPZ cache')
+    parser = argparse.ArgumentParser(description='Job 5: OpenSimAD (MinT) muscle activations on Lai IK NPZ cache')
     add_common_preprocess_args(parser)
     parser.add_argument('--moco_parallel_motions', type=int, default=1)
     add_muscle_activation_cli_args(parser)

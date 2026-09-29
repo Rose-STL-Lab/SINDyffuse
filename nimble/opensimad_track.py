@@ -2,6 +2,7 @@ from __future__ import annotations
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from multiprocessing import get_context
 from pathlib import Path
+import sys
 from typing import Any, Dict, List
 import numpy as np
 import casadi  # noqa: F401
@@ -18,6 +19,15 @@ def _solve_one_segment_job(args: tuple) -> tuple:
     activations, solve_ok, solve_meta, grf = solve_opensimad_segment(
         q_seg, cfg=cfg, solve_dir=Path(solve_dir_s), mesh_interval=mesh_interval)
     return (int(spec_index), activations, bool(solve_ok), solve_meta, grf)
+
+def solve_one_opensimad_segment_isolated(job: tuple) -> tuple:
+    """Solve one segment in a spawned process so native memory dies with it."""
+    ctx = get_context('spawn')
+    kwargs = {'max_workers': 1, 'mp_context': ctx}
+    if sys.version_info >= (3, 11):
+        kwargs['max_tasks_per_child'] = 1
+    with ProcessPoolExecutor(**kwargs) as executor:
+        return executor.submit(_solve_one_segment_job, job).result()
 
 def run_opensimad_segmented(q: np.ndarray, *, cfg: MuscleActivationConfig, work_dir: Path) -> MuscleActivationResult:
     from nimble.muscle_activation import muscle_activation_config_to_dict
@@ -45,14 +55,17 @@ def run_opensimad_segmented(q: np.ndarray, *, cfg: MuscleActivationConfig, work_
     with opensim_quiet(cfg.opensim_log_level):
         if parallel <= 1 or len(jobs) <= 1:
             for job in jobs:
-                idx, act, ok, meta, grf = _solve_one_segment_job(job)
+                idx, act, ok, meta, grf = solve_one_opensimad_segment_isolated(job)
                 results_by_index[idx] = (act, ok, meta, grf)
         else:
             # Cap concurrent in-flight futures to max_workers so we do not
             # pickle/queue every segment NLP up front.
             workers = min(parallel, len(jobs))
             ctx = get_context('spawn')
-            with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as ex:
+            pool_kwargs = {'max_workers': workers, 'mp_context': ctx}
+            if sys.version_info >= (3, 11):
+                pool_kwargs['max_tasks_per_child'] = 1
+            with ProcessPoolExecutor(**pool_kwargs) as ex:
                 pending: set = set()
                 job_iter = iter(jobs)
 
