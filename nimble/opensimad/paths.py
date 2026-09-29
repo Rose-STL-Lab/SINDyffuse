@@ -172,7 +172,7 @@ def validate_compiled_external(*, load_library: bool=True, require_metadata: boo
     if load_library:
         import casadi as ca
         try:
-            external = ca.external('sindyffuse_F_preflight', str(library))
+            external = ca.external('F', str(library))
             if int(external.n_in()) != 1 or int(external.n_out()) != 1:
                 raise RuntimeError(
                     f'unexpected CasADi signature n_in={external.n_in()} n_out={external.n_out()}'
