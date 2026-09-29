@@ -19,10 +19,10 @@ from common.cpu import configure_compute_threads, detect_usable_cpus
 def main() -> None:
     parser = argparse.ArgumentParser(description='Build reusable LaiUhlrich2022 OpenSimAD polynomial caches')
     parser.add_argument('--force', action='store_true', help='Rebuild scratch artifacts before publishing')
-    parser.add_argument('--num_threads', type=int, default=0, help='MuscleAnalysis workers (default: MOCO_NUM_THREADS/cgroup)')
+    parser.add_argument('--num_threads', type=int, default=1, help='MuscleAnalysis workers (default: 1; increase only after measuring peak RSS)')
     parser.add_argument('--work_dir', default='', help='Scratch build directory (default: TMPDIR)')
     args = parser.parse_args()
-    threads = int(args.num_threads) if int(args.num_threads) > 0 else detect_usable_cpus()
+    threads = max(1, int(args.num_threads))
     configure_compute_threads(threads)
     if args.work_dir:
         work_dir = Path(args.work_dir)

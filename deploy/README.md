@@ -299,7 +299,7 @@ OpenSimAD setup is deliberately serialized before the 180-worker fan-out:
 
 ```bash
 python scripts/build_lai_opensimad_ext.py --force
-python scripts/build_lai_opensimad_polynomials.py --force --num_threads 16
+python scripts/build_lai_opensimad_polynomials.py --force --num_threads 1
 python scripts/run_opensimad_canary.py
 
 # Cluster stages (normally use the orchestrator below)

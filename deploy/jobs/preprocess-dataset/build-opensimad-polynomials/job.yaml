@@ -22,7 +22,7 @@ spec:
         workingDir: /mnt/SINDyffuse
         env:
         - name: MOCO_NUM_THREADS
-          value: "16"
+          value: "1"
         - name: TMPDIR
           value: "/scratch"
         - name: SINDYFFUSE_RUN_LOG_ID
@@ -40,10 +40,10 @@ spec:
         resources:
           limits:
             memory: 96Gi
-            cpu: "16"
+            cpu: "1"
           requests:
             memory: 96Gi
-            cpu: "16"
+            cpu: "1"
         volumeMounts:
         - name: data
           mountPath: /mnt

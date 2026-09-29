@@ -58,7 +58,7 @@ cd /path/to/SINDyffuse
 ```bash
 python scripts/preprocess_ik.py --max_motions 5
 python scripts/build_lai_opensimad_ext.py
-python scripts/build_lai_opensimad_polynomials.py --num_threads 4
+python scripts/build_lai_opensimad_polynomials.py --num_threads 1
 python scripts/run_opensimad_canary.py
 python scripts/preprocess_moco.py --max_motions 5 --activation_method opensimad
 python scripts/compute_normalization.py --num_shards 1 --wait
