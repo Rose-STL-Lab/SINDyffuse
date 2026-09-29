@@ -50,7 +50,7 @@ cd /path/to/SINDyffuse
 |-----|--------|---------|
 | 1 — IK | `scripts/preprocess_ik.py` | joints → `lai_cache/{id}.npz` with `q` (+ placeholders) |
 | 2 — Compiled OpenSimAD ext | `scripts/build_lai_opensimad_ext.py` | one-shot AD model + validated `F.so` |
-| 3 — Polynomial cache | `scripts/build_lai_opensimad_polynomials.py` | one-time full-ROM muscle path fitting |
+| 3 — Polynomial cache | `scripts/build_lai_opensimad_polynomials.py` | one-time full-ROM muscle path fitting in isolated 100-frame processes |
 | 4 — Canary | `scripts/run_opensimad_canary.py` | one MinT-sized solve before worker fan-out |
 | 5 — Activations | `scripts/preprocess_moco.py` | MinT/OpenSimAD → activations + GRF + validity mask (patches NPZ) |
 | 6 — Norm | `scripts/compute_normalization.py` | merge manifests → `Mean.npy` / `Std.npy` |

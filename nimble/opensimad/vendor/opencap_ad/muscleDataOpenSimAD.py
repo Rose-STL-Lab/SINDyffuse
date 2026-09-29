@@ -17,6 +17,8 @@
 '''
 
 import os
+from concurrent.futures import ProcessPoolExecutor
+from multiprocessing import get_context
 import numpy as np
 
 # %% Import muscle-tendon parameters.
@@ -207,104 +209,108 @@ def get_mtu_length_and_moment_arm(pathModel, data, coordinates_table,
     return [lMT, dM]
 
 # %% Fit polynomial coefficients.
-# We fit the polynomial coefficients if no polynomial data exist yet, and we
-# save them such that we do not need to do the fitting again.
-# Note: this code leverages parallel computing. We recommend running the code
-# in the terminal as parallel computing might not be leveraged in IDEs like
-# Spyder.
-def getPolynomialData(loadPolynomialData, pathModelFolder, modelName='', 
+# The original OpenCap implementation keeps one OpenSim interpreter alive for
+# the complete fitting trajectory. On K8s, native OpenSim state can accumulate
+# across that trajectory even with nThreads=1. Run each bounded chunk in a fresh
+# spawned process so the operating system releases native allocations at exit.
+def _get_mtu_chunk_job(args):
+    pathModel, data, coordinates_table, idxSlice = args
+    import casadi  # noqa: F401  # bind pip CasADi before OpenSim in the child
+    return get_mtu_length_and_moment_arm(pathModel, data, coordinates_table, idxSlice)
+
+
+def _get_mtu_chunk_isolated(args):
+    ctx = get_context('spawn')
+    with ProcessPoolExecutor(max_workers=1, mp_context=ctx) as executor:
+        return executor.submit(_get_mtu_chunk_job, args).result()
+
+
+def getPolynomialData(loadPolynomialData, pathModelFolder, modelName='',
                       pathMotionFile4Polynomials='', joints=[],
                       muscles=[], type_bounds_polynomials='default', side='',
-                      nThreads=None, overwritedata4PolynomialFitting=False):
-    
+                      nThreads=None, overwritedata4PolynomialFitting=False,
+                      chunk_frames=100):
     pathPolynomialData = os.path.join(
         pathModelFolder, '{}_polynomial_{}_{}.npy'.format(
-            modelName, side, type_bounds_polynomials))    
+            modelName, side, type_bounds_polynomials))
     if loadPolynomialData:
-        polynomialData = np.load(pathPolynomialData, allow_pickle=True) 
-        
+        return np.load(pathPolynomialData, allow_pickle=True)
+
+    path_data4PolynomialFitting = os.path.join(
+        pathModelFolder, 'data4PolynomialFitting_{}_{}.npy'.format(
+            modelName, type_bounds_polynomials))
+    if (not os.path.exists(path_data4PolynomialFitting)
+            or overwritedata4PolynomialFitting):
+        print('Generating data to fit polynomials.')
+        import opensim
+        table = opensim.TimeSeriesTable(pathMotionFile4Polynomials)
+        coordinates_table = list(table.getColumnLabels())
+        data = table.getMatrix().to_numpy()
+        pathModel = os.path.join(pathModelFolder, modelName + '.osim')
+        chunk_size = max(1, int(chunk_frames))
+        chunks = [
+            (start, min(start + chunk_size, data.shape[0]))
+            for start in range(0, data.shape[0], chunk_size)
+        ]
+        print(
+            f'Polynomial MuscleAnalysis isolated_chunks={len(chunks)} '
+            f'chunk_frames={chunk_size} requested_threads={nThreads}',
+            flush=True,
+        )
+        lmt_parts = []
+        moment_arm_parts = []
+        for chunk_index, (start, end) in enumerate(chunks):
+            print(
+                f'MuscleAnalysis chunk {chunk_index + 1}/{len(chunks)} '
+                f'frames={start}:{end}',
+                flush=True,
+            )
+            lmt, moment_arms = _get_mtu_chunk_isolated(
+                (pathModel, data[start:end, :], coordinates_table, chunk_index)
+            )
+            lmt_parts.append(np.asarray(lmt, dtype=np.float64))
+            moment_arm_parts.append(np.asarray(moment_arms, dtype=np.float64))
+        if not lmt_parts:
+            raise RuntimeError('No MuscleAnalysis chunks were generated')
+        lMT = np.concatenate(lmt_parts, axis=0)
+        dM = np.concatenate(moment_arm_parts, axis=0)
+        del lmt_parts, moment_arm_parts
+
+        opensim.Logger.setLevelString('error')
+        model = opensim.Model(pathModel)
+        forceSet = model.getForceSet()
+        allMuscles = []
+        for i in range(forceSet.getSize()):
+            c_force_elt = forceSet.get(i)
+            if c_force_elt.getConcreteClassName() == 'Millard2012EquilibriumMuscle':
+                allMuscles.append(c_force_elt.getName())
+        data4PolynomialFitting = {
+            'mtu_lengths': lMT,
+            'mtu_moment_arms': dM,
+            'muscle_names': allMuscles,
+            'coordinate_names': [label.split('/')[-2] for label in coordinates_table],
+            'coordinate_values': data,
+        }
+        np.save(path_data4PolynomialFitting, data4PolynomialFitting)
+        del lMT, dM, model, forceSet, data4PolynomialFitting, table
+        for file in os.listdir(pathModelFolder):
+            if 'motion4MA_' in file:
+                try:
+                    os.remove(os.path.join(pathModelFolder, file))
+                except OSError:
+                    pass
     else:
-        path_data4PolynomialFitting = os.path.join(
-            pathModelFolder, 'data4PolynomialFitting_{}_{}.npy'.format(modelName, type_bounds_polynomials))
-        # Generate polynomial data.
-        if (not os.path.exists(path_data4PolynomialFitting) or 
-            overwritedata4PolynomialFitting):            
-            print('Generating data to fit polynomials.')            
-            import opensim
-            from joblib import Parallel, delayed
-            import multiprocessing
-            # Get training data from motion file.
-            table = opensim.TimeSeriesTable(pathMotionFile4Polynomials)
-            coordinates_table = list(table.getColumnLabels()) # w/ jointset/...
-            data = table.getMatrix().to_numpy() # data in degrees w/o time
-            pathModel = os.path.join(pathModelFolder, modelName + '.osim')
-            # Set number of threads.
-            # CRITICAL (K8s): never default to multiprocessing.cpu_count()-2.
-            # On large nodes that is 250+ concurrent OpenSim MuscleAnalysis
-            # workers and OOMs past 100Gi+. Prefer MOCO_NUM_THREADS / cgroup.
-            host_cpus = max(1, int(multiprocessing.cpu_count() or 1))
-            if nThreads is None:
-                nThreads = _default_polynomial_fit_threads(host_cpus)
-            nThreads = max(1, int(nThreads))
-            if nThreads > host_cpus:
-                nThreads = host_cpus
-            print(f'Polynomial MuscleAnalysis n_jobs={nThreads} (host_cpus={host_cpus})')
-            # Generate muscle tendon lengths and moment arms (in parallel).
-            slice_size = int(np.floor(data.shape[0]/nThreads))
-            rest = data.shape[0] % nThreads
-            outputs = Parallel(n_jobs=nThreads)(
-                delayed(get_mtu_length_and_moment_arm)(
-                    pathModel, data[i*slice_size:(i+1)*slice_size,:], 
-                    coordinates_table, i) for i in range(nThreads))
-            if rest != 0:
-                output_last = get_mtu_length_and_moment_arm(
-                    pathModel, data[-rest:,:], coordinates_table, 99)  
-            # Delete temporary motion files.
-            for file in os.listdir(pathModelFolder):
-                if 'motion4MA_' in file:
-                    os.remove(os.path.join(pathModelFolder, file))                
-            # Gather data.
-            lMT = np.zeros((data.shape[0], outputs[0][1].shape[1]))
-            dM =  np.zeros((data.shape[0], outputs[0][1].shape[1], 
-                            outputs[0][1].shape[2]))
-            for i in range(len(outputs)):
-                lMT[i*slice_size:(i+1)*slice_size, :] = outputs[i][0]
-                dM[i*slice_size:(i+1)*slice_size, :, :] = outputs[i][1]
-            if rest != 0:
-                lMT[-rest:, :] = output_last[0]
-                dM[-rest:, :, :] = output_last[1]
-            # Put data in dict.
-            # Muscles as ordered in model.
-            opensim.Logger.setLevelString('error')
-            model = opensim.Model(pathModel)  
-            allMuscles = []
-            forceSet = model.getForceSet()
-            for i in range(forceSet.getSize()):        
-                c_force_elt = forceSet.get(i)  
-                if (c_force_elt.getConcreteClassName() == 
-                    "Millard2012EquilibriumMuscle"):
-                    allMuscles.append(c_force_elt.getName())    
-            data4PolynomialFitting = {}
-            data4PolynomialFitting['mtu_lengths'] = lMT
-            data4PolynomialFitting['mtu_moment_arms'] = dM
-            data4PolynomialFitting['muscle_names'] = allMuscles
-            data4PolynomialFitting['coordinate_names'] = [
-                label.split('/')[-2] for label in coordinates_table]
-            data4PolynomialFitting['coordinate_values'] = data
-            # Save data.
-            np.save(path_data4PolynomialFitting, data4PolynomialFitting)
-        else:
-            data4PolynomialFitting = np.load(path_data4PolynomialFitting, 
-                                             allow_pickle=True).item()
-        # Fit polynomial coefficients.
-        print('Fit polynomials.')
-        from polynomialsOpenSimAD import getPolynomialCoefficients
-        polynomialData = getPolynomialCoefficients(
-            data4PolynomialFitting, joints, muscles, side=side)
-        if pathModelFolder != 0:
-            np.save(pathPolynomialData, polynomialData)
-        print('Done fitting polynomials.')
-           
+        data4PolynomialFitting = np.load(
+            path_data4PolynomialFitting, allow_pickle=True
+        ).item()
+
+    print('Fit polynomials.')
+    from polynomialsOpenSimAD import getPolynomialCoefficients
+    polynomialData = getPolynomialCoefficients(
+        data4PolynomialFitting, joints, muscles, side=side)
+    if pathModelFolder != 0:
+        np.save(pathPolynomialData, polynomialData)
+    print('Done fitting polynomials.')
     return polynomialData
 
 # %% Tendon stiffness.

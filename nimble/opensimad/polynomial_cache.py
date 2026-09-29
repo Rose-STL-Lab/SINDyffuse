@@ -61,7 +61,7 @@ def _write_full_range_dummy(source: Path, destination: Path) -> Path:
     numpy_to_storage(['time'] + labels, np.concatenate((times, data), axis=1), str(destination), datatype='IK')
     return destination
 
-def build_polynomial_cache(*, work_dir: Path, num_threads: int=1, force: bool=False) -> dict[str, Any]:
+def build_polynomial_cache(*, work_dir: Path, num_threads: int=1, chunk_frames: int=100, force: bool=False) -> dict[str, Any]:
     """Build all model-dependent polynomial artifacts outside activation workers."""
     ensure_ad_ready_artifacts(force=False)
     validate_compiled_external(load_library=True, require_metadata=True, deep=True)
@@ -81,6 +81,7 @@ def build_polynomial_cache(*, work_dir: Path, num_threads: int=1, force: bool=Fa
     _ensure_vendor_on_path()
     from muscleDataOpenSimAD import getMTParameters, getPolynomialData
     full_range_dummy = _write_full_range_dummy(dummy, work / 'DummyMotionFullRange.mot')
+    chunk_size = max(1, int(chunk_frames))
 
     threads = max(1, int(num_threads))
     for side, muscles in (('r', RIGHT_MUSCLES), ('l', LEFT_MUSCLES)):
@@ -102,7 +103,8 @@ def build_polynomial_cache(*, work_dir: Path, num_threads: int=1, force: bool=Fa
             pathModelFolder=str(model_dir), modelName=model_name,
             pathMotionFile4Polynomials=str(full_range_dummy), joints=list(joints),
             muscles=list(muscles), type_bounds_polynomials='default', side=side,
-            nThreads=threads, overwritedata4PolynomialFitting=bool(force and side == 'r'),
+            nThreads=threads, chunk_frames=chunk_size,
+            overwritedata4PolynomialFitting=bool(force and side == 'r'),
         )
 
     metadata_path = publish_polynomial_cache(model_dir)
@@ -110,5 +112,6 @@ def build_polynomial_cache(*, work_dir: Path, num_threads: int=1, force: bool=Fa
     return {
         'metadata_path': str(metadata_path),
         'num_threads': threads,
+        'chunk_frames': chunk_size,
         'artifacts': sorted(metadata['artifacts']),
     }

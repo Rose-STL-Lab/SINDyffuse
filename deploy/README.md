@@ -308,7 +308,7 @@ kubectl apply -k deploy/jobs/preprocess-dataset/build-opensimad-polynomials -n Y
 kubectl apply -k deploy/jobs/preprocess-dataset/opensimad-canary -n YOUR_NAMESPACE
 ```
 
-Artifacts land under `models/lai_uhlrich/opensimad/` on the PVC. The external build must produce a loadable `ExternalFunction/F.so`; `F.py` is not accepted by production workers because embedding that expression graph can exhaust 64–160+ GiB. The polynomial Job builds full-model-range left/right caches once in local scratch and publishes them atomically.
+Artifacts land under `models/lai_uhlrich/opensimad/` on the PVC. The external build must produce a loadable `ExternalFunction/F.so`; `F.py` is not accepted by production workers because embedding that expression graph can exhaust 64–160+ GiB. The polynomial Job builds full-model-range left/right caches in isolated 100-frame OpenSim processes and publishes them atomically.
 
 The canary performs one 1.68-second solve with the same compiled function, polynomial cache, mesh, and memory limit used by workers. A failed canary stops orchestration before the indexed Job is created.
 

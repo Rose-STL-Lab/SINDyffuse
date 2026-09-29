@@ -21,6 +21,7 @@ def main() -> None:
     parser.add_argument('--force', action='store_true', help='Rebuild scratch artifacts before publishing')
     parser.add_argument('--num_threads', type=int, default=1, help='MuscleAnalysis workers (default: 1; increase only after measuring peak RSS)')
     parser.add_argument('--work_dir', default='', help='Scratch build directory (default: TMPDIR)')
+    parser.add_argument('--chunk_frames', type=int, default=100, help='Frames per disposable OpenSim process (default: 100)')
     args = parser.parse_args()
     threads = max(1, int(args.num_threads))
     configure_compute_threads(threads)
@@ -33,9 +34,15 @@ def main() -> None:
         cleanup = True
     try:
         from nimble.opensimad.polynomial_cache import build_polynomial_cache
-        result = build_polynomial_cache(work_dir=work_dir, num_threads=threads, force=bool(args.force))
+        result = build_polynomial_cache(
+            work_dir=work_dir,
+            num_threads=threads,
+            chunk_frames=int(args.chunk_frames),
+            force=bool(args.force),
+        )
         print(f"Polynomial cache metadata: {result['metadata_path']}")
         print(f"MuscleAnalysis workers: {result['num_threads']}")
+        print(f"MuscleAnalysis chunk frames: {result['chunk_frames']}")
         for name in result['artifacts']:
             print(f'  {name}')
     finally:
