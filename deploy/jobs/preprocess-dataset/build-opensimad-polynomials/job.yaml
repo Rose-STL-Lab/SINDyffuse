@@ -7,7 +7,6 @@ metadata:
     app: sindyffuse-build-opensimad-polynomials
 spec:
   backoffLimit: 2
-  activeDeadlineSeconds: 43200
   template:
     metadata:
       labels:
@@ -30,20 +29,27 @@ spec:
         command: ["/bin/bash", "-c"]
         args:
         - |
+          set -eo pipefail
+          mkdir -p /mnt/SINDyffuse/logs
+          attempt="$(date -u +%Y%m%dT%H%M%SZ)_${HOSTNAME}"
+          # Capture Python, worker, shell and native output on the PVC, not emptyDir.
+          exec > >(tee -a "/mnt/SINDyffuse/logs/build-opensimad-polynomials_${attempt}.log") 2>&1
+          echo "Polynomial attempt=${attempt} started=$(date -u +%FT%TZ)"
           source deploy/scripts/job-env.sh
           source deploy/scripts/ensure-casadi.sh
           mkdir -p /scratch/polynomial-cache
-          python scripts/build_lai_opensimad_polynomials.py \
+          python -u scripts/build_lai_opensimad_polynomials.py \
             --force \
             --num_threads "${MOCO_NUM_THREADS}" \
-            --chunk_frames 100 \
+            --chunk_frames 10 \
+            --log_dir /mnt/SINDyffuse/logs \
             --work_dir /scratch/polynomial-cache
         resources:
           limits:
-            memory: 96Gi
+            memory: 150Gi
             cpu: "1"
           requests:
-            memory: 96Gi
+            memory: 150Gi
             cpu: "1"
         volumeMounts:
         - name: data

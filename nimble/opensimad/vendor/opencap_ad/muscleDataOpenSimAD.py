@@ -20,6 +20,7 @@ import os
 from concurrent.futures import ProcessPoolExecutor
 from multiprocessing import get_context
 import numpy as np
+from common.memory_diagnostics import diagnostic_event, diagnostic_stage
 
 # %% Import muscle-tendon parameters.
 # We save the muscle-tendon parameters associated with the model the first time
@@ -174,6 +175,8 @@ def get_mtu_length_and_moment_arm(pathModel, data, coordinates_table,
     lMT = np.zeros((data.shape[0], nMuscles))
     dM =  np.zeros((data.shape[0], nMuscles, len(coordinates_table_short)))
     for i in range(data.shape[0]):
+        diagnostic_event('frame_start', chunk_index=idxSlice, frame_in_chunk=i,
+                         coordinates_degrees=dict(zip(coordinates_table_short, data[i, :].tolist())))
         model.realizePosition(stateTrajectory[i])
         count = 0
         for m in range(forceSet.getSize()):        
@@ -205,6 +208,7 @@ def get_mtu_length_and_moment_arm(pathModel, data, coordinates_table,
                         dM[i, count, c] = cObj.computeMomentArm(
                             stateTrajectory[i], coordinate)
                 count += 1
+        diagnostic_event('frame_complete', chunk_index=idxSlice, frame_in_chunk=i)
                         
     return [lMT, dM]
 
@@ -216,7 +220,8 @@ def get_mtu_length_and_moment_arm(pathModel, data, coordinates_table,
 def _get_mtu_chunk_job(args):
     pathModel, data, coordinates_table, idxSlice = args
     import casadi  # noqa: F401  # bind pip CasADi before OpenSim in the child
-    return get_mtu_length_and_moment_arm(pathModel, data, coordinates_table, idxSlice)
+    with diagnostic_stage('muscle_analysis_child', chunk_index=idxSlice, frames=int(data.shape[0])):
+        return get_mtu_length_and_moment_arm(pathModel, data, coordinates_table, idxSlice)
 
 
 def _get_mtu_chunk_isolated(args):
@@ -241,11 +246,12 @@ def getPolynomialData(loadPolynomialData, pathModelFolder, modelName='',
             modelName, type_bounds_polynomials))
     if (not os.path.exists(path_data4PolynomialFitting)
             or overwritedata4PolynomialFitting):
-        print('Generating data to fit polynomials.')
+        print('Generating data to fit polynomials.', flush=True)
         import opensim
         table = opensim.TimeSeriesTable(pathMotionFile4Polynomials)
         coordinates_table = list(table.getColumnLabels())
         data = table.getMatrix().to_numpy()
+        diagnostic_event('fitting_samples', side=side, rows=int(data.shape[0]), columns=int(data.shape[1]))
         pathModel = os.path.join(pathModelFolder, modelName + '.osim')
         chunk_size = max(1, int(chunk_frames))
         chunks = [
@@ -265,15 +271,20 @@ def getPolynomialData(loadPolynomialData, pathModelFolder, modelName='',
                 f'frames={start}:{end}',
                 flush=True,
             )
-            lmt, moment_arms = _get_mtu_chunk_isolated(
-                (pathModel, data[start:end, :], coordinates_table, chunk_index)
-            )
+            with diagnostic_stage('muscle_analysis_chunk', side=side, chunk_index=chunk_index,
+                                  start_frame=start, end_frame=end):
+                lmt, moment_arms = _get_mtu_chunk_isolated(
+                    (pathModel, data[start:end, :], coordinates_table, chunk_index)
+                )
             lmt_parts.append(np.asarray(lmt, dtype=np.float64))
             moment_arm_parts.append(np.asarray(moment_arms, dtype=np.float64))
+            diagnostic_event('chunk_result', chunk_index=chunk_index,
+                             result_bytes=int(lmt.nbytes + moment_arms.nbytes))
         if not lmt_parts:
             raise RuntimeError('No MuscleAnalysis chunks were generated')
-        lMT = np.concatenate(lmt_parts, axis=0)
-        dM = np.concatenate(moment_arm_parts, axis=0)
+        with diagnostic_stage('concatenate_fitting_samples'):
+            lMT = np.concatenate(lmt_parts, axis=0)
+            dM = np.concatenate(moment_arm_parts, axis=0)
         del lmt_parts, moment_arm_parts
 
         opensim.Logger.setLevelString('error')
@@ -291,8 +302,10 @@ def getPolynomialData(loadPolynomialData, pathModelFolder, modelName='',
             'coordinate_names': [label.split('/')[-2] for label in coordinates_table],
             'coordinate_values': data,
         }
-        np.save(path_data4PolynomialFitting, data4PolynomialFitting)
-        del lMT, dM, model, forceSet, data4PolynomialFitting, table
+        with diagnostic_stage('save_fitting_samples', path=path_data4PolynomialFitting):
+            np.save(path_data4PolynomialFitting, data4PolynomialFitting)
+        # Keep the dictionary alive: the fresh-build branch fits it below.
+        del lMT, dM, model, forceSet, table
         for file in os.listdir(pathModelFolder):
             if 'motion4MA_' in file:
                 try:
@@ -300,17 +313,19 @@ def getPolynomialData(loadPolynomialData, pathModelFolder, modelName='',
                 except OSError:
                     pass
     else:
-        data4PolynomialFitting = np.load(
-            path_data4PolynomialFitting, allow_pickle=True
-        ).item()
+        with diagnostic_stage('load_fitting_samples', path=path_data4PolynomialFitting):
+            data4PolynomialFitting = np.load(
+                path_data4PolynomialFitting, allow_pickle=True
+            ).item()
 
-    print('Fit polynomials.')
+    print('Fit polynomials.', flush=True)
     from polynomialsOpenSimAD import getPolynomialCoefficients
-    polynomialData = getPolynomialCoefficients(
-        data4PolynomialFitting, joints, muscles, side=side)
+    with diagnostic_stage('fit_polynomials', side=side):
+        polynomialData = getPolynomialCoefficients(
+            data4PolynomialFitting, joints, muscles, side=side)
     if pathModelFolder != 0:
         np.save(pathPolynomialData, polynomialData)
-    print('Done fitting polynomials.')
+    print('Done fitting polynomials.', flush=True)
     return polynomialData
 
 # %% Tendon stiffness.

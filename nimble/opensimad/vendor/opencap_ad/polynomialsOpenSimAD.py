@@ -22,6 +22,7 @@
 
 import numpy as np
 import matplotlib.pyplot as plt
+from common.memory_diagnostics import diagnostic_event, diagnostic_stage
 
 class polynomials:
     
@@ -406,6 +407,9 @@ def getPolynomialCoefficients(data4PolynomialFitting, joints,
     spanningInfo = np.where(np.logical_and(spanningInfo<=0.01, spanningInfo>=-0.01), 0, 1)
         
     polynomialData = {}
+    diagnostic_event('fit_configuration', side=side, samples=int(jointCoordinates.shape[0]),
+                     order_min=order_min, order_max=order_max, threshold=threshold,
+                     remove_bad_hip_flexion_entries=removeBadHipFlexionEntries)
     for i, muscle in enumerate(muscles):
         muscle_momentArms = momentArms[:, i, spanningInfo[i, :]==1]
         muscle_dimension = muscle_momentArms.shape[1]
@@ -414,6 +418,8 @@ def getPolynomialCoefficients(data4PolynomialFitting, joints,
         is_fullfilled = False
         order = order_min
         while not is_fullfilled:
+            diagnostic_event('fit_order_start', side=side, muscle=muscle,
+                             dimension=muscle_dimension, order=order)
             
             polynomial = polynomial_estimation(muscle_dimension, order)
             mat = polynomial.getVariables(jointCoordinates[:, spanningInfo[i, :]==1])
@@ -428,7 +434,9 @@ def getPolynomialCoefficients(data4PolynomialFitting, joints,
             B = np.concatenate((muscle_muscleTendonLengths,(muscle_momentArms.T).flatten()))
             
             # Solve least-square problem.
-            coefficients = np.linalg.lstsq(A,B,rcond=None)[0]
+            with diagnostic_stage('least_squares', side=side, muscle=muscle, order=order,
+                                  matrix_shape=list(A.shape), matrix_bytes=int(A.nbytes)):
+                coefficients = np.linalg.lstsq(A,B,rcond=None)[0]
             
             # Compute difference with model data.
             # Muscle-tendon lengths.
@@ -443,6 +451,9 @@ def getPolynomialCoefficients(data4PolynomialFitting, joints,
                 
             momentArms_diff_rms = np.sqrt(np.mean((
                     muscle_momentArms - muscle_momentArms_poly)**2, axis=0))
+            diagnostic_event('fit_order_complete', side=side, muscle=muscle, order=order,
+                             length_error_existing_criterion=float(muscleTendonLengths_diff_rms),
+                             moment_arm_rmse=momentArms_diff_rms.tolist())
             
             # Check if criterion is satisfied.
             if (muscleTendonLengths_diff_rms <= threshold and np.max(momentArms_diff_rms) <= threshold):

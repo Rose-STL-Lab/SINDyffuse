@@ -93,6 +93,27 @@ For memory safety, activation pods run **one segment at a time**, and each segme
 
 Workers require the prebuilt `F.so` and polynomial cache. They never fall back to the high-memory `F.py` expression graph or perform polynomial MuscleAnalysis lazily. A segment outside the precomputed full model range becomes a failed/gap segment rather than launching a worker-local fit.
 
+**Polynomial-build diagnostics:** Kubernetes attempts write separate console `.log` files and
+structured `.jsonl` files to `/mnt/SINDyffuse/logs` on the PVC (not `/scratch`). The JSONL path
+is printed at startup in the console log. Records include UTC timestamps, PID/pod identity,
+process RSS, available cgroup memory counters, a 10-second memory heartbeat, stage durations,
+chunk ranges, per-frame coordinates in degrees, and polynomial fitting order/error diagnostics.
+Python exceptions include tracebacks. After an OOM/SIGKILL there may be no final failure record;
+look for the last `stage_start`/`frame_start` without its corresponding completion and inspect
+nearby memory records. Kubernetes termination status is still needed to establish the kill reason.
+Logs preserve run history across pod deletion; they do **not** checkpoint or resume computation.
+For local builds, JSONL logs default to the repository's `logs` directory; use `--log_dir` to
+select a persistent location and `--memory_log_interval` to change heartbeat frequency.
+
+Instrumentation does not change samples, full-ROM bounds, muscle sets, polynomial order
+(3–9), the existing 0.0015 fitting threshold, or the least-squares algorithm. The MinT
+[paper, Appendix A.3](https://arxiv.org/html/2411.00128v1#A1.SS3) specifies the downstream
+50-point/s mesh, 1e-3 tolerance, 2500 iterations and 1.4 s cores/0.14 s buffers; those remain
+unchanged. MinT's [public code](https://github.com/simplexsigil/MusclesInTime) provides dataset
+utilities and muscle definitions, not the simulation-generation pipeline. Polynomial fitting
+here follows the vendored [OpenCap implementation](https://github.com/stanfordnmbl/opencap-processing/blob/main/UtilsDynamicSimulations/OpenSimAD/polynomialsOpenSimAD.py),
+rather than claiming verified exact parity with MinT's unpublished generation code.
+
 Each `{id}.npz` stores generalized coordinates `q` `[T, 31]` plus `muscle_activations` `[T, 80]`, `muscle_activation_mask` `[T]`, `sim_grf` `[T, 18]`, and SINDy feature rows.
 
 At **20 fps**, segmented OpenSimAD uses **28-frame cores**, **3-frame buffers**, and **34-frame solve windows** (1.4 s core / 0.14 s buffer).

@@ -1,11 +1,13 @@
 """One-time OpenSimAD muscle-tendon polynomial cache generation."""
 from __future__ import annotations
+import hashlib
 import shutil
 import sys
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+from common.memory_diagnostics import diagnostic_event, diagnostic_stage
 
 from nimble.opensimad import OPENSIM_MODEL_BASENAME
 from nimble.opensimad.model_prep import ensure_ad_ready_artifacts
@@ -40,6 +42,13 @@ def _ensure_vendor_on_path() -> None:
     if str(vendor) not in sys.path:
         sys.path.insert(0, str(vendor))
 
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open('rb') as fp:
+        for block in iter(lambda: fp.read(1024 * 1024), b''):
+            digest.update(block)
+    return digest.hexdigest()
+
 def _write_full_range_dummy(source: Path, destination: Path) -> Path:
     """Create deterministic fitting samples spanning the supported model ROM."""
     import opensim as osim
@@ -63,8 +72,9 @@ def _write_full_range_dummy(source: Path, destination: Path) -> Path:
 
 def build_polynomial_cache(*, work_dir: Path, num_threads: int=1, chunk_frames: int=100, force: bool=False) -> dict[str, Any]:
     """Build all model-dependent polynomial artifacts outside activation workers."""
-    ensure_ad_ready_artifacts(force=False)
-    validate_compiled_external(load_library=True, require_metadata=True, deep=True)
+    with diagnostic_stage('validate_model_and_external'):
+        ensure_ad_ready_artifacts(force=False)
+        validate_compiled_external(load_library=True, require_metadata=True, deep=True)
     work = Path(work_dir).expanduser().resolve()
     model_dir = work / 'Model'
     if force and model_dir.exists():
@@ -74,13 +84,18 @@ def build_polynomial_cache(*, work_dir: Path, num_threads: int=1, chunk_frames: 
     model_name = f'{OPENSIM_MODEL_BASENAME}_scaled_adjusted'
     model_path = model_dir / f'{model_name}.osim'
     shutil.copy2(ad_scaled_adjusted_model_path(), model_path)
+    diagnostic_event('model_configuration', model_path=str(model_path), model_sha256=_file_sha256(model_path))
     dummy = vendor_dummy_motion_path()
     if not dummy.is_file():
         raise FileNotFoundError(f'Missing OpenSimAD polynomial dummy motion: {dummy}')
 
     _ensure_vendor_on_path()
     from muscleDataOpenSimAD import getMTParameters, getPolynomialData
-    full_range_dummy = _write_full_range_dummy(dummy, work / 'DummyMotionFullRange.mot')
+    with diagnostic_stage('create_full_range_samples'):
+        full_range_dummy = _write_full_range_dummy(dummy, work / 'DummyMotionFullRange.mot')
+    diagnostic_event('sample_configuration', rng_seed=42, bounds_degrees=MINT_POLYNOMIAL_BOUNDS,
+                     source=str(dummy), source_sha256=_file_sha256(dummy),
+                     full_range_motion=str(full_range_dummy), full_range_sha256=_file_sha256(full_range_dummy))
     chunk_size = max(1, int(chunk_frames))
 
     threads = max(1, int(num_threads))
@@ -107,8 +122,9 @@ def build_polynomial_cache(*, work_dir: Path, num_threads: int=1, chunk_frames: 
             overwritedata4PolynomialFitting=bool(force and side == 'r'),
         )
 
-    metadata_path = publish_polynomial_cache(model_dir)
-    metadata = validate_polynomial_cache(require_metadata=True, deep=True)
+    with diagnostic_stage('publish_and_validate_polynomial_cache'):
+        metadata_path = publish_polynomial_cache(model_dir)
+        metadata = validate_polynomial_cache(require_metadata=True, deep=True)
     return {
         'metadata_path': str(metadata_path),
         'num_threads': threads,
