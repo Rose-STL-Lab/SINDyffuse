@@ -35,7 +35,7 @@ case "${STAGE}" in
     ;;
   build-polynomials|opensimad-polynomials)
     k8s_orchestrate_init
-    run_phase sindyffuse-build-opensimad-polynomials "${ROOT}/deploy/jobs/preprocess-dataset/build-opensimad-polynomials" 12h "opensimad-polynomials"
+    run_polynomial_phases
     echo "Done (${STAGE})."
     ;;
   canary|opensimad-canary)

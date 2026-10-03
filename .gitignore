@@ -43,6 +43,7 @@ models/lai_uhlrich/opensimad/data4PolynomialFitting_*.npy
 models/lai_uhlrich/opensimad/compiled_external.json
 models/lai_uhlrich/opensimad/polynomial_cache.json
 models/lai_uhlrich/opensimad/canary_report.json
+models/lai_uhlrich/opensimad/polynomial-builds/
 
 # Editor / OS
 .DS_Store

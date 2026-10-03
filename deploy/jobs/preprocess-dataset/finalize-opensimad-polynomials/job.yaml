@@ -1,0 +1,57 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sindyffuse-finalize-opensimad-polynomials
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 300
+      containers:
+      - name: finalize-polynomials
+        image: sindyffuse:latest
+        imagePullPolicy: Always
+        workingDir: /mnt/SINDyffuse
+        env:
+        - name: MOCO_NUM_THREADS
+          value: "1"
+        - name: TMPDIR
+          value: /scratch
+        - name: POLYNOMIAL_BUILD_DIR
+          value: /mnt/SINDyffuse/models/lai_uhlrich/opensimad/polynomial-builds/default
+        - name: POLYNOMIAL_EXPECTED_CHUNKS
+          value: "200"
+        command: ["/bin/bash", "-c"]
+        args:
+        - |
+          set -eo pipefail
+          mkdir -p /mnt/SINDyffuse/logs /scratch
+          attempt="$(date -u +%Y%m%dT%H%M%SZ)_${HOSTNAME}"
+          exec > >(tee -a "/mnt/SINDyffuse/logs/finalize-opensimad-polynomials_${attempt}.log") 2>&1
+          source deploy/scripts/job-env.sh
+          source deploy/scripts/ensure-casadi.sh
+          python -u scripts/build_lai_opensimad_polynomials.py \
+            --mode finalize --build_dir "${POLYNOMIAL_BUILD_DIR}" \
+            --expected_chunks "${POLYNOMIAL_EXPECTED_CHUNKS}" \
+            --num_threads "${MOCO_NUM_THREADS}" --work_dir /scratch \
+            --log_dir /mnt/SINDyffuse/logs
+        resources:
+          requests:
+            cpu: "1"
+            memory: 16Gi
+          limits:
+            cpu: "1"
+            memory: 16Gi
+        volumeMounts:
+        - name: data
+          mountPath: /mnt
+        - name: scratch
+          mountPath: /scratch
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: sindyffuse
+      - name: scratch
+        emptyDir:
+          sizeLimit: 4Gi

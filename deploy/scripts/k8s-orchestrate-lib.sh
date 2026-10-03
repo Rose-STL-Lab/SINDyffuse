@@ -8,6 +8,13 @@ k8s_orchestrate_init() {
   NS="${KUBE_NAMESPACE:-default}"
 }
 
+run_polynomial_phases() {
+  local base="${ROOT}/deploy/jobs/preprocess-dataset"
+  run_phase sindyffuse-prepare-opensimad-polynomials "${base}/prepare-opensimad-polynomials" "${POLYNOMIAL_PREPARE_TIMEOUT:-2h}" "polynomial-prepare"
+  run_phase sindyffuse-build-opensimad-polynomials "${base}/build-opensimad-polynomials" "${POLYNOMIAL_EXTRACT_TIMEOUT:-48h}" "polynomial-slices"
+  run_phase sindyffuse-finalize-opensimad-polynomials "${base}/finalize-opensimad-polynomials" "${POLYNOMIAL_FINALIZE_TIMEOUT:-12h}" "polynomial-finalize"
+}
+
 _report_job_failure() {
   local job_name=$1
   echo "ERROR: ${job_name} failed or did not complete" >&2

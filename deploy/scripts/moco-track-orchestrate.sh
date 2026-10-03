@@ -10,7 +10,7 @@ k8s_orchestrate_init
 BASE="${ROOT}/deploy/jobs/preprocess-dataset"
 
 run_phase sindyffuse-build-opensimad-ext "${BASE}/build-opensimad-ext" 6h "opensimad-ext"
-run_phase sindyffuse-build-opensimad-polynomials "${BASE}/build-opensimad-polynomials" 12h "opensimad-polynomials"
+run_polynomial_phases
 run_phase sindyffuse-opensimad-canary "${BASE}/opensimad-canary" 4h "opensimad-canary"
 # MinT-scale OpenSimAD on HumanML3D is long-running; 7d wait budget for 180 shards.
 run_phase sindyffuse-preprocess-moco-track "${BASE}/moco-track" 168h "opensimad-track"

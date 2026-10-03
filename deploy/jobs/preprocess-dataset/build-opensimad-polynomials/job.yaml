@@ -1,4 +1,4 @@
-# One-shot: generate reusable MuscleAnalysis/polynomial caches before workers.
+# Indexed slice extraction. Run preparation first, then finalization (see orchestrator).
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -6,7 +6,11 @@ metadata:
   labels:
     app: sindyffuse-build-opensimad-polynomials
 spec:
-  backoffLimit: 2
+  completionMode: Indexed
+  completions: 200
+  parallelism: 100
+  backoffLimitPerIndex: 2
+  maxFailedIndexes: 0
   template:
     metadata:
       labels:
@@ -26,6 +30,10 @@ spec:
           value: "/scratch"
         - name: SINDYFFUSE_RUN_LOG_ID
           value: build-opensimad-polynomials
+        - name: POLYNOMIAL_BUILD_DIR
+          value: /mnt/SINDyffuse/models/lai_uhlrich/opensimad/polynomial-builds/default
+        - name: POLYNOMIAL_EXPECTED_CHUNKS
+          value: "200"
         command: ["/bin/bash", "-c"]
         args:
         - |
@@ -39,17 +47,18 @@ spec:
           source deploy/scripts/ensure-casadi.sh
           mkdir -p /scratch/polynomial-cache
           python -u scripts/build_lai_opensimad_polynomials.py \
-            --force \
+            --mode extract \
+            --build_dir "${POLYNOMIAL_BUILD_DIR}" \
+            --expected_chunks "${POLYNOMIAL_EXPECTED_CHUNKS}" \
             --num_threads "${MOCO_NUM_THREADS}" \
-            --chunk_frames 10 \
             --log_dir /mnt/SINDyffuse/logs \
             --work_dir /scratch/polynomial-cache
         resources:
           limits:
-            memory: 150Gi
+            memory: 256Gi
             cpu: "1"
           requests:
-            memory: 150Gi
+            memory: 256Gi
             cpu: "1"
         volumeMounts:
         - name: data

@@ -50,7 +50,7 @@ cd /path/to/SINDyffuse
 |-----|--------|---------|
 | 1 — IK | `scripts/preprocess_ik.py` | joints → `lai_cache/{id}.npz` with `q` (+ placeholders) |
 | 2 — Compiled OpenSimAD ext | `scripts/build_lai_opensimad_ext.py` | one-shot AD model + validated `F.so` |
-| 3 — Polynomial cache | `scripts/build_lai_opensimad_polynomials.py` | one-time full-ROM muscle path fitting in isolated 100-frame processes |
+| 3 — Polynomial cache | `scripts/build_lai_opensimad_polynomials.py` | prepare → indexed slice extraction → aggregate/full-ROM fitting (single-process mode also available) |
 | 4 — Canary | `scripts/run_opensimad_canary.py` | one MinT-sized solve before worker fan-out |
 | 5 — Activations | `scripts/preprocess_moco.py` | MinT/OpenSimAD → activations + GRF + validity mask (patches NPZ) |
 | 6 — Norm | `scripts/compute_normalization.py` | merge manifests → `Mean.npy` / `Std.npy` |
@@ -101,7 +101,8 @@ chunk ranges, per-frame coordinates in degrees, and polynomial fitting order/err
 Python exceptions include tracebacks. After an OOM/SIGKILL there may be no final failure record;
 look for the last `stage_start`/`frame_start` without its corresponding completion and inspect
 nearby memory records. Kubernetes termination status is still needed to establish the kill reason.
-Logs preserve run history across pod deletion; they do **not** checkpoint or resume computation.
+The distributed path also checkpoints completed slices on the PVC; the legacy `single` mode
+only preserves run history and does not checkpoint computation.
 For local builds, JSONL logs default to the repository's `logs` directory; use `--log_dir` to
 select a persistent location and `--memory_log_interval` to change heartbeat frequency.
 
@@ -113,6 +114,62 @@ unchanged. MinT's [public code](https://github.com/simplexsigil/MusclesInTime) p
 utilities and muscle definitions, not the simulation-generation pipeline. Polynomial fitting
 here follows the vendored [OpenCap implementation](https://github.com/stanfordnmbl/opencap-processing/blob/main/UtilsDynamicSimulations/OpenSimAD/polynomialsOpenSimAD.py),
 rather than claiming verified exact parity with MinT's unpublished generation code.
+
+### Distributed polynomial cache build
+
+Run the three stages in sequence using the local orchestrator:
+
+```bash
+./deploy/scripts/preprocess-dataset-orchestrate.sh build-polynomials YOUR_NAMESPACE
+```
+
+This recreates the stage Jobs (including any running Job with the same name), but retains
+validated slice results. Do not run it concurrently with the old single-pod build or another
+cache publisher. Ensure this checkout is synchronized to `/mnt/SINDyffuse` before starting.
+
+1. `prepare-opensimad-polynomials`: publishes immutable model/samples/manifest inputs.
+2. `build-opensimad-polynomials`: **200 indexed tasks**, **100 concurrent pods**, one
+   10-frame slice per task. Workers retain the existing 256 GiB/1 CPU requests and limits.
+3. `finalize-opensimad-polynomials`: validates every slice, assembles original frame order,
+   fits both sides with the existing algorithm, and publishes the final cache.
+
+All three stages use the same `POLYNOMIAL_BUILD_DIR`, defaulting to
+`/mnt/SINDyffuse/models/lai_uhlrich/opensimad/polynomial-builds/default`. Successful slices
+are atomically published under `chunks/`; retries reuse them after validating metadata,
+shapes, finite float64 values, exact input coordinates, and result checksums. Missing slices
+block finalization. Invalid slice files are recomputed, not silently dropped.
+
+**Adjustable configuration (edit manifests before applying):**
+
+| Setting | Location | Default |
+|---|---|---|
+| Maximum concurrent pods | extraction `job.yaml`: `spec.parallelism` | 100 |
+| Frames per slice | preparation env: `POLYNOMIAL_CHUNK_FRAMES` | 10 |
+| Total indexed tasks | extraction `spec.completions`, and `POLYNOMIAL_EXPECTED_CHUNKS` in all three Jobs | 200 |
+| Persistent build directory | `POLYNOMIAL_BUILD_DIR` in all three Jobs | shared path above |
+
+Total tasks must equal `ceil(sample_count / chunk_frames)`; preparation and workers reject
+mismatches. Concurrency is independent of the numerical build identity. Changes to chunk
+size, model, sample generation, extraction/fitting code or runtime require a **new build
+directory**. The manifest records seed, bounds, hashes, runtime versions and fitting settings;
+existing inputs/results are never force-deleted. Keep the mounted checkout and environment
+unchanged for the duration of a build. Use the same directory to resume an unchanged build.
+
+For manual deployment, apply/wait for preparation, then extraction, then finalization;
+applying the extraction manifest alone no longer builds a complete cache. Local equivalents:
+
+```bash
+python scripts/build_lai_opensimad_polynomials.py --mode prepare --build_dir /persistent/build --chunk_frames 10 --expected_chunks 200
+python scripts/build_lai_opensimad_polynomials.py --mode extract --build_dir /persistent/build --chunk_index 0 --expected_chunks 200
+# Run every index 0..199, then:
+python scripts/build_lai_opensimad_polynomials.py --mode finalize --build_dir /persistent/build --expected_chunks 200
+```
+
+The original command remains available with `--mode single` (the default). Orchestration
+wait budgets are configurable through `POLYNOMIAL_PREPARE_TIMEOUT` (2h),
+`POLYNOMIAL_EXTRACT_TIMEOUT` (48h), and `POLYNOMIAL_FINALIZE_TIMEOUT` (12h); these are
+local wait timeouts, not Kubernetes runtime deadlines. Preparation/finalization request
+16 GiB each; adjust their manifests if measured fitting peaks require more memory.
 
 Each `{id}.npz` stores generalized coordinates `q` `[T, 31]` plus `muscle_activations` `[T, 80]`, `muscle_activation_mask` `[T]`, `sim_grf` `[T, 18]`, and SINDy feature rows.
 
