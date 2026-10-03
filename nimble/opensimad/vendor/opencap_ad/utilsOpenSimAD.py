@@ -108,6 +108,19 @@ def solve_with_bounds(opti, tolerance, useExpressionGraphFunction, max_iteration
         '1', 'true', 'yes', 'on')
     if not rewrite:
         # Memory-safe path: keep Opti bounds/constraints as formulated.
+        from common.memory_diagnostics import diagnostic_event
+        # Value-only preflight: do not materialize a full constraint Jacobian.
+        initial_constraints = np.asarray(opti.debug.value(opti.g, opti.initial())).reshape(-1)
+        initial_objective = np.asarray(opti.debug.value(opti.f, opti.initial())).reshape(-1)
+        invalid = np.flatnonzero(~np.isfinite(initial_constraints))
+        if invalid.size or not np.isfinite(initial_objective).all():
+            descriptions = [opti.debug.g_describe(int(row)) for row in invalid[:10]]
+            diagnostic_event('nlp_initial_nonfinite', invalid_constraint_count=int(invalid.size),
+                             rows=invalid[:10].tolist(), descriptions=descriptions,
+                             objective_finite=bool(np.isfinite(initial_objective).all()))
+            raise RuntimeError('Nonfinite NLP initial evaluation: {} constraints; {}'.format(
+                invalid.size, '; '.join(descriptions)))
+        diagnostic_event('nlp_initial_values_finite', constraint_count=int(initial_constraints.size))
         print('solve_with_bounds: lightweight opti.solve (expand=%s)' % expand_nlp)
         s_opts = {
             "hessian_approximation": "limited-memory",

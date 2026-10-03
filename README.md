@@ -117,6 +117,29 @@ rather than claiming verified exact parity with MinT's unpublished generation co
 
 ### Distributed polynomial cache build
 
+**Required rebuild after the unit/model-conversion repair:** polynomial IK tables now
+declare `inDegrees=yes`, and NumPy spline coefficients are reversed for OpenSim's
+descending-power convention. The old `default` build and caches derived from it are
+invalid and must not be reused. All three manifests now point at a new
+`polynomial-builds/units-model-v2` directory. After syncing this code, rerun `build-ext`
+(forced model/F.so rebuild), then `build-polynomials` (prepare → all slices → finalize),
+then `canary`. Existing IK NPZ files need not be regenerated for these AD-stage fixes.
+Cache metadata is versioned so old artifacts fail worker preflight.
+
+**Quality policy and sources:** [MinT Appendix A.3](https://arxiv.org/html/2411.00128v1)
+specifies 50 collocation points/s, 1e-3 solver tolerance, 2500 iterations, and discarding
+nonconverged segments; those settings remain unchanged. Its public
+[analysis code](https://github.com/simplexsigil/mint-analysis) reports tracking/GRF/
+activation/KAM checks, while the dataset README describes that metadata as optional
+for filtering. These flags are not added as hard cache/dataset rejection gates.
+Neither source supplies muscle-length/moment-arm or spline-fit rejection cutoffs, so
+none are invented here. Unit and coefficient evaluation assertions are software
+consistency checks. Spline approximation errors, raw geometry ranges, and true fitting
+RMSE are logged diagnostically. The inherited OpenCap fitting criterion and maximum-order
+acceptance remain unchanged (the 0.0015 fit threshold is OpenCap's, not MinT's solver
+tolerance). Nonfinite initial NLP values fail with constraint descriptions; this checks
+that the numerical problem is defined, not a new biomechanical threshold.
+
 The OpenSimAD canary automatically selects a finite diagnostic window that remains within
 the published polynomial ROM after the solver's 6 Hz filter and mesh interpolation. It
 does not clip motion, expand bounds, or permit worker-side fitting. Among eligible windows
@@ -142,7 +165,7 @@ cache publisher. Ensure this checkout is synchronized to `/mnt/SINDyffuse` befor
    fits both sides with the existing algorithm, and publishes the final cache.
 
 All three stages use the same `POLYNOMIAL_BUILD_DIR`, defaulting to
-`/mnt/SINDyffuse/models/lai_uhlrich/opensimad/polynomial-builds/default`. Successful slices
+`/mnt/SINDyffuse/models/lai_uhlrich/opensimad/polynomial-builds/units-model-v2`. Successful slices
 are atomically published under `chunks/`; retries reuse them after validating metadata,
 shapes, finite float64 values, exact input coordinates, and result checksums. Missing slices
 block finalization. Invalid slice files are recomputed, not silently dropped.

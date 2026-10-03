@@ -1901,7 +1901,8 @@ def run_tracking(baseDir, dataDir, subject, settings, case='0',
         if not stats['success'] == True:
             print('PROBLEM DID NOT CONVERGE - {} - {} - {} \n\n'.format( 
                   stats['return_status'], subject, trialName))
-            return
+            raise RuntimeError('OpenSimAD optimization did not converge: {} (iterations={})'.format(
+                stats.get('return_status', 'unknown'), stats.get('iter_count', 'unknown')))
         
         # Extract results.
         starti = 0

@@ -41,7 +41,9 @@ def numpy_to_storage(labels, data, storage_file, datatype=None):
         f.write('version=1\n')
         f.write(f'nRows={n}\n')
         f.write(f'nColumns={len(labels)}\n')
-        f.write('inDegrees=no\n')
+        # IK arrays contain angular coordinates in degrees (translations stay m).
+        # Other output types are not angular coordinate tables.
+        f.write('inDegrees={}\n'.format('yes' if datatype == 'IK' else 'no'))
         f.write('endheader\n')
         f.write('\t'.join(labels) + '\n')
         for r in range(n):

@@ -44,6 +44,7 @@ models/lai_uhlrich/opensimad/compiled_external.json
 models/lai_uhlrich/opensimad/polynomial_cache.json
 models/lai_uhlrich/opensimad/canary_report.json
 models/lai_uhlrich/opensimad/polynomial-builds/
+models/lai_uhlrich/opensimad/*.conversion.json
 
 # Editor / OS
 .DS_Store

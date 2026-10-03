@@ -57,7 +57,7 @@ def runtime_identity() -> dict:
 
 def code_identity() -> dict:
     base = Path(__file__).resolve().parent
-    paths = [Path(__file__), base / 'polynomial_cache.py', base / 'mint_settings.py',
+    paths = [Path(__file__), base / 'polynomial_cache.py', base / 'mint_settings.py', base / 'model_prep.py',
              vendor_opencap_ad_dir() / 'muscleDataOpenSimAD.py',
              vendor_opencap_ad_dir() / 'polynomialsOpenSimAD.py',
              vendor_opencap_ad_dir() / 'utils.py']
@@ -111,6 +111,8 @@ def prepare_shards(build_dir: Path, *, chunk_frames: int, expected_chunks: int |
             shutil.copy2(ad_scaled_adjusted_model_path(), model_path)
             motion = _write_full_range_dummy(vendor_dummy_motion_path(), stage / 'DummyMotionFullRange.mot')
             table = opensim.TimeSeriesTable(str(motion))
+            if table.getTableMetaDataString('inDegrees') != 'yes':
+                raise ValueError('Prepared polynomial samples must declare degrees')
             labels = [str(label) for label in table.getColumnLabels()]
             values = np.asarray(table.getMatrix().to_numpy(), dtype=np.float64)
             if not len(values) or not np.isfinite(values).all():
@@ -126,6 +128,7 @@ def prepare_shards(build_dir: Path, *, chunk_frames: int, expected_chunks: int |
             atomic_npz(stage / 'samples.npz', coordinate_values=values)
             manifest = {
                 'schema_version': 1, 'model_name': MODEL_NAME, 'rng_seed': 42,
+                'coordinate_units': 'degrees',
                 'bounds_degrees': MINT_POLYNOMIAL_BOUNDS, 'chunk_frames': chunk_frames,
                 'sample_count': len(values), 'chunk_count': (len(values) + chunk_frames - 1) // chunk_frames,
                 'coordinate_labels': labels, 'muscle_names': muscles,

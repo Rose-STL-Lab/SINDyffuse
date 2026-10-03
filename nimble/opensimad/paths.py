@@ -10,6 +10,7 @@ from nimble.opensimad import OPENSIM_MODEL_BASENAME
 
 EXTERNAL_FUNCTION_METADATA = 'compiled_external.json'
 POLYNOMIAL_CACHE_METADATA = 'polynomial_cache.json'
+POLYNOMIAL_PIPELINE_VERSION = 'degrees_and_descending_model_coefficients_v1'
 
 def lai_uhlrich_dir() -> Path:
     return repo_root() / 'models' / 'lai_uhlrich'
@@ -265,6 +266,7 @@ def validate_polynomial_cache(*, require_metadata: bool=True, deep: bool=True) -
     metadata = _load_json(metadata_path)
     expected = {
         'artifact_type': 'opensimad_polynomial_cache',
+        'pipeline_version': POLYNOMIAL_PIPELINE_VERSION,
         'model': OPENSIM_MODEL_BASENAME,
         'model_sha256': _sha256(ad_scaled_adjusted_model_path()),
         'complete': True,
@@ -306,6 +308,7 @@ def publish_polynomial_cache(source_dir: Path) -> Path:
     from nimble.opensimad.mint_settings import MINT_POLYNOMIAL_BOUNDS
     payload = {
         'artifact_type': 'opensimad_polynomial_cache',
+        'pipeline_version': POLYNOMIAL_PIPELINE_VERSION,
         'model': OPENSIM_MODEL_BASENAME,
         'model_sha256': _sha256(ad_scaled_adjusted_model_path()),
         'artifacts': {name: _sha256(destination / name) for name in names},

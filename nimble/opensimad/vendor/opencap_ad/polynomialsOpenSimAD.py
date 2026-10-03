@@ -497,6 +497,7 @@ def getPolynomialCoefficients(data4PolynomialFitting, joints,
                     muscle_momentArms - muscle_momentArms_poly)**2, axis=0))
             diagnostic_event('fit_order_complete', side=side, muscle=muscle, order=order,
                              length_error_existing_criterion=float(muscleTendonLengths_diff_rms),
+                             length_rmse_diagnostic=float(np.sqrt(np.mean((muscle_muscleTendonLengths - muscle_muscleTendonLengths_poly)**2))),
                              moment_arm_rmse=momentArms_diff_rms.tolist())
             
             # Check if criterion is satisfied.
@@ -504,6 +505,9 @@ def getPolynomialCoefficients(data4PolynomialFitting, joints,
                 is_fullfilled = True
             elif order == order_max:
                 is_fullfilled = True
+                diagnostic_event('fit_max_order_threshold_unmet', side=side, muscle=muscle,
+                                 threshold=threshold, order=order,
+                                 policy='OpenCap max-order acceptance retained; diagnostic only')
                 if debugMode:
                     print("Max order ({}) for {}: rmse_lmte {}, max_rmse_ma {}".format(
                         order_max, muscle, round(muscleTendonLengths_diff_rms, 4),

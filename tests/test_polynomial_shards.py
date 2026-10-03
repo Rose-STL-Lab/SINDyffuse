@@ -155,6 +155,7 @@ class PolynomialShardsTest(unittest.TestCase):
         dummy = self.root / 'DummyMotionFullRange.mot'
         osim = MagicMock()
         osim.TimeSeriesTable.return_value.getColumnLabels.return_value = self.manifest['coordinate_labels']
+        osim.TimeSeriesTable.return_value.getTableMetaDataString.return_value = 'yes'
         osim.TimeSeriesTable.return_value.getMatrix.return_value.to_numpy.return_value = self.values
         force = osim.Model.return_value.getForceSet.return_value
         force.getSize.return_value = 1

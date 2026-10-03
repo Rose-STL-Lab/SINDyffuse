@@ -117,6 +117,12 @@ def get_mtu_length_and_moment_arm(pathModel, data, coordinates_table,
     tableProcessor.append(opensim.TabOpUseAbsoluteStateNames())
     time = np.asarray(table.getIndependentColumn())
     table = tableProcessor.processAndConvertToRadians(model)
+    # Verify the actual OpenSim input against the degree-valued slice. This is
+    # a unit-consistency assertion, not a biomechanical rejection threshold.
+    for column, label in enumerate(coordinates_table):
+        observed = table.getDependentColumn(label).to_numpy().reshape(-1)
+        np.testing.assert_allclose(observed, np.deg2rad(data[:, column]), rtol=1e-8, atol=1e-9,
+                                   err_msg=f'Polynomial sample units inconsistent for {label}')
     
     # Append missing states to table.
     stateVariableNames = model.getStateVariableNames()
@@ -208,7 +214,9 @@ def get_mtu_length_and_moment_arm(pathModel, data, coordinates_table,
                         dM[i, count, c] = cObj.computeMomentArm(
                             stateTrajectory[i], coordinate)
                 count += 1
-        diagnostic_event('frame_complete', chunk_index=idxSlice, frame_in_chunk=i)
+        diagnostic_event('frame_complete', chunk_index=idxSlice, frame_in_chunk=i,
+                         length_min_m=float(lMT[i].min()), length_max_m=float(lMT[i].max()),
+                         moment_arm_max_abs_m=float(np.abs(dM[i]).max()))
                         
     return [lMT, dM]
 

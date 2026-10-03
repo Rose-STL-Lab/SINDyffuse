@@ -19,7 +19,7 @@ spec:
         - name: TMPDIR
           value: /scratch
         - name: POLYNOMIAL_BUILD_DIR
-          value: /mnt/SINDyffuse/models/lai_uhlrich/opensimad/polynomial-builds/default
+          value: /mnt/SINDyffuse/models/lai_uhlrich/opensimad/polynomial-builds/units-model-v2
         - name: POLYNOMIAL_CHUNK_FRAMES
           value: "10"
         - name: POLYNOMIAL_EXPECTED_CHUNKS

@@ -4,6 +4,9 @@ from pathlib import Path
 from typing import Tuple
 import opensim as osim
 import numpy as np
+import json
+import hashlib
+from common.memory_diagnostics import diagnostic_event
 from nimble.muscle_activation import opensim_quiet
 from nimble.lai_coord_map import unlock_lai_coordinates
 from nimble.opensimad.paths import (
@@ -59,9 +62,10 @@ def prepare_welded_unlocked_lai(work_dir: Path | None=None, *, force: bool=False
         tmp.unlink(missing_ok=True)
     return out
 
-def _replace_simm_splines_in_spatial_transforms(model: osim.Model) -> None:
+def _replace_simm_splines_in_spatial_transforms(model: osim.Model) -> list[dict]:
     """OpenSimAD supports PolynomialFunction but not SimmSpline."""
     converted = []
+    report = []
     for index in range(model.get_JointSet().getSize()):
         joint = model.get_JointSet().get(index)
         if joint.getConcreteClassName() != 'CustomJoint':
@@ -89,25 +93,50 @@ def _replace_simm_splines_in_spatial_transforms(model: osim.Model) -> None:
                 raise ValueError(f'{joint.getName()} {axis_name} SimmSpline has fewer than two points')
             degree = min(5, x.shape[0] - 1)
             coefficients = np.polynomial.polynomial.polyfit(x, y, degree)
-            axis.set_function(osim.PolynomialFunction(osim.Vector(coefficients.tolist())))
+            # NumPy polynomial.polyfit is ascending; OpenSim is descending.
+            polynomial = osim.PolynomialFunction(osim.Vector(coefficients[::-1].tolist()))
+            actual = np.array([polynomial.calcValue(osim.Vector([float(value)])) for value in x])
+            expected = np.polynomial.polynomial.polyval(x, coefficients)
+            np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12,
+                                       err_msg=f'{joint.getName()}.{axis_name} coefficient convention mismatch')
+            record = {'joint': joint.getName(), 'axis': axis_name, 'degree': degree,
+                      'source_range': [float(x.min()), float(x.max())],
+                      'knot_rmse': float(np.sqrt(np.mean((actual - y)**2))),
+                      'knot_max_error': float(np.max(np.abs(actual - y)))}
+            report.append(record)
+            diagnostic_event('spline_conversion', **record)
+            axis.set_function(polynomial)
             converted.append(f'{joint.getName()}.{axis_name}')
     if converted:
         print('OpenSimAD spline compatibility: replaced ' + ', '.join(converted))
+    return report
 
 def prepare_ad_base_model(*, force: bool=False) -> Path:
     """Write AD base model: welded MTP + spline compatibility."""
     out = ad_base_model_path()
     out.parent.mkdir(parents=True, exist_ok=True)
     if out.is_file() and not force:
+        report_path = out.with_suffix('.conversion.json')
+        report = json.loads(report_path.read_text()) if report_path.is_file() else {}
+        if (report.get('coefficient_convention') != 'opensim_descending_v1'
+                or report.get('model_sha256') != hashlib.sha256(out.read_bytes()).hexdigest()
+                or not ad_scaled_adjusted_model_path().is_file()
+                or report.get('model_sha256') != hashlib.sha256(ad_scaled_adjusted_model_path().read_bytes()).hexdigest()):
+            raise RuntimeError('AD model predates the coefficient-order fix. Rebuild the external-function stage with --force.')
         return out
     welded = prepare_welded_unlocked_lai(out.parent, force=force)
     with opensim_quiet('Off'):
         model = osim.Model(str(welded))
-        _replace_simm_splines_in_spatial_transforms(model)
+        report = _replace_simm_splines_in_spatial_transforms(model)
         model.initSystem()
         model.printToXML(str(out))
     scaled = ad_scaled_adjusted_model_path()
     shutil.copy2(out, scaled)
+    out.with_suffix('.conversion.json').write_text(json.dumps({
+        'coefficient_convention': 'opensim_descending_v1', 'spline_approximation_diagnostics': report,
+        'model_sha256': hashlib.sha256(out.read_bytes()).hexdigest(),
+        'acceptance_policy': 'Coefficient evaluation consistency only; no undocumented MinT approximation cutoff',
+    }, indent=2) + '\n')
     return out
 
 def _add_opencap_contacts(model: osim.Model) -> None:

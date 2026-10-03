@@ -52,6 +52,19 @@ class OpenSimAdArtifactTest(unittest.TestCase):
                 with self.assertRaisesRegex(FileNotFoundError, 'Missing compiled'):
                     paths.validate_compiled_external(load_library=False, require_metadata=False)
 
+    def test_old_pipeline_metadata_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as source_s, tempfile.TemporaryDirectory() as dest_s:
+            source, dest = Path(source_s), Path(dest_s)
+            model = dest / 'model.osim'; model.write_text('model')
+            self._write_polynomials(source)
+            with patch.object(paths, 'opensimad_dir', return_value=dest), patch.object(paths, 'ad_scaled_adjusted_model_path', return_value=model):
+                metadata_path = paths.publish_polynomial_cache(source)
+                metadata = json.loads(metadata_path.read_text())
+                metadata.pop('pipeline_version')
+                metadata_path.write_text(json.dumps(metadata))
+                with self.assertRaisesRegex(RuntimeError, 'pipeline_version'):
+                    paths.validate_polynomial_cache()
+
 
 if __name__ == '__main__':
     unittest.main()
