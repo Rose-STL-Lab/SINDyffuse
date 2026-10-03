@@ -1,6 +1,7 @@
 from __future__ import annotations
 import shutil
 import sys
+import traceback
 from pathlib import Path
 from typing import Any, Dict, Tuple
 import numpy as np
@@ -212,6 +213,7 @@ def solve_opensimad_segment(q: np.ndarray, *, cfg: MuscleActivationConfig, solve
         meta['solver_success'] = False
         meta['solver_status'] = 'error'
         meta['error'] = str(exc)
+        meta['traceback'] = traceback.format_exc()
         activations = np.full((n_frames, len(names)), np.nan, dtype=np.float32)
         grf = np.full((n_frames, SIM_GRF_COLS), np.nan, dtype=np.float32)
         return (activations, False, meta, grf)

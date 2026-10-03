@@ -7,6 +7,8 @@ import os
 import shutil
 import sys
 import tempfile
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parent.parent
@@ -26,6 +28,9 @@ from nimble.muscle_activation import MuscleActivationConfig, muscle_activation_c
 from nimble.opensim_ik import apply_ground_offset_lai_q
 from nimble.opensimad.paths import opensimad_dir, validate_opensimad_worker_artifacts
 from nimble.opensimad_track import solve_one_opensimad_segment_isolated
+from nimble.lai_coord_map import LAI_CACHE_DOF_NAMES
+from nimble.opensimad.canary_selection import filtered_bounds_violations
+from common.memory_diagnostics import DIAGNOSTICS_ENV, diagnostic_event, diagnostic_stage, memory_monitor
 
 def _memory_value(name: str) -> int | None:
     path = Path('/sys/fs/cgroup') / name
@@ -35,8 +40,9 @@ def _memory_value(name: str) -> int | None:
     except (OSError, ValueError):
         return None
 
-def _select_motion(cache: Path, motion_id: str, min_frames: int) -> tuple[Path, dict]:
-    candidates = [cache / f'{motion_id}.npz'] if motion_id else sorted(cache.glob('*.npz'))[:128]
+def _select_motion(cache: Path, motion_id: str, min_frames: int, *, fps: float=20.0,
+                   mesh_interval: float=0.02, max_candidates: int=128) -> tuple[Path, dict]:
+    candidates = [cache / f'{motion_id}.npz'] if motion_id else sorted(cache.glob('*.npz'))[:max_candidates]
     best: tuple[float, Path, dict] | None = None
     for path in candidates:
         try:
@@ -44,15 +50,24 @@ def _select_motion(cache: Path, motion_id: str, min_frames: int) -> tuple[Path, 
         except Exception:
             continue
         q = np.asarray(data['q'])
-        if q.ndim == 2 and q.shape[0] >= min_frames and np.isfinite(q[:min_frames]).all():
+        if q.ndim == 2 and q.shape[1] == len(LAI_CACHE_DOF_NAMES) and q.shape[0] >= min_frames and np.isfinite(q[:min_frames]).all():
+            violations = filtered_bounds_violations(q[:min_frames], LAI_CACHE_DOF_NAMES,
+                fps=float(data.get('fps', fps)), mesh_interval=mesh_interval)
+            if violations:
+                diagnostic_event('canary_candidate_rejected', motion_path=str(path), bounds_violations=violations)
+                if motion_id:
+                    raise ValueError(f'Explicit canary motion {motion_id} exceeds filtered polynomial bounds: {json.dumps(violations)}')
+                continue
             score = float(np.std(q[:min_frames], axis=0).sum())
             if best is None or score > best[0]:
                 best = (score, path, data)
     if best is not None:
         _, path, data = best
+        print(f'Canary input selected: {path} (filtered polynomial bounds verified)', flush=True)
+        diagnostic_event('canary_candidate_selected', motion_path=str(path), score=best[0])
         return path, data
     label = motion_id or f'any motion with at least {min_frames} frames'
-    raise FileNotFoundError(f'No valid canary NPZ for {label} under {cache}')
+    raise FileNotFoundError(f'No finite, in-domain canary NPZ for {label} under {cache}; scanned {len(candidates)} candidates')
 
 def main() -> None:
     parser = argparse.ArgumentParser(description='Run one MinT-sized OpenSimAD canary solve')
@@ -62,14 +77,30 @@ def main() -> None:
     parser.add_argument('--mesh_interval', type=float, default=0.02)
     parser.add_argument('--max_iterations', type=int, default=2500)
     parser.add_argument('--work_dir', default='')
+    parser.add_argument('--max_candidates', type=int, default=128, help='Maximum sorted motions scanned for an in-domain diagnostic window')
+    parser.add_argument('--log_dir', default=str(_REPO / 'logs'))
     args = parser.parse_args()
+    if args.max_candidates <= 0:
+        parser.error('--max_candidates must be positive')
+    log_dir = Path(args.log_dir).expanduser().resolve()
+    log_dir.mkdir(parents=True, exist_ok=True)
+    name = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '_' + uuid.uuid4().hex[:12]
+    path = log_dir / f'opensimad_canary_{name}.jsonl'
+    os.environ[DIAGNOSTICS_ENV] = str(path)
+    print(f'Persistent canary diagnostics: {path}', flush=True)
+    diagnostic_event('canary_run_start', arguments=vars(args))
+    with memory_monitor(10), diagnostic_stage('canary'):
+        _run(args)
+    diagnostic_event('canary_run_complete')
 
+def _run(args: argparse.Namespace) -> None:
     threads = configure_compute_threads(_BOOTSTRAP_MOCO_THREADS)
     artifacts = validate_opensimad_worker_artifacts(load_library=True, deep=True)
     core, buffer = segment_frame_counts(float(args.fps), core_s=1.4, buffer_s=0.14)
     solve_frames = core + 2 * buffer
     cache = lai_cache_dir(Path(args.data_root))
-    path, data = _select_motion(cache, str(args.motion_id).strip(), solve_frames)
+    path, data = _select_motion(cache, str(args.motion_id).strip(), solve_frames,
+                              fps=float(args.fps), mesh_interval=float(args.mesh_interval), max_candidates=args.max_candidates)
     fps = float(data.get('fps', args.fps))
     q = np.asarray(data['q'][:solve_frames], dtype=np.float64)
     q, ground_shift = apply_ground_offset_lai_q(q, sphere_offset_y_m=-0.02)
@@ -111,6 +142,7 @@ def main() -> None:
         report_path = opensimad_dir() / 'canary_report.json'
         report_path.write_text(json.dumps(report, indent=2, default=str) + '\n', encoding='utf-8')
         print(json.dumps(report, indent=2, default=str))
+        diagnostic_event('canary_report', report=report)
         if not ok or not np.isfinite(activations).any():
             raise RuntimeError(f'OpenSimAD canary failed; see {report_path}')
     finally:

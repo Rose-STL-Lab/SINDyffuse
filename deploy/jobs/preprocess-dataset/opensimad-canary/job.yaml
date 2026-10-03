@@ -36,10 +36,15 @@ spec:
         command: ["/bin/bash", "-c"]
         args:
         - |
+          set -eo pipefail
+          mkdir -p /mnt/SINDyffuse/logs
+          attempt="$(date -u +%Y%m%dT%H%M%SZ)_${HOSTNAME}"
+          exec > >(tee -a "/mnt/SINDyffuse/logs/opensimad-canary_${attempt}.log") 2>&1
           source deploy/scripts/job-env.sh
           source deploy/scripts/ensure-casadi.sh
           mkdir -p /scratch
-          python scripts/run_opensimad_canary.py \
+          python -u scripts/run_opensimad_canary.py \
+            --log_dir /mnt/SINDyffuse/logs \
             --mesh_interval 0.02 \
             --max_iterations 2500
         resources:

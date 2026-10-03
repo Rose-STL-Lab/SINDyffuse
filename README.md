@@ -117,6 +117,14 @@ rather than claiming verified exact parity with MinT's unpublished generation co
 
 ### Distributed polynomial cache build
 
+The OpenSimAD canary automatically selects a finite diagnostic window that remains within
+the published polynomial ROM after the solver's 6 Hz filter and mesh interpolation. It
+does not clip motion, expand bounds, or permit worker-side fitting. Among eligible windows
+it retains the highest-variability selection rule. `--max_candidates` controls the sorted
+scan budget (default 128); an explicit out-of-domain `--motion_id` fails with coordinate
+ranges instead of silently selecting another motion. Canary console/JSONL logs persist
+under `/mnt/SINDyffuse/logs`, and failed solver reports now include tracebacks.
+
 Run the three stages in sequence using the local orchestrator:
 
 ```bash
