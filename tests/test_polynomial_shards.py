@@ -192,5 +192,15 @@ class PolynomialShardsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Stale or misindexed'):
             shards.validate_chunk(path, self.manifest, self.values, 0)
 
+    def test_known_fitting_upgrade_is_explicit_and_does_not_bypass_extraction_drift(self) -> None:
+        old = shards.code_identity()
+        old.update(shards._SIX_DIMENSION_PREDECESSOR)
+        with self.assertRaisesRegex(ValueError, 'changed'):
+            shards.validate_code_identity(old)
+        shards.validate_code_identity(old, allow_fitting_upgrade=True)
+        old['muscleDataOpenSimAD.py'] = 'changed extraction'
+        with self.assertRaisesRegex(ValueError, 'changed'):
+            shards.validate_code_identity(old, allow_fitting_upgrade=True)
+
 if __name__ == '__main__':
     unittest.main()

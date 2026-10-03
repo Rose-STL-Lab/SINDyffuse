@@ -23,6 +23,26 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from common.memory_diagnostics import diagnostic_event, diagnostic_stage
+from functools import lru_cache
+
+@lru_cache(maxsize=None)
+def _polynomial_exponents(dimension, order):
+    """Total-degree monomials in the same nested-loop order as OpenCap."""
+    if dimension < 0 or order < 0:
+        raise ValueError('Polynomial dimension and order must be nonnegative')
+    if dimension == 0:
+        return ((),)
+    return tuple((power,) + suffix for power in range(order + 1)
+                 for suffix in _polynomial_exponents(dimension - 1, order - power))
+
+def _monomial(x, exponents, derivative=None):
+    value = 1
+    for component, power in enumerate(exponents):
+        if component == derivative:
+            value *= power * pow(x[component], max(0, power - 1))
+        else:
+            value *= pow(x[component], power)
+    return value
 
 class polynomials:
     
@@ -31,6 +51,11 @@ class polynomials:
         self.coefficients = coefficients
         self.dimension = dimension
         self.order = order
+        if dimension > 5:
+            expected = len(_polynomial_exponents(dimension, order))
+            if len(coefficients) != expected:
+                raise ValueError(f'Expected {expected} coefficients, got {len(coefficients)}')
+            return
         
         nq = [0, 0, 0, 0, 0]
         NCoeff = 0
@@ -62,6 +87,9 @@ class polynomials:
                             'but got: {}'.format(len(coefficients)))
             
     def calcValue(self, x):        
+        if self.dimension > 5:
+            return sum(coefficient * _monomial(x, powers) for coefficient, powers in
+                       zip(self.coefficients, _polynomial_exponents(self.dimension, self.order)))
         nq = [0, 0, 0, 0, 0]
         coeff_nr = 0
         value = 0
@@ -95,6 +123,11 @@ class polynomials:
         return value
     
     def calcDerivative(self, x, derivComponent):
+        if self.dimension > 5:
+            if not 0 <= derivComponent < self.dimension:
+                raise ValueError('Derivative component outside polynomial dimension')
+            return sum(coefficient * _monomial(x, powers, derivComponent) for coefficient, powers in
+                       zip(self.coefficients, _polynomial_exponents(self.dimension, self.order)))
         nq = [0, 0, 0, 0, 0]
         coeff_nr = 0
         value = 0
@@ -179,6 +212,9 @@ class polynomial_estimation:
         
         self.dimension = dimension
         self.order = order
+        if dimension > 5:
+            self.NCoeff = len(_polynomial_exponents(dimension, order))
+            return
         
         nq = [0, 0, 0, 0, 0]
         self.NCoeff = 0
@@ -206,6 +242,9 @@ class polynomial_estimation:
                             self.NCoeff += 1
                     
     def getVariables(self, x):        
+        if self.dimension > 5:
+            return np.column_stack([_monomial(x.T, powers) * np.ones(x.shape[0])
+                                    for powers in _polynomial_exponents(self.dimension, self.order)])
         nq = [0, 0, 0, 0, 0]
         coeff_nr = 0
         value = np.zeros((x.shape[0], self.NCoeff))
@@ -239,6 +278,11 @@ class polynomial_estimation:
         return value
     
     def getVariableDerivatives(self, x, derivComponent):
+        if self.dimension > 5:
+            if not 0 <= derivComponent < self.dimension:
+                raise ValueError('Derivative component outside polynomial dimension')
+            return np.column_stack([_monomial(x.T, powers, derivComponent) * np.ones(x.shape[0])
+                                    for powers in _polynomial_exponents(self.dimension, self.order)])
         nq = [0, 0, 0, 0, 0]
         coeff_nr = 0
         value = np.zeros((x.shape[0], self.NCoeff))

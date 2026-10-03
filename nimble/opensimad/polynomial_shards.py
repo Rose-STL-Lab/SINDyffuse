@@ -18,6 +18,23 @@ from nimble.opensimad.mint_settings import MINT_POLYNOMIAL_BOUNDS
 from nimble.opensimad.paths import vendor_opencap_ad_dir
 
 MODEL_NAME = f'{OPENSIM_MODEL_BASENAME}_scaled_adjusted'
+# Known predecessor: fitting-only 5D basis bugfix, extraction/data format unchanged.
+_SIX_DIMENSION_PREDECESSOR = {
+    'polynomial_shards.py': '798fee30658d7e48a40c6492e78790d9f7545672666cff02f31f6cae1ca4cca4',
+    'polynomialsOpenSimAD.py': 'bc1cc5fcc5bdc7d8a22b08d2bdcd2dadb5081775aad4d78ff627534b0987f7e4',
+}
+
+def validate_code_identity(recorded: dict, *, allow_fitting_upgrade: bool=False) -> None:
+    current = code_identity()
+    changed = {key for key in recorded.keys() | current.keys() if recorded.get(key) != current.get(key)}
+    if not changed:
+        return
+    if (allow_fitting_upgrade and changed <= _SIX_DIMENSION_PREDECESSOR.keys()
+            and all(recorded.get(key) == value for key, value in _SIX_DIMENSION_PREDECESSOR.items())):
+        diagnostic_event('fitting_code_upgrade', original_code=recorded, finalization_code=current,
+                         reason='Extend total-degree basis/evaluator beyond five coordinates; extraction unchanged')
+        return
+    raise ValueError('Code/runtime changed since preparation; select a new build directory')
 
 def file_hash(path: Path) -> str:
     digest = hashlib.sha256()
@@ -136,7 +153,7 @@ def prepare_shards(build_dir: Path, *, chunk_frames: int, expected_chunks: int |
     diagnostic_event('prepared_inputs', build_id=manifest['build_id'], chunk_count=manifest['chunk_count'])
     return manifest
 
-def load_inputs(build_dir: Path, *, expected_chunks: int | None=None) -> tuple[dict, np.ndarray]:
+def load_inputs(build_dir: Path, *, expected_chunks: int | None=None, allow_fitting_upgrade: bool=False) -> tuple[dict, np.ndarray]:
     root = Path(build_dir)
     manifest = json.loads((root / 'manifest.json').read_text())
     if manifest.get('schema_version') != 1 or manifest.get('build_id') != build_identity(manifest):
@@ -150,7 +167,8 @@ def load_inputs(build_dir: Path, *, expected_chunks: int | None=None) -> tuple[d
     for name, key in ((f'{MODEL_NAME}.osim', 'model_sha256'), ('DummyMotionFullRange.mot', 'motion_sha256'), ('samples.npz', 'samples_sha256')):
         if file_hash(root / name) != manifest[key]:
             raise ValueError(f'Input checksum mismatch: {name}')
-    if manifest['code'] != code_identity() or manifest['runtime'] != runtime_identity():
+    validate_code_identity(manifest['code'], allow_fitting_upgrade=allow_fitting_upgrade)
+    if manifest['runtime'] != runtime_identity():
         raise ValueError('Code/runtime changed since preparation; select a new build directory')
     with np.load(root / 'samples.npz', allow_pickle=False) as archive:
         values = archive['coordinate_values'].copy()
@@ -224,9 +242,9 @@ def extract_shard(build_dir: Path, *, index: int, work_dir: Path, expected_chunk
                     candidate.unlink(missing_ok=True)
     return result
 
-def assemble_shards(build_dir: Path, *, expected_chunks: int | None=None) -> tuple[dict, dict]:
+def assemble_shards(build_dir: Path, *, expected_chunks: int | None=None, allow_fitting_upgrade: bool=False) -> tuple[dict, dict]:
     root = Path(build_dir)
-    manifest, values = load_inputs(root, expected_chunks=expected_chunks)
+    manifest, values = load_inputs(root, expected_chunks=expected_chunks, allow_fitting_upgrade=allow_fitting_upgrade)
     lengths, arms = [], []
     for index in range(manifest['chunk_count']):
         lmt, moment_arms = validate_chunk(chunk_path(root, index), manifest, values, index)
@@ -238,14 +256,14 @@ def assemble_shards(build_dir: Path, *, expected_chunks: int | None=None) -> tup
                       'coordinate_names': [label.split('/')[-2] for label in manifest['coordinate_labels']],
                       'coordinate_values': values}
 
-def finalize_shards(build_dir: Path, *, work_dir: Path, expected_chunks: int | None=None) -> dict:
+def finalize_shards(build_dir: Path, *, work_dir: Path, expected_chunks: int | None=None, allow_fitting_upgrade: bool=False) -> dict:
     from nimble.opensimad.polynomial_cache import _ensure_vendor_on_path, RIGHT_JOINTS, LEFT_JOINTS, RIGHT_MUSCLES, LEFT_MUSCLES
     from nimble.opensimad.paths import ad_scaled_adjusted_model_path, opensimad_dir, publish_polynomial_cache, validate_polynomial_cache
     _ensure_vendor_on_path()
     from muscleDataOpenSimAD import getMTParameters, getPolynomialData
     root = Path(build_dir).resolve()
     with build_lock(root / '.finalize.lock'), diagnostic_stage('finalize_shards'):
-        manifest, fitting = assemble_shards(root, expected_chunks=expected_chunks)
+        manifest, fitting = assemble_shards(root, expected_chunks=expected_chunks, allow_fitting_upgrade=allow_fitting_upgrade)
         if file_hash(ad_scaled_adjusted_model_path()) != manifest['model_sha256']:
             raise ValueError('Shared runtime model changed since preparation; refusing to publish')
         Path(work_dir).mkdir(parents=True, exist_ok=True)
@@ -265,6 +283,8 @@ def finalize_shards(build_dir: Path, *, work_dir: Path, expected_chunks: int | N
                 metadata = json.loads(metadata_path.read_text())
                 metadata['distributed_build_id'] = manifest['build_id']
                 metadata['distributed_manifest_sha256'] = file_hash(root / 'manifest.json')
+                metadata['finalization_code'] = code_identity()
+                metadata['fitting_code_upgrade_allowed'] = allow_fitting_upgrade
                 fd, name = tempfile.mkstemp(prefix='.polynomial-metadata.', dir=metadata_path.parent)
                 try:
                     with os.fdopen(fd, 'w') as fp:
@@ -276,6 +296,7 @@ def finalize_shards(build_dir: Path, *, work_dir: Path, expected_chunks: int | N
                 finally:
                     Path(name).unlink(missing_ok=True)
                 metadata = validate_polynomial_cache(require_metadata=True, deep=True)
-        result = {'metadata_path': str(metadata_path), 'build_id': manifest['build_id'], 'artifacts': sorted(metadata['artifacts'])}
+        result = {'metadata_path': str(metadata_path), 'build_id': manifest['build_id'],
+                  'finalization_code': code_identity(), 'artifacts': sorted(metadata['artifacts'])}
         (root / 'finalized.json').write_text(json.dumps(result, indent=2) + '\n')
         return result

@@ -171,6 +171,16 @@ wait budgets are configurable through `POLYNOMIAL_PREPARE_TIMEOUT` (2h),
 local wait timeouts, not Kubernetes runtime deadlines. Preparation/finalization request
 16 GiB each; adjust their manifests if measured fitting peaks require more memory.
 
+**Finalizer-only recovery from the legacy five-coordinate basis bug:** the fitter and
+runtime evaluator now support muscles spanning six or more coordinates without dropping
+moment arms. The finalizer manifest enables `--allow_fitting_upgrade`, which permits only
+the known predecessor hashes for this fitting-only repair. All input, runtime, extraction
+code and slice checks remain enforced. It does not rewrite the prepared manifest or change
+the slices. Published metadata records the original build ID and new finalization code.
+For this specific failure, sync the fixed code to `/mnt/SINDyffuse`, recreate only the
+`sindyffuse-finalize-opensimad-polynomials` Job, and apply its manifest; do not rerun the
+full polynomial orchestrator (preparation deliberately rejects changed build code).
+
 Each `{id}.npz` stores generalized coordinates `q` `[T, 31]` plus `muscle_activations` `[T, 80]`, `muscle_activation_mask` `[T]`, `sim_grf` `[T, 18]`, and SINDy feature rows.
 
 At **20 fps**, segmented OpenSimAD uses **28-frame cores**, **3-frame buffers**, and **34-frame solve windows** (1.4 s core / 0.14 s buffer).

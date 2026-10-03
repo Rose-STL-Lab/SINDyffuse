@@ -33,6 +33,7 @@ spec:
           source deploy/scripts/ensure-casadi.sh
           python -u scripts/build_lai_opensimad_polynomials.py \
             --mode finalize --build_dir "${POLYNOMIAL_BUILD_DIR}" \
+            --allow_fitting_upgrade \
             --expected_chunks "${POLYNOMIAL_EXPECTED_CHUNKS}" \
             --num_threads "${MOCO_NUM_THREADS}" --work_dir /scratch \
             --log_dir /mnt/SINDyffuse/logs

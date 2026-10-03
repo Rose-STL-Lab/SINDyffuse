@@ -150,5 +150,37 @@ class PolynomialDiagnosticsTest(unittest.TestCase):
         self.assertEqual(logged['test_r']['order'], 3)
         np.testing.assert_allclose(logged['test_r']['coefficients'], [0.4, 0.1, 0.02, 0], atol=1e-12)
 
+    def test_generalized_basis_matches_legacy_order_and_derivatives(self) -> None:
+        module = load_vendor('polynomialsOpenSimAD')
+        rng = np.random.default_rng(3)
+        for dimension in range(1, 6):
+            x = rng.uniform(-0.5, 0.5, (8, dimension))
+            basis = module.polynomial_estimation(dimension, 3)
+            powers = module._polynomial_exponents(dimension, 3)
+            np.testing.assert_array_equal(basis.getVariables(x), np.column_stack([
+                module._monomial(x.T, p) * np.ones(len(x)) for p in powers]))
+            for component in range(dimension):
+                np.testing.assert_array_equal(basis.getVariableDerivatives(x, component), np.column_stack([
+                    module._monomial(x.T, p, component) * np.ones(len(x)) for p in powers]))
+
+    def test_six_coordinate_fit_and_runtime_evaluation(self) -> None:
+        module = load_vendor('polynomialsOpenSimAD')
+        x = np.random.default_rng(9).uniform(-0.5, 0.5, (200, 6))
+        slopes = np.arange(1, 7) * 0.01
+        dataset = {'coordinate_names': [f'q{i}' for i in range(6)],
+                   'coordinate_values': np.rad2deg(x), 'muscle_names': ['gasmed_r'],
+                   'mtu_lengths': (0.4 + x @ slopes)[:, None],
+                   'mtu_moment_arms': np.broadcast_to(-slopes, (len(x), 1, 6)).copy()}
+        result = module.getPolynomialCoefficients(dataset, dataset['coordinate_names'], ['gasmed_r'],
+                                                  removeBadHipFlexionEntries=False)['gasmed_r']
+        self.assertEqual(result['dimension'], 6)
+        self.assertEqual(result['order'], 3)
+        self.assertEqual(len(result['coefficients']), 84)
+        polynomial = module.polynomials(result['coefficients'], 6, 3)
+        for row in x[:5]:
+            self.assertAlmostEqual(polynomial.calcValue(row), 0.4 + row @ slopes, places=12)
+            for component in range(6):
+                self.assertAlmostEqual(polynomial.calcDerivative(row, component), slopes[component], places=12)
+
 if __name__ == '__main__':
     unittest.main()

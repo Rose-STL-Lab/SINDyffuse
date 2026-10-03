@@ -26,12 +26,15 @@ def main() -> None:
     parser.add_argument('--build_dir', default='', help='Immutable input/results directory on shared storage (distributed modes)')
     parser.add_argument('--chunk_index', type=int, default=None, help='Slice index (default: JOB_COMPLETION_INDEX)')
     parser.add_argument('--expected_chunks', type=int, default=None, help='Validate prepared task count against Indexed Job completions')
+    parser.add_argument('--allow_fitting_upgrade', action='store_true', help='Finalize only: permit the known 5D-to-6D fitting bugfix with original slices')
     parser.add_argument('--num_threads', type=int, default=1, help='MuscleAnalysis workers (default: 1; increase only after measuring peak RSS)')
     parser.add_argument('--work_dir', default='', help='Scratch build directory (default: TMPDIR)')
     parser.add_argument('--chunk_frames', type=int, default=100, help='Frames per disposable OpenSim process (default: 100)')
     parser.add_argument('--log_dir', default=str(_REPO / 'logs'), help='Persistent directory for per-attempt JSONL diagnostics')
     parser.add_argument('--memory_log_interval', type=float, default=10.0, help='Memory heartbeat interval in seconds')
     args = parser.parse_args()
+    if args.allow_fitting_upgrade and args.mode != 'finalize':
+        parser.error('--allow_fitting_upgrade is only valid for finalize')
     if args.chunk_frames <= 0 or args.num_threads <= 0:
         parser.error('--chunk_frames and --num_threads must be positive')
     if args.mode != 'single' and not args.build_dir:
@@ -90,7 +93,8 @@ def _build(args: argparse.Namespace) -> None:
                     result = {'chunk_path': str(extract_shard(Path(args.build_dir), index=args.chunk_index,
                                 work_dir=work_dir, expected_chunks=args.expected_chunks))}
                 else:
-                    result = finalize_shards(Path(args.build_dir), work_dir=work_dir, expected_chunks=args.expected_chunks)
+                    result = finalize_shards(Path(args.build_dir), work_dir=work_dir, expected_chunks=args.expected_chunks,
+                                             allow_fitting_upgrade=args.allow_fitting_upgrade)
             print(result, flush=True)
             diagnostic_event('distributed_mode_complete', mode=args.mode, result=result)
             return
