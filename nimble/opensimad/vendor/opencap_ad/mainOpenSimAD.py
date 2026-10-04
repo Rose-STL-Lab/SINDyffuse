@@ -36,7 +36,7 @@ import pandas as pd
 # %% Settings.
 def run_tracking(baseDir, dataDir, subject, settings, case='0',
                  solveProblem=True, analyzeResults=True, writeGUI=True,
-                 computeKAM=True, computeMCF=True):
+                 computeKAM=True, computeMCF=True, writeMachineReadable=False):
     
     # %% Settings.
     # Most available settings are left from trying out different formulations 
@@ -2179,7 +2179,9 @@ def run_tracking(baseDir, dataDir, subject, settings, case='0',
         GRM_labels_fig = [item for sublist in GRM_labels_fig for item in sublist]
         COP_labels_fig = [item for sublist in COP_labels_fig for item in sublist]
         
-        if writeGUI:
+        # Headless workers still require these files to consume converged labels.
+        # Keep the historical GUI export behavior for external callers.
+        if writeGUI or writeMachineReadable:
             # Kinematics and activations.
             from utils import numpy_to_storage
             labels = ['time'] + joints 

@@ -133,6 +133,17 @@ Job completion does not imply every segment succeeded; inspect per-motion manife
 usable surrogate windows before applying the full `moco-track` Job. A systemic code,
 artifact, OOM or nonfinite error still requires diagnosis rather than blind fan-out.
 
+Headless activation workers explicitly request machine-readable kinematics/activation
+and resultant-GRF exports (`writeMachineReadable=True`, `writeGUI=False`). Solver success
+alone is not sufficient: the wrapper must find and parse the exported labels. This fixes
+the historical mismatch where successful solves were reported as missing-output failures.
+The wrapper consumes `GRF_resultant_*.mot`, not the per-contact-sphere file. Model/F.so/
+polynomial rebuilds are not required for this export-only repair. Existing converged
+`w_opt_0.npy` and `stats_0.npy` can be reanalyzed with `solveProblem=False` if their complete
+scratch session survives; scratch is not a persistent recovery checkpoint and is lost
+when a pod is deleted. Restarted workers otherwise solve again. Avoid changing the mounted
+checkout while old workers are still active; deploy the fix before restarting them.
+
 **Surrogate windows:** `window_size=64` is maximum context, not a minimum usable run.
 `min_window_size=1` retains shorter contiguous valid runs, including isolated frames.
 Partial motions are no longer rejected based on whole-motion NaN percentage. Batches pad

@@ -192,15 +192,16 @@ def solve_opensimad_segment(q: np.ndarray, *, cfg: MuscleActivationConfig, solve
             solveProblem=True,
             analyzeResults=True,
             writeGUI=False,
+            writeMachineReadable=True,
             computeKAM=False,
             computeMCF=False,
         )
         act_mot = next(dyn_folder.glob('kinematics_activations_*.mot'), None)
-        grf_mot = next(dyn_folder.glob('GRF_*.mot'), None)
+        grf_mot = next(dyn_folder.glob('GRF_resultant_*.mot'), None)
         if act_mot is None:
             # OpenCap may nest under trial subfolder
             act_mot = next(session.joinpath('OpenSimData', 'Dynamics').rglob('kinematics_activations_*.mot'), None)
-            grf_mot = next(session.joinpath('OpenSimData', 'Dynamics').rglob('GRF_*.mot'), None)
+            grf_mot = next(session.joinpath('OpenSimData', 'Dynamics').rglob('GRF_resultant_*.mot'), None)
         if act_mot is None:
             raise RuntimeError('OpenSimAD finished without kinematics_activations_*.mot')
         activations = _parse_activations_mot(act_mot, n_frames=n_frames, muscle_name_list=names, fps=float(cfg.fps))
