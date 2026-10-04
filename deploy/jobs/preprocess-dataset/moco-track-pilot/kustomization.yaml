@@ -1,0 +1,24 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../moco-track
+patches:
+  - target:
+      kind: Job
+      name: sindyffuse-preprocess-moco-track
+    patch: |-
+      - op: replace
+        path: /metadata/name
+        value: sindyffuse-preprocess-moco-track-pilot
+      - op: replace
+        path: /spec/parallelism
+        value: 5
+      - op: replace
+        path: /spec/completions
+        value: 5
+      - op: replace
+        path: /spec/template/spec/containers/0/env/0/value
+        value: "180"
+      - op: replace
+        path: /spec/template/spec/containers/0/env/1/value
+        value: "900"

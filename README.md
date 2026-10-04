@@ -117,6 +117,33 @@ rather than claiming verified exact parity with MinT's unpublished generation co
 
 ### Distributed polynomial cache build
 
+**Activation pilot after an ordinary nonconverged canary:** once artifacts validate and
+the solver runs without systemic numerical errors, a bounded multi-motion pilot can test
+coverage without accepting any failed solve:
+
+```bash
+kubectl apply -n ai-md -k /Users/nick.king/Documents/git_repos/SINDyffuse/deploy/jobs/preprocess-dataset/moco-track-pilot
+```
+
+The pilot runs five indexed pods (indices 0–4), with the production 180-way shard mapping
+and a 900-motion input cap: up to 25 motions total. It uses the same solver/ROM checks and
+does not relax convergence. Manifest shard numbering remains production-compatible.
+Do not run pilot and production workers concurrently: they write the same NPZ/manifests.
+Job completion does not imply every segment succeeded; inspect per-motion manifests and
+usable surrogate windows before applying the full `moco-track` Job. A systemic code,
+artifact, OOM or nonfinite error still requires diagnosis rather than blind fan-out.
+
+**Surrogate windows:** `window_size=64` is maximum context, not a minimum usable run.
+`min_window_size=1` retains shorter contiguous valid runs, including isolated frames.
+Partial motions are no longer rejected based on whole-motion NaN percentage. Batches pad
+short windows; attention, activation loss and validation metrics ignore padding. Temporal
+loss only uses adjacent valid frames, and is absent for a one-frame window. Invalid labels
+are never interpolated, zero-filled as targets, or joined across a gap. Minimum context
+is adjustable for a learning experiment, not a new MinT biomechanical quality gate.
+Long valid runs use sliding windows with tail coverage; coverage counters and the window
+policy are stored in logs/checkpoints. Legacy relaxed validity flags cannot enable NaN
+targets. Changing minimum context changes training data coverage, so record it with results.
+
 **Required rebuild after the unit/model-conversion repair:** polynomial IK tables now
 declare `inDegrees=yes`, and NumPy spline coefficients are reversed for OpenSim's
 descending-power convention. The old `default` build and caches derived from it are

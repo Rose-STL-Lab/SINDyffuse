@@ -11,15 +11,15 @@ import random
 from typing import Any, Dict, Optional
 import numpy as np
 import torch
-import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from common.distributed import cleanup_distributed, get_rank, get_world_size, init_distributed, is_main_process, log_gpu_diagnostics, log_main, maybe_relaunch_with_torchrun, model_state_dict, parse_distributed_enabled, resolve_nproc_per_node, should_auto_relaunch_torchrun, resolve_train_device, seed_all, setup_spawn_if_distributed, wrap_ddp
 from common.paths import activation_surrogate_latest_link, default_humanml3d_root, update_latest_symlink
 from common.run_setup import default_config_path, require_nimble_b3d, require_nimble_normalization, resolve_run_dir, resolve_training_data_root
 from common.run_logging import RunLogger, add_run_log_cli_args, get_run_logger, run_logged_main
-from surrogate.dataset import ActivationB3DDataset
+from surrogate.dataset import ActivationB3DDataset, collate_activation_windows
 from surrogate.model import build_activation_surrogate
+from surrogate.losses import activation_surrogate_loss
 
 def _set_seed(seed: int) -> None:
     random.seed(int(seed))
@@ -28,20 +28,11 @@ def _set_seed(seed: int) -> None:
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(int(seed))
 
-def activation_surrogate_loss(pred: torch.Tensor, target: torch.Tensor, *, lambda_temporal: float=0.1) -> torch.Tensor:
-    loss_main = F.l1_loss(pred, target)
-    if pred.shape[1] < 2 or float(lambda_temporal) <= 0.0:
-        return loss_main
-    dp = pred[:, 1:] - pred[:, :-1]
-    dt = target[:, 1:] - target[:, :-1]
-    loss_temporal = F.l1_loss(dp, dt)
-    return loss_main + float(lambda_temporal) * loss_temporal
-
-def _per_muscle_l1(pred: torch.Tensor, target: torch.Tensor) -> np.ndarray:
-    err = torch.abs(pred - target).mean(dim=(0, 1))
+def _per_muscle_l1(pred: torch.Tensor, target: torch.Tensor, valid_mask: torch.Tensor) -> np.ndarray:
+    err = torch.abs(pred[valid_mask] - target[valid_mask]).mean(dim=0)
     return err.detach().cpu().numpy().astype(np.float64)
 
-def train_activation_surrogate(*, data_root: str, output: str, split: str='train', val_split: str='val', window_size: int=64, window_stride: int=16, normalize_q: bool=True, max_motions: int=0, skip_zero_placeholders: bool=True, model_type: str='mlp', hidden_dim: int=256, num_layers: int=3, dropout: float=0.1, num_heads: int=4, dim_feedforward: int=128, lr: float=0.001, weight_decay: float=0.0001, epochs: int=50, batch_size: int=32, lambda_temporal: float=0.1, device_name: str='auto', num_workers: int=0, seed: int=42, distributed_cfg: Optional[Dict[str, Any]]=None) -> Dict[str, Any]:
+def train_activation_surrogate(*, data_root: str, output: str, split: str='train', val_split: str='val', window_size: int=64, window_stride: int=16, normalize_q: bool=True, max_motions: int=0, skip_zero_placeholders: bool=True, model_type: str='mlp', hidden_dim: int=256, num_layers: int=3, dropout: float=0.1, num_heads: int=4, dim_feedforward: int=128, lr: float=0.001, weight_decay: float=0.0001, epochs: int=50, batch_size: int=32, lambda_temporal: float=0.1, device_name: str='auto', num_workers: int=0, seed: int=42, distributed_cfg: Optional[Dict[str, Any]]=None, min_window_size: int=1) -> Dict[str, Any]:
     use_ddp = init_distributed(distributed_cfg=distributed_cfg)
     seed_all(int(seed))
     data_root = resolve_training_data_root(data_root)
@@ -50,12 +41,15 @@ def train_activation_surrogate(*, data_root: str, output: str, split: str='train
     device = resolve_train_device(device_name)
     if not use_ddp:
         log_gpu_diagnostics()
-    train_ds = ActivationB3DDataset(data_root, split=split, window_size=window_size, window_stride=window_stride, normalize_q=normalize_q, max_motions=max_motions, skip_zero_placeholders=skip_zero_placeholders)
+    train_ds = ActivationB3DDataset(data_root, split=split, window_size=window_size, window_stride=window_stride, normalize_q=normalize_q, max_motions=max_motions, skip_zero_placeholders=skip_zero_placeholders, min_window_size=min_window_size)
     try:
-        val_ds = ActivationB3DDataset(data_root, split=val_split, window_size=window_size, window_stride=window_stride, normalize_q=normalize_q, max_motions=max_motions, skip_zero_placeholders=skip_zero_placeholders)
+        val_ds = ActivationB3DDataset(data_root, split=val_split, window_size=window_size, window_stride=window_stride, normalize_q=normalize_q, max_motions=max_motions, skip_zero_placeholders=skip_zero_placeholders, min_window_size=min_window_size)
     except ValueError:
         val_ds = None
     logger = get_run_logger()
+    for label, dataset in (('train', train_ds), ('val', val_ds)):
+        if dataset is not None:
+            logger.progress(f'{label}: valid_frames={dataset.num_valid_frames} short_windows={dataset.num_short_windows} context_max={window_size} context_min={min_window_size}')
     logger.progress(f'train split={split}: windows={len(train_ds)} motions_kept={train_ds.num_motions_kept} skipped_zero={train_ds.num_motions_skipped_zero} skipped_corrupt={train_ds.num_motions_skipped_corrupt}')
     if val_ds is not None:
         logger.progress(f'val split={val_split}: windows={len(val_ds)} motions_kept={val_ds.num_motions_kept} skipped_zero={val_ds.num_motions_skipped_zero} skipped_corrupt={val_ds.num_motions_skipped_corrupt}')
@@ -66,11 +60,13 @@ def train_activation_surrogate(*, data_root: str, output: str, split: str='train
         train_sampler = DistributedSampler(train_ds, num_replicas=get_world_size(), rank=get_rank(), shuffle=True, drop_last=False)
         if val_ds is not None:
             val_sampler = DistributedSampler(val_ds, num_replicas=get_world_size(), rank=get_rank(), shuffle=False, drop_last=False)
-    train_loader = DataLoader(train_ds, batch_size=per_gpu_batch, shuffle=train_sampler is None, sampler=train_sampler, num_workers=int(num_workers), pin_memory=device.type == 'cuda')
-    val_loader = DataLoader(val_ds, batch_size=per_gpu_batch, shuffle=False, sampler=val_sampler, num_workers=int(num_workers), pin_memory=device.type == 'cuda') if val_ds is not None else None
+    train_loader = DataLoader(train_ds, batch_size=per_gpu_batch, shuffle=train_sampler is None, sampler=train_sampler, num_workers=int(num_workers), pin_memory=device.type == 'cuda', collate_fn=collate_activation_windows)
+    val_loader = DataLoader(val_ds, batch_size=per_gpu_batch, shuffle=False, sampler=val_sampler, num_workers=int(num_workers), pin_memory=device.type == 'cuda', collate_fn=collate_activation_windows) if val_ds is not None else None
     sample_q, sample_act = train_ds[0]
     ckpt_payload = {'model_type': str(model_type), 'input_dim': int(sample_q.shape[-1]), 'output_dim': int(sample_act.shape[-1]), 'window_size': int(window_size), 'normalize_q': bool(normalize_q), 'skip_zero_placeholders': bool(skip_zero_placeholders), 'hidden_dim': int(hidden_dim), 'num_layers': int(num_layers), 'dropout': float(dropout), 'num_heads': int(num_heads), 'dim_feedforward': int(dim_feedforward), 'd_model': int(dim_feedforward) if str(model_type) == 'transformer' else 0, 'seed': int(seed)}
     model = build_activation_surrogate(model_type=model_type, input_dim=int(ckpt_payload['input_dim']), output_dim=int(ckpt_payload['output_dim']), hidden_dim=hidden_dim, num_layers=num_layers, dropout=dropout, num_heads=num_heads, dim_feedforward=dim_feedforward, max_seq_len=window_size).to(device)
+    ckpt_payload.update(min_window_size=min_window_size, training_window_policy='contiguous_valid_padded_masked',
+                        train_valid_frames=train_ds.num_valid_frames, train_short_windows=train_ds.num_short_windows)
     find_unused = bool((distributed_cfg or {}).get('find_unused_parameters', False))
     model = wrap_ddp(model, find_unused_parameters=find_unused)
     optimizer = torch.optim.AdamW(model.parameters(), lr=float(lr), weight_decay=float(weight_decay))
@@ -93,12 +89,13 @@ def train_activation_surrogate(*, data_root: str, output: str, split: str='train
         model.train()
         train_loss = 0.0
         n_batches = 0
-        for q, act in train_loader:
+        for q, act, valid_mask in train_loader:
             q = q.to(device)
             act = act.to(device)
+            valid_mask = valid_mask.to(device)
             optimizer.zero_grad(set_to_none=True)
-            pred = model(q)
-            loss = activation_surrogate_loss(pred, act, lambda_temporal=lambda_temporal)
+            pred = model(q, valid_mask=valid_mask)
+            loss = activation_surrogate_loss(pred, act, lambda_temporal=lambda_temporal, valid_mask=valid_mask)
             loss.backward()
             optimizer.step()
             train_loss += float(loss.item())
@@ -114,17 +111,19 @@ def train_activation_surrogate(*, data_root: str, output: str, split: str='train
             muscle_l1_accum: np.ndarray | None = None
             muscle_count = 0
             with torch.no_grad():
-                for q, act in val_loader:
+                for q, act, valid_mask in val_loader:
                     q = q.to(device)
                     act = act.to(device)
-                    pred = model(q)
-                    vsum += float(activation_surrogate_loss(pred, act, lambda_temporal=lambda_temporal).item())
-                    per_m = _per_muscle_l1(pred, act)
+                    valid_mask = valid_mask.to(device)
+                    pred = model(q, valid_mask=valid_mask)
+                    frame_count = int(valid_mask.sum().item())
+                    vsum += float(activation_surrogate_loss(pred, act, lambda_temporal=lambda_temporal, valid_mask=valid_mask).item()) * frame_count
+                    per_m = _per_muscle_l1(pred, act, valid_mask)
                     if muscle_l1_accum is None:
                         muscle_l1_accum = np.zeros_like(per_m)
-                    muscle_l1_accum += per_m
-                    muscle_count += 1
-                    vb += 1
+                    muscle_l1_accum += per_m * frame_count
+                    muscle_count += frame_count
+                    vb += frame_count
             val_loss = vsum / max(1, vb)
             if muscle_l1_accum is not None and muscle_count > 0:
                 muscle_l1_accum /= float(muscle_count)
@@ -167,6 +166,7 @@ def main() -> None:
     parser.add_argument('--split', default='train')
     parser.add_argument('--val_split', default='val')
     parser.add_argument('--window_size', type=int, default=64)
+    parser.add_argument('--min_window_size', type=int, default=1, help='Minimum contiguous valid frames; window_size is maximum context')
     parser.add_argument('--window_stride', type=int, default=16)
     parser.add_argument('--normalize_q', type=int, default=1)
     parser.add_argument('--max_motions', type=int, default=0)
@@ -208,7 +208,7 @@ def main() -> None:
 
     def _run(_logger: RunLogger) -> None:
         try:
-            metrics = train_activation_surrogate(data_root=args.data_root, output=args.output, split=args.split, val_split=args.val_split, window_size=int(args.window_size), window_stride=int(args.window_stride), normalize_q=bool(int(args.normalize_q)), max_motions=int(args.max_motions), skip_zero_placeholders=bool(int(args.skip_zero_placeholders)), model_type=args.model_type, hidden_dim=int(args.hidden_dim), num_layers=int(args.num_layers), dropout=float(args.dropout), num_heads=int(args.num_heads), dim_feedforward=int(args.dim_feedforward), lr=float(args.lr), weight_decay=float(args.weight_decay), epochs=int(args.epochs), batch_size=int(args.batch_size), lambda_temporal=float(args.lambda_temporal), device_name=args.device, num_workers=int(args.num_workers), seed=int(full_cfg.get('seed', args.seed)) if cfg_path else int(args.seed), distributed_cfg=dist_cfg)
+            metrics = train_activation_surrogate(data_root=args.data_root, output=args.output, split=args.split, val_split=args.val_split, window_size=int(args.window_size), window_stride=int(args.window_stride), normalize_q=bool(int(args.normalize_q)), max_motions=int(args.max_motions), skip_zero_placeholders=bool(int(args.skip_zero_placeholders)), model_type=args.model_type, hidden_dim=int(args.hidden_dim), num_layers=int(args.num_layers), dropout=float(args.dropout), num_heads=int(args.num_heads), dim_feedforward=int(args.dim_feedforward), lr=float(args.lr), weight_decay=float(args.weight_decay), epochs=int(args.epochs), batch_size=int(args.batch_size), lambda_temporal=float(args.lambda_temporal), device_name=args.device, num_workers=int(args.num_workers), seed=int(full_cfg.get('seed', args.seed)) if cfg_path else int(args.seed), distributed_cfg=dist_cfg, min_window_size=int(args.min_window_size))
             if is_main_process():
                 _logger.verbose(json.dumps(metrics, indent=2))
         finally:

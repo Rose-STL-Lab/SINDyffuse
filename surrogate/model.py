@@ -20,7 +20,7 @@ class ActivationSurrogate(nn.Module):
         layers.append(nn.Linear(in_d, self.output_dim))
         self.net = nn.Sequential(*layers)
 
-    def forward(self, q: torch.Tensor) -> torch.Tensor:
+    def forward(self, q: torch.Tensor, valid_mask: torch.Tensor | None=None) -> torch.Tensor:
         if q.ndim != 3:
             raise ValueError(f'Expected q [B, T, D], got {tuple(q.shape)}')
         b, t_len, d = q.shape
@@ -43,17 +43,17 @@ class TransformerActivationSurrogate(nn.Module):
         self.encoder = nn.TransformerEncoder(layer, num_layers=int(num_layers))
         self.fc = nn.Linear(self.d_model, self.output_dim)
 
-    def forward(self, q: torch.Tensor) -> torch.Tensor:
+    def forward(self, q: torch.Tensor, valid_mask: torch.Tensor | None=None) -> torch.Tensor:
         if q.ndim != 3:
             raise ValueError(f'Expected q [B, T, D], got {tuple(q.shape)}')
         t_len = int(q.shape[1])
         if t_len > self.positional_encoding.shape[1]:
             raise ValueError(f'Sequence length {t_len} exceeds max_seq_len {self.positional_encoding.shape[1]}')
         x = self.input_proj(q) + self.positional_encoding[:, :t_len, :]
-        x = self.encoder(x)
+        x = self.encoder(x, src_key_padding_mask=~valid_mask if valid_mask is not None else None)
         return torch.sigmoid(self.fc(x))
 
-def build_activation_surrogate(*, model_type: str='mlp', input_dim: int=len(RAJAGOPAL_NIMBLE_DOF_NAMES), output_dim: int=80, hidden_dim: int=256, num_layers: int=3, dropout: float=0.1, num_heads: int=4, dim_feedforward: int=128, max_seq_len: int=196) -> nn.Module:
+def build_activation_surrogate(*, model_type: str='mlp', input_dim: int=LAI_NUM_DOFS, output_dim: int=80, hidden_dim: int=256, num_layers: int=3, dropout: float=0.1, num_heads: int=4, dim_feedforward: int=128, max_seq_len: int=196) -> nn.Module:
     kind = str(model_type).strip().lower()
     if kind == 'mlp':
         return ActivationSurrogate(input_dim=input_dim, output_dim=output_dim, hidden_dim=hidden_dim, num_layers=num_layers, dropout=dropout)

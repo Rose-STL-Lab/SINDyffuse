@@ -9,6 +9,7 @@
   "split": "train",
   "val_split": "val",
   "window_size": 64,
+  "min_window_size": 1,
   "window_stride": 16,
   "normalize_q": 1,
   "max_motions": 0,
