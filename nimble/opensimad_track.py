@@ -6,11 +6,12 @@ import sys
 from typing import Any, Dict, List
 import numpy as np
 import casadi  # noqa: F401
-from nimble.moco_segment import plan_moco_segments, segment_frame_counts, stitch_segment_mask, stitch_segment_values
+from nimble.moco_segment import plan_moco_segments, segment_frame_counts, stitch_segment_mask
 from nimble.muscle_activation import MuscleActivationConfig, MuscleActivationResult, muscle_names, opensim_quiet
 from nimble.opensimad.mint_settings import MINT_PARALLEL_SEGMENTS
 from nimble.opensimad.track_segment import solve_opensimad_segment
 from nimble.opensim_ik import apply_ground_offset_lai_q
+from nimble.opensimad.label_processing import stitch_solve_windows, pool_tracking, set_grf_validity, LABEL_PROCESSING_VERSION
 
 def _solve_one_segment_job(args: tuple) -> tuple:
     spec_index, q_seg, cfg_dict, solve_dir_s, mesh_interval = args
@@ -87,22 +88,18 @@ def run_opensimad_segmented(q: np.ndarray, *, cfg: MuscleActivationConfig, work_
                     results_by_index[idx] = (act, ok, meta, grf)
                     _submit_next()
 
-    core_activations: List[np.ndarray] = []
-    core_grf: List[np.ndarray] = []
+    solve_activations = []
+    solve_grfs = []
+    tracking = []
     segment_ok: List[bool] = []
     segment_details: List[Dict[str, Any]] = []
     for spec in segments:
         activations, solve_ok, solve_meta, grf_seg = results_by_index[spec.index]
-        local_core_start = spec.core_start - spec.solve_start
-        local_core_end = spec.core_end - spec.solve_start
-        core_act = activations[local_core_start:local_core_end]
-        core_grf_seg = grf_seg[local_core_start:local_core_end]
-        if not solve_ok:
-            core_act = np.full_like(core_act, np.nan, dtype=np.float32)
-            core_grf_seg = np.full_like(core_grf_seg, np.nan, dtype=np.float32)
-        core_activations.append(core_act.astype(np.float32))
-        core_grf.append(core_grf_seg.astype(np.float32))
         segment_ok.append(bool(solve_ok))
+        solve_activations.append(activations)
+        solve_grfs.append(grf_seg)
+        if solve_ok and solve_meta.get('coordinate_tracking'):
+            tracking.append(solve_meta['coordinate_tracking'])
         detail = {
             'index': int(spec.index),
             'solve_start': int(spec.solve_start),
@@ -115,13 +112,16 @@ def run_opensimad_segmented(q: np.ndarray, *, cfg: MuscleActivationConfig, work_
         }
         if solve_meta.get('error'):
             detail['error'] = str(solve_meta['error'])
+        for key in ('coordinate_tracking', 'ipopt_return_status', 'ipopt_iterations', 'grf_valid_frames'):
+            if key in solve_meta:
+                detail[key] = solve_meta[key]
         segment_details.append(detail)
 
-    stitched_act = stitch_segment_values(t_len, segments, core_activations, blend_frames=blend_frames, stitch_seams=True)
-    stitched_grf = stitch_segment_values(t_len, segments, core_grf, blend_frames=blend_frames, stitch_seams=True)
+    stitched_act = stitch_solve_windows(t_len, segments, solve_activations, segment_ok, blend_frames=blend_frames)
+    stitched_grf = set_grf_validity(stitch_solve_windows(t_len, segments, solve_grfs, segment_ok, blend_frames=blend_frames))
     validity_mask = stitch_segment_mask(t_len, segments, segment_ok)
     success_count = int(sum((1 for ok in segment_ok if ok)))
-    pooled_tracking: Dict[str, Any] = {}
+    pooled_tracking = pool_tracking(tracking)
     meta: Dict[str, Any] = {
         'activation_method': 'opensimad',
         'moco_segmented': True,
@@ -137,8 +137,11 @@ def run_opensimad_segmented(q: np.ndarray, *, cfg: MuscleActivationConfig, work_
         'activation_validity_mask': validity_mask.astype(np.float32),
         'repaired_frame_count': 0,
         'coordinate_tracking': pooled_tracking,
-        'max_translational_coord_rmse_m': 0.0,
-        'max_rotational_coord_rmse_deg': 0.0,
+        'max_translational_coord_rmse_m': pooled_tracking['max_translational_rmse_m'],
+        'max_rotational_coord_rmse_deg': pooled_tracking['max_rotational_rmse_deg'],
+        'label_processing_version': LABEL_PROCESSING_VERSION,
+        'grf_torque_convention': 'resultant free moment at COP',
+        'tracking_available': bool(tracking),
         'opensim_model': 'LaiUhlrich2022',
     }
     return MuscleActivationResult(activations=stitched_act.astype(np.float32), muscle_names=tuple(names_ref), metadata=meta, forces=stitched_grf.astype(np.float32))

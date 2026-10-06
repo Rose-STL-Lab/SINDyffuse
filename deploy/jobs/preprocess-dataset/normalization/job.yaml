@@ -22,13 +22,15 @@ spec:
         env:
         - name: PREPROCESS_NUM_SHARDS
           value: "180"
+        - name: MOTION_TASK_DIR
+          value: /mnt/SINDyffuse/datasets/HumanML3D/motion-tasks/default
         - name: SINDYFFUSE_RUN_LOG_ID
           value: "RUN_LOG_ID_PLACEHOLDER"
         command: ["/bin/bash", "-c"]
         args:
         - |
           source deploy/scripts/job-env.sh
-          python scripts/compute_normalization.py --wait --num_shards 180
+          python scripts/compute_normalization.py --motion_task_dir "${MOTION_TASK_DIR}"
         resources:
           limits:
             memory: 2Gi

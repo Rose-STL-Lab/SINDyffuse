@@ -40,23 +40,31 @@ def compute_normalization(args: argparse.Namespace, logger: RunLogger | None=Non
     default_root = default_humanml3d_root()
     out_root = Path(getattr(args, 'out_root', default_root) or default_root).expanduser().resolve()
     num_shards = int(getattr(args, 'num_shards', 1) or 1)
-    if num_shards <= 1:
+    task_directory = str(getattr(args, 'motion_task_dir', '') or '')
+    task_rows = None
+    tasks = None
+    if task_directory:
+        from common.motion_tasks import load_outcomes
+        tasks, task_rows = load_outcomes(Path(task_directory).expanduser().resolve())
+        if tasks['data_root'] != str(out_root):
+            raise ValueError('Motion task dataset root does not match normalization root')
+    if not task_directory and num_shards <= 1:
         raise ValueError('--num_shards must be > 1 (use preprocess_ik.py / preprocess_moco.py directly when not sharded)')
-    if bool(getattr(args, 'wait', False)):
+    if not task_directory and bool(getattr(args, 'wait', False)):
         _wait_for_shards(out_root, num_shards, timeout_hours=float(getattr(args, 'timeout_hours', 48.0)), poll_seconds=float(getattr(args, 'poll_seconds', 30.0)), logger=log)
-    missing = [i for i in range(num_shards) if not _shard_manifest_path(out_root, i, stage='moco').is_file()]
+    missing = [] if task_directory else [i for i in range(num_shards) if not _shard_manifest_path(out_root, i, stage='moco').is_file()]
     if missing:
         raise FileNotFoundError(f'Missing shard manifest(s) under {out_root}: {missing}. Re-run missing shards or use --wait.')
     rows_by_id: dict[str, dict] = {}
     ok = err = skip = 0
     num_dofs_ref: int | None = None
     shard_meta: list[dict] = []
-    for shard_index in range(num_shards):
+    for shard_index in range(1 if task_directory else num_shards):
         shard_path = _shard_manifest_path(out_root, shard_index, stage='moco')
         # Restart-safe manifests may contain an earlier failed row followed by
         # a successful retry. The final row for a motion is authoritative.
         shard_rows_by_id: dict[str, dict] = {}
-        for row in _load_manifest_rows(shard_path):
+        for row in (task_rows if task_rows is not None else _load_manifest_rows(shard_path)):
             mid = str(row.get('id', ''))
             if mid:
                 shard_rows_by_id[mid] = row
@@ -91,13 +99,16 @@ def compute_normalization(args: argparse.Namespace, logger: RunLogger | None=Non
             mf.write(json.dumps(rows_by_id[mid], default=str) + '\n')
     b3d_cache = nimble_b3d_dir(out_root)
     meta = {'out_root': str(out_root), 'b3d_subdir': NIMBLE_B3D_SUBDIR, 'nimble_b3d_dir': str(b3d_cache), 'num_dofs': num_dofs_ref, 'motions_ok': ok, 'motions_error': err, 'motions_skipped': skip, 'num_shards': num_shards, 'shard_manifests': shard_meta, 'manifest_path': str(merged_path), 'normalization_computed': True}
+    if tasks is not None:
+        meta.update(motion_task_set_id=tasks['task_set_id'], motion_task_count=tasks['task_count'],
+                    motion_task_dir=task_directory, num_shards=0, shard_manifests=[])
     (out_root / 'preprocess_meta.json').write_text(json.dumps(meta, indent=2), encoding='utf-8')
-    log.progress(f'Merged {len(sorted_ids)} motion(s) from {num_shards} shard(s): {ok} ok, {err} failed, {skip} skipped')
+    log.progress(f'Merged {len(sorted_ids)} motion(s): {ok} ok, {err} failed, {skip} skipped')
     if ok == 0 and skip == 0:
         raise RuntimeError('No successful or skipped motions after merge')
     stats = compute_nimble_normalization_stats(out_root)
     log.progress(f"Wrote normalization stats: {stats['mean_path']}")
-    removed = cleanup_preprocess_manifests(out_root)
+    removed = [] if task_directory else cleanup_preprocess_manifests(out_root)
     if removed:
         log.verbose(f'Removed {len(removed)} temporary preprocess manifest file(s)')
     return meta
@@ -107,6 +118,7 @@ def main() -> None:
     default_root = default_humanml3d_root()
     parser.add_argument('--out_root', default=default_root, help='Dataset root containing lai_cache/ and shard manifests')
     parser.add_argument('--num_shards', type=int, default=0, help='Number of preprocess shards to merge (default: PREPROCESS_NUM_SHARDS env or 1)')
+    parser.add_argument('--motion_task_dir', default='', help='Merge completed one-motion task outcomes instead of legacy shards')
     parser.add_argument('--wait', action='store_true', help='Poll until all shard manifests exist before merging')
     parser.add_argument('--timeout_hours', type=float, default=48.0, help='Max wait time when --wait is set (default 48)')
     parser.add_argument('--poll_seconds', type=float, default=30.0, help='Poll interval when --wait is set (default 30)')

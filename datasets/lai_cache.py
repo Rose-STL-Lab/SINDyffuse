@@ -1,5 +1,7 @@
 """LaiUhlrich2022 per-motion NPZ cache (replaces Nimble B3D)."""
 from __future__ import annotations
+import os
+import tempfile
 import json
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Tuple
@@ -159,7 +161,21 @@ def write_motion_npz(
             if k in payload:
                 continue
             payload[str(k)] = np.asarray(v)
-    np.savez_compressed(out, **payload)
+    # Same-directory replace preserves the previous readable IK/activation file
+    # if compression or the worker fails, and readers never see partial archives.
+    fd, name = tempfile.mkstemp(prefix=f'.{out.name}.', dir=out.parent)
+    temporary = Path(name)
+    try:
+        with os.fdopen(fd, 'wb') as fp:
+            np.savez_compressed(fp, **payload)
+            fp.flush()
+            os.fsync(fp.fileno())
+        with np.load(temporary, allow_pickle=False) as archive:
+            for key in archive.files:
+                archive[key]  # Validate archive CRCs before publication.
+        os.replace(temporary, out)
+    finally:
+        temporary.unlink(missing_ok=True)
     return out
 
 
@@ -188,6 +204,7 @@ def read_motion_npz(path: str | Path, *, mmap: bool = False) -> Dict[str, Any]:
             'opensim_model': str(np.asarray(z['opensim_model']).reshape(())) if 'opensim_model' in z.files else OPENSIM_MODEL_NAME,
             'path': str(p),
             'num_frames': t_len,
+            'activation_diagnostics': json.loads(str(np.asarray(z['activation_diagnostics_json']).reshape(()))) if 'activation_diagnostics_json' in z.files else {},
         }
     if out['muscle_activation_mask'].shape[0] != t_len:
         raise ValueError(f'mask length {out["muscle_activation_mask"].shape[0]} != T {t_len} in {p}')

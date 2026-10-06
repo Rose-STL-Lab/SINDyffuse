@@ -1,0 +1,42 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../moco-track
+patches:
+  - target:
+      kind: Job
+      name: sindyffuse-preprocess-moco-track
+    patch: |-
+      - op: replace
+        path: /metadata/name
+        value: sindyffuse-prepare-moco-tasks
+      - op: replace
+        path: /spec/completionMode
+        value: NonIndexed
+      - op: replace
+        path: /spec/completions
+        value: 1
+      - op: replace
+        path: /spec/parallelism
+        value: 1
+      - op: remove
+        path: /spec/backoffLimitPerIndex
+      - op: add
+        path: /spec/backoffLimit
+        value: 1
+  - target:
+      kind: Job
+      name: sindyffuse-preprocess-moco-track
+    patch: |-
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: sindyffuse-preprocess-moco-track
+      spec:
+        template:
+          spec:
+            containers:
+            - name: sindyffuse-preprocess-moco-track
+              env:
+              - name: MOTION_TASK_MODE
+                value: prepare

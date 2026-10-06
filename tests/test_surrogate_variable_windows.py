@@ -10,10 +10,11 @@ class SurrogateVariableWindowsTest(unittest.TestCase):
         rendered=subprocess.check_output(['kubectl','kustomize',str(root/'deploy/jobs/preprocess-dataset/moco-track-pilot')],text=True)
         job=yaml.safe_load(rendered)
         self.assertEqual(job['spec']['parallelism'],5)
-        self.assertEqual(job['spec']['completions'],5)
+        self.assertEqual(job['spec']['completions'],25)
         env={entry['name']:entry['value'] for entry in job['spec']['template']['spec']['containers'][0]['env']}
         self.assertEqual(env['PREPROCESS_NUM_SHARDS'],'180')
-        self.assertEqual(env['MAX_MOTIONS'],'900')
+        self.assertEqual(env['MAX_MOTIONS'],'0')
+        self.assertEqual(env['MOTION_TASK_MODE'],'process')
 
     def test_real_torch_variable_window_pipeline(self):
         # Look up Torch outside this process, where legacy tests install stubs.

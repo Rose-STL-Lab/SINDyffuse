@@ -1,5 +1,6 @@
 from __future__ import annotations
 import time
+import json
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Dict, Tuple
@@ -48,6 +49,7 @@ def _write_npz_from_lai_q(
     sim_grf: np.ndarray | None,
     activation_mask: np.ndarray | None,
     ik_stats: Dict[str, Any],
+    activation_diagnostics: Dict[str, Any] | None=None,
 ) -> Tuple[Dict[str, float], int, Dict[str, str]]:
     """Persist Lai q [T, 31] or [31, T] plus optional activation channels to NPZ."""
     arr = np.asarray(q_lai, dtype=np.float32)
@@ -75,6 +77,7 @@ def _write_npz_from_lai_q(
         sindy_u=u,
         sindy_c=c,
         guidance_bio=bio,
+        extra={'activation_diagnostics_json': np.asarray(json.dumps(activation_diagnostics))} if activation_diagnostics is not None else None,
     )
     ik_stats['guidance_features_computed'] = 0.0
     ik_stats['sindy_features_computed'] = 1.0
@@ -175,6 +178,7 @@ def patch_npz_activations(
     stats['activation_method'] = method
     sim_grf: np.ndarray | None = None
     activation_mask: np.ndarray | None = None
+    activation_diagnostics = None
     muscle_act = np.full((num_frames, MUSCLE_ACTIVATION_ROWS), np.nan, dtype=np.float32)
     if not allowed:
         stats['moco_skipped_reason'] = reason
@@ -229,8 +233,12 @@ def patch_npz_activations(
         )
         stats['activation_valid_fraction'] = activation_valid_fraction(muscle_act, activation_mask)
         stats['moco_segment_success_fraction'] = float(act_result.metadata.get('moco_segment_success_fraction', 0.0))
-        for key, val in summarize_coordinate_tracking_stats(act_result.metadata.get('coordinate_tracking') or {}).items():
+        tracking_metrics = act_result.metadata.get('coordinate_tracking') or {}
+        summary = summarize_coordinate_tracking_stats(tracking_metrics) if tracking_metrics.get('per_coordinate') else {}
+        for key, val in summary.items():
             stats[str(key)] = val
+        activation_diagnostics = {key: act_result.metadata.get(key) for key in
+            ('label_processing_version', 'coordinate_tracking', 'moco_segment_details', 'grf_torque_convention')}
         seg_success = int(act_result.metadata.get('moco_segment_success_count', 0))
         tracking_ok = True
         if seg_success <= 0:
@@ -257,6 +265,7 @@ def patch_npz_activations(
         sim_grf=sim_grf,
         activation_mask=activation_mask,
         ik_stats=stats,
+        activation_diagnostics=activation_diagnostics,
     )
     clear_export_caches()
     return (out_stats, num_dofs, meta_strings, manifest_status)

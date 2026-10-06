@@ -125,13 +125,56 @@ coverage without accepting any failed solve:
 kubectl apply -n ai-md -k /Users/nick.king/Documents/git_repos/SINDyffuse/deploy/jobs/preprocess-dataset/moco-track-pilot
 ```
 
-The pilot runs five indexed pods (indices 0–4), with the production 180-way shard mapping
-and a 900-motion input cap: up to 25 motions total. It uses the same solver/ROM checks and
-does not relax convergence. Manifest shard numbering remains production-compatible.
-Do not run pilot and production workers concurrently: they write the same NPZ/manifests.
+The pilot runs five concurrent indexed pods over the first 25 prepared motion tasks.
+It uses the same solver/ROM checks and does not relax convergence. Prepare the full task
+manifest first using `prepare-moco-tasks`. Do not run pilot and production workers
+concurrently: they write the same NPZ/task outcomes.
 Job completion does not imply every segment succeeded; inspect per-motion manifests and
 usable surrogate windows before applying the full `moco-track` Job. A systemic code,
 artifact, OOM or nonfinite error still requires diagnosis rather than blind fan-out.
+
+### One-motion-per-pod activation scheduling
+
+`moco-track` now has 29,228 indexed tasks, up to 180 concurrent pods, and exactly one
+motion per pod. Each pod retains bounded segment multiprocessing: up to eight isolated
+segment processes, four solver threads each, within the existing 32 CPU/32 GiB allocation.
+No solver tolerances or iteration limits change. Pending indices are queued by Kubernetes.
+CPU and memory settings remain adjustable; keep threads × segment workers within the CPU
+budget and benchmark peak memory. Long motions launch only the number of segments needed.
+
+Before deployment, **stop the old sharded Job and wait for its pods to terminate**, then
+sync the checkout. Do not update the mounted code while the old fleet is processing.
+Preparation freezes the ordered IDs, solver configuration, code/artifact provenance, IK
+status records and dataset root under `datasets/HumanML3D/motion-tasks/default/tasks.json`.
+It refuses a changed assignment/configuration; select a new `MOTION_TASK_DIR` in preparation,
+workers and normalization if those inputs change. `MOTION_TASK_COUNT` and Job completions
+must equal the number of selected IDs (29,228 by default); changing `parallelism` alone does
+not change task identity. `MAX_MOTIONS` can limit a prepared selection but must be matched
+by those counts. Preparation and normalization preserve legacy manifests for audit.
+
+With already rebuilt model/polynomial artifacts, deploy in this order:
+
+```bash
+kubectl apply -n ai-md -k /Users/nick.king/Documents/git_repos/SINDyffuse/deploy/jobs/preprocess-dataset/prepare-moco-tasks
+kubectl wait -n ai-md --for=condition=complete job/sindyffuse-prepare-moco-tasks --timeout=2h
+kubectl apply -n ai-md -k /Users/nick.king/Documents/git_repos/SINDyffuse/deploy/jobs/preprocess-dataset/moco-track
+# After the indexed Job succeeds:
+kubectl apply -n ai-md -k /Users/nick.king/Documents/git_repos/SINDyffuse/deploy/jobs/preprocess-dataset/normalization
+```
+
+Per-motion outcomes are atomically written under `motion-tasks/default/outcomes`; per-index
+locks prevent duplicate replacement pods writing the same motion concurrently. NPZ files
+are compressed to a private temporary file, flushed, validated and atomically replaced,
+so interruptions do not truncate an existing readable cache. Existing finite activations
+are imported without solving and explicitly marked as imported (legacy artifacts have no
+per-task provenance). New results record their checksum and task-set identity. Retries reuse
+validated successes. Ordinary ROM rejection/nonconvergence is a completed dataset task
+with invalid labels—not a Kubernetes failure. Unclassified processing/data errors fail
+the index, which has two retries. Normalization requires all correctly identified terminal
+outcomes and rejects unresolved errors; a complete Job does not mean every motion converged.
+To intentionally retry deterministic dataset failures, select a new task directory rather
+than rewriting the immutable outcome history. Per-segment scratch is still disposable;
+pod loss can repeat one motion, but never an entire fixed shard.
 
 Headless activation workers explicitly request machine-readable kinematics/activation
 and resultant-GRF exports (`writeMachineReadable=True`, `writeGUI=False`). Solver success
@@ -143,6 +186,33 @@ polynomial rebuilds are not required for this export-only repair. Existing conve
 scratch session survives; scratch is not a persistent recovery checkpoint and is lost
 when a pod is deleted. Restarted workers otherwise solve again. Avoid changing the mounted
 checkout while old workers are still active; deploy the fix before restarting them.
+
+**Label processing (`overlap_crossfade_tracking_grf_v1`):** full solve-window predictions
+are retained until assembly. Neighboring successful segments are linearly crossfaded
+inside their common buffered interval (default blend radius 0.14 s); a failed core remains
+NaN even if a neighbor has predictions there. This implements the seam-smoothing intent
+described in MinT Appendix A.3, not a verified copy of their unpublished algorithm.
+Blending is postprocessing, not a claim that blended signals satisfy the original dynamics
+exactly. Unblended interior frames are unchanged, and gaps are never interpolated away.
+
+Per-segment pose tracking RMSE/max errors are computed from `optimaltrajectories.npy`;
+rotations are converted from radians to degrees, translations remain metres. The
+reference is OpenCap's filtered target including optimized pelvis offset, compared at
+common mesh timestamps. Sample-count-weighted pooled errors and MinT-analysis flags
+(rotational RMSE <5 degrees and translational RMSE <0.02 m) are persisted diagnostically,
+not used to reject converged segments. No new activation/saturation/rate cutoff is added.
+An empty metric set reports unavailable values, not zero error. Tracking against original
+unfiltered IK is distinct and is not implied by these flags.
+
+NPZ files retain `activation_diagnostics_json` with processing version, segment solver
+status/iterations, tracking metrics and torque convention. Resultant torque channels are
+free moments at the COP, not full ground-reaction moments about the origin. GRF trust
+is 1 only where all 12 force/free-moment channels are finite; missing endpoint forces
+remain NaN without extrapolation. Activation validity is separate from GRF validity.
+Old caches are readable but do not gain this processing/metadata retroactively. Imported
+task outcomes mark them `legacy_unreported`; to upgrade, retain complete scratch outputs
+for reanalysis or recompute activations with skip-existing disabled and a new task directory.
+No model, compiled external-function or polynomial rebuild is required for these changes.
 
 **Surrogate windows:** `window_size=64` is maximum context, not a minimum usable run.
 `min_window_size=1` retains shorter contiguous valid runs, including isolated frames.

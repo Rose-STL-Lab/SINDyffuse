@@ -23,6 +23,7 @@ from nimble.opensimad.paths import (
     vendor_opencap_ad_dir,
 )
 from nimble.lai_coord_map import build_lai_coord_mapping, write_coordinates_mot
+from nimble.opensimad.label_processing import tracking_metrics, set_grf_validity
 
 def _ensure_vendor_on_path() -> None:
     vendor = vendor_opencap_ad_dir()
@@ -66,7 +67,7 @@ def _parse_activations_mot(path: Path, *, n_frames: int, muscle_name_list: Tuple
 def _parse_grf_mot(path: Path | None, *, n_frames: int, fps: float) -> np.ndarray:
     grf = np.full((n_frames, SIM_GRF_COLS), np.nan, dtype=np.float32)
     if path is None or not path.is_file():
-        return grf
+        return set_grf_validity(grf)
     import opensim as osim
     table = osim.TimeSeriesTable(str(path))
     labels = [str(x) for x in table.getColumnLabels()]
@@ -100,8 +101,7 @@ def _parse_grf_mot(path: Path | None, *, n_frames: int, fps: float) -> np.ndarra
         grf[:, 14] = np.linalg.norm(grf[:, 6:9], axis=1)
         grf[:, 15] = np.linalg.norm(grf[:, 3:6], axis=1)
         grf[:, 16] = np.linalg.norm(grf[:, 9:12], axis=1)
-        grf[:, 17] = 1.0
-    return grf
+    return set_grf_validity(grf)
 
 def solve_opensimad_segment(q: np.ndarray, *, cfg: MuscleActivationConfig, solve_dir: Path, mesh_interval: float | None=None) -> Tuple[np.ndarray, bool, Dict[str, Any], np.ndarray]:
     """Run one MinT/OpenCap OpenSimAD tracking window on LaiUhlrich2022 coordinates."""
@@ -206,9 +206,23 @@ def solve_opensimad_segment(q: np.ndarray, *, cfg: MuscleActivationConfig, solve
             raise RuntimeError('OpenSimAD finished without kinematics_activations_*.mot')
         activations = _parse_activations_mot(act_mot, n_frames=n_frames, muscle_name_list=names, fps=float(cfg.fps))
         grf = _parse_grf_mot(grf_mot, n_frames=n_frames, fps=float(cfg.fps))
+        trajectory_path = act_mot.parent / 'optimaltrajectories.npy'
+        trajectory = np.load(trajectory_path, allow_pickle=True).item()['0']
+        coordinates = list(trajectory['coordinates'])
+        simulated = np.asarray(trajectory['coordinate_values']).T
+        reference = np.asarray(trajectory['coordinate_values_toTrack']).T
+        # OpenCap reference omits final mesh endpoint. Compare common mesh samples.
+        count = min(len(simulated), len(reference))
+        meta['coordinate_tracking'] = tracking_metrics(simulated[:count], reference[:count], coordinates)
+        meta['tracking_reference'] = 'filtered solver reference including optimized pelvis offset; mesh samples'
+        stats = np.load(act_mot.parent / 'stats_0.npy', allow_pickle=True).item()
+        meta['ipopt_return_status'] = str(stats.get('return_status', 'unknown'))
+        meta['ipopt_iterations'] = int(stats.get('iter_count', 0))
+        meta['grf_valid_frames'] = int((grf[:, 17] > .5).sum())
+        meta['grf_torque_convention'] = 'resultant free moment at COP, not full GRM about ground origin'
         ok = bool(np.isfinite(activations).any())
-        meta['solver_success'] = ok
-        meta['solver_status'] = 'ok' if ok else 'no_finite_activations'
+        meta['solver_success'] = bool(stats.get('success', False))
+        meta['solver_status'] = meta['ipopt_return_status'] if ok else 'no_finite_activations'
         return (activations, ok, meta, grf)
     except Exception as exc:
         meta['solver_success'] = False
