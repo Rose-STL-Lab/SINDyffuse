@@ -43,9 +43,13 @@ def compute_normalization(args: argparse.Namespace, logger: RunLogger | None=Non
     task_directory = str(getattr(args, 'motion_task_dir', '') or '')
     task_rows = None
     tasks = None
+    incomplete_task_count = 0
     if task_directory:
         from common.motion_tasks import load_outcomes
         tasks, task_rows = load_outcomes(Path(task_directory).expanduser().resolve())
+        incomplete_task_count = int(tasks["task_count"]) - len(task_rows)
+        if incomplete_task_count:
+            log.warn("Using partial motion-task outcomes: %d/%d usable terminal outcomes; %d missing or unresolved" % (len(task_rows), tasks["task_count"], incomplete_task_count))
         if tasks['data_root'] != str(out_root):
             raise ValueError('Motion task dataset root does not match normalization root')
     if not task_directory and num_shards <= 1:
@@ -101,11 +105,12 @@ def compute_normalization(args: argparse.Namespace, logger: RunLogger | None=Non
     meta = {'out_root': str(out_root), 'b3d_subdir': NIMBLE_B3D_SUBDIR, 'nimble_b3d_dir': str(b3d_cache), 'num_dofs': num_dofs_ref, 'motions_ok': ok, 'motions_error': err, 'motions_skipped': skip, 'num_shards': num_shards, 'shard_manifests': shard_meta, 'manifest_path': str(merged_path), 'normalization_computed': True}
     if tasks is not None:
         meta.update(motion_task_set_id=tasks['task_set_id'], motion_task_count=tasks['task_count'],
+                    motion_task_completed_count=len(task_rows), motion_task_incomplete_count=incomplete_task_count,
                     motion_task_dir=task_directory, num_shards=0, shard_manifests=[])
     (out_root / 'preprocess_meta.json').write_text(json.dumps(meta, indent=2), encoding='utf-8')
     log.progress(f'Merged {len(sorted_ids)} motion(s): {ok} ok, {err} failed, {skip} skipped')
-    if ok == 0 and skip == 0:
-        raise RuntimeError('No successful or skipped motions after merge')
+    if not rows_by_id:
+        raise RuntimeError('No usable terminal motion outcomes after merge')
     stats = compute_nimble_normalization_stats(out_root)
     log.progress(f"Wrote normalization stats: {stats['mean_path']}")
     removed = [] if task_directory else cleanup_preprocess_manifests(out_root)

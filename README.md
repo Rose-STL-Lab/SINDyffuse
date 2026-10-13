@@ -170,8 +170,8 @@ are imported without solving and explicitly marked as imported (legacy artifacts
 per-task provenance). New results record their checksum and task-set identity. Retries reuse
 validated successes. Ordinary ROM rejection/nonconvergence is a completed dataset task
 with invalid labels—not a Kubernetes failure. Unclassified processing/data errors fail
-the index, which has two retries. Normalization requires all correctly identified terminal
-outcomes and rejects unresolved errors; a complete Job does not mean every motion converged.
+the index, which has two retries. Normalization uses available correctly identified terminal
+outcomes; missing or unresolved task outcomes are reported and skipped, while valid pose NPZs are still used for `Mean.npy` / `Std.npy`. A complete Job is not required, and a complete Job does not mean every motion converged.
 To intentionally retry deterministic dataset failures, select a new task directory rather
 than rewriting the immutable outcome history. Per-segment scratch is still disposable;
 pod loss can repeat one motion, but never an entire fixed shard.

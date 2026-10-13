@@ -1,7 +1,7 @@
 # Worker phase: OpenSimAD MinT activations on LaiUhlrich2022
 # kubectl apply -k deploy/jobs/preprocess-dataset/moco-track
 #
-# Memory notes (do not raise parallel segments without raising limits):
+# Resource notes (keep segment workers × solver threads within the CPU budget):
 # - CasADi NLP expand OFF (OPENSIMAD_EXPAND_NLP=0).
 # - Bounds jacobian rewrite OFF (OPENSIMAD_BOUNDS_REWRITE=0); rewrite alone can OOM.
 # - Workers require the compiled F.so and precomputed polynomial cache.
@@ -34,10 +34,6 @@ spec:
         imagePullPolicy: Always
         workingDir: /mnt/SINDyffuse
         env:
-        - name: PREPROCESS_NUM_SHARDS
-          value: "180"
-        - name: MAX_MOTIONS
-          value: "0"
         - name: MOTION_TASK_MODE
           value: process
         - name: MOTION_TASK_DIR
@@ -53,7 +49,7 @@ spec:
         - name: MOCO_MESH_INTERVAL
           value: "0.02"
         - name: MOCO_PARALLEL_SEGMENTS
-          value: "8"
+          value: "6"
         - name: MOCO_NUM_THREADS
           value: "4"
         - name: MOCO_CPU_BUDGET
@@ -90,11 +86,11 @@ spec:
           python scripts/preprocess_moco.py --skip_normalization --num_workers 0 --activation_method opensimad
         resources:
           limits:
-            memory: 32Gi
-            cpu: "32"
+            memory: 20Gi
+            cpu: "18"
           requests:
-            memory: 32Gi
-            cpu: "32"
+            memory: 20Gi
+            cpu: "18"
         volumeMounts:
         - name: data
           mountPath: /mnt

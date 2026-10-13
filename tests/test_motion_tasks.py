@@ -30,13 +30,16 @@ class MotionTasksTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'changed'): prepare_tasks(directory,**kwargs)
             self.assertEqual(load_tasks(directory/'tasks.json'),tasks)
 
-    def test_all_outcomes_required_and_identity_validated(self):
+    def test_available_outcomes_are_loaded_and_identity_validated(self):
         with tempfile.TemporaryDirectory() as root:
             directory=Path(root)
             tasks=prepare_tasks(directory,motion_ids=['a','b'],configuration={},artifacts={},expected_tasks=2,data_root=directory)
             row={'id':'a','task_index':0,'task_set_id':tasks['task_set_id'],'status':'moco_failed'}
             atomic_json(outcome_path(directory,0),row)
-            with self.assertRaises(FileNotFoundError): load_outcomes(directory)
+            self.assertEqual(len(load_outcomes(directory)[1]),1)
+            row.update(id='b',task_index=1,status='error')
+            atomic_json(outcome_path(directory,1),row)
+            self.assertEqual(len(load_outcomes(directory)[1]),1)
             row.update(id='b',task_index=1,status='ok')
             atomic_json(outcome_path(directory,1),row)
             self.assertEqual(len(load_outcomes(directory)[1]),2)
@@ -108,7 +111,7 @@ class MotionTasksTest(unittest.TestCase):
             self.assertTrue(row['existing_labels_imported'])
             self.assertEqual(len(row['result_sha256']),64)
 
-    def test_task_normalization_requires_all_terminal_outcomes(self):
+    def test_task_normalization_accepts_partial_terminal_outcomes(self):
         import ast
         from types import SimpleNamespace
         root_repo=Path(__file__).resolve().parent.parent
@@ -124,12 +127,12 @@ class MotionTasksTest(unittest.TestCase):
             root=Path(root); directory=root/'tasks'
             tasks=prepare_tasks(directory,motion_ids=['a','b'],configuration={},artifacts={},expected_tasks=2,data_root=root)
             args=SimpleNamespace(out_root=str(root),motion_task_dir=str(directory),num_shards=180)
-            with self.assertRaises(FileNotFoundError): ns['compute_normalization'](args)
-            for i,mid in enumerate(['a','b']):
-                atomic_json(outcome_path(directory,i),{'id':mid,'task_index':i,'task_set_id':tasks['task_set_id'],
-                                                       'status':'ok' if i==0 else 'moco_failed','num_dofs':31})
+            atomic_json(outcome_path(directory,0),{'id':'a','task_index':0,'task_set_id':tasks['task_set_id'],
+                                                   'status':'ok','num_dofs':31})
             meta=ns['compute_normalization'](args)
             self.assertEqual(meta['motions_ok'],1)
-            self.assertEqual(meta['motions_error'],1)
+            self.assertEqual(meta['motions_error'],0)
             self.assertEqual(meta['motion_task_count'],2)
+            self.assertEqual(meta['motion_task_completed_count'],1)
+            self.assertEqual(meta['motion_task_incomplete_count'],1)
             self.assertTrue((root/'preprocess_manifest.jsonl').exists())

@@ -72,13 +72,22 @@ def outcome_path(directory: Path, index: int) -> Path:
     return directory / 'outcomes' / f'{index:06d}.json'
 
 def load_outcomes(directory: Path) -> tuple[dict, list[dict]]:
+    """Load all currently usable task outcomes.
+
+    Missing outcomes and unresolved infrastructure errors are skipped because
+    normalization can use the valid cache entries already available. Existing
+    outcome files are still identity-checked and malformed bookkeeping fails.
+    """
     tasks = load_tasks(directory / 'tasks.json')
     rows = []
     for index, mid in enumerate(tasks['motion_ids']):
-        row = json.loads(outcome_path(directory, index).read_text())
+        path = outcome_path(directory, index)
+        if not path.is_file():
+            continue
+        row = json.loads(path.read_text())
         if row.get('id') != mid or row.get('task_index') != index or row.get('task_set_id') != tasks['task_set_id']:
             raise ValueError(f'Outcome identity mismatch for task {index}')
         if row.get('status') not in ('ok', 'skipped', 'moco_failed', 'moco_skipped'):
-            raise ValueError(f'Task {index} has unresolved infrastructure/data error; retry it before normalization')
+            continue
         rows.append(row)
     return tasks, rows
