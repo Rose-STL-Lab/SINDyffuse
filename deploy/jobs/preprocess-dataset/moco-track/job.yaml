@@ -5,7 +5,7 @@
 # - CasADi NLP expand OFF (OPENSIMAD_EXPAND_NLP=0).
 # - Bounds jacobian rewrite OFF (OPENSIMAD_BOUNDS_REWRITE=0); rewrite alone can OOM.
 # - Workers require the compiled F.so and precomputed polynomial cache.
-# - One motion per pod; at most 8 segments × 4 threads within its 32 CPU budget.
+# - One motion per pod; at most 4 segments × 4 threads within its 18 CPU budget (pod limit is 18 CPU).
 # - ensure-casadi.sh also installs requests (utilsOpenSimAD import).
 apiVersion: batch/v1
 kind: Job
@@ -20,6 +20,9 @@ spec:
   completions: 29228
   completionMode: Indexed
   backoffLimitPerIndex: 2
+  # Tolerate a small number of hard per-index failures so the Job still completes
+  # and normalization can run (requires Kubernetes 1.29+ with Indexed Jobs).
+  maxFailedIndexes: 150
   template:
     metadata:
       labels:
@@ -49,11 +52,11 @@ spec:
         - name: MOCO_MESH_INTERVAL
           value: "0.02"
         - name: MOCO_PARALLEL_SEGMENTS
-          value: "6"
+          value: "4"
         - name: MOCO_NUM_THREADS
           value: "4"
         - name: MOCO_CPU_BUDGET
-          value: "32"
+          value: "18"
         - name: MOCO_CORE_DURATION_S
           value: "1.4"
         - name: MOCO_BUFFER_DURATION_S

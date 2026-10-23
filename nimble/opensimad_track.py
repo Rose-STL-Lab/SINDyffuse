@@ -6,7 +6,7 @@ import sys
 from typing import Any, Dict, List
 import numpy as np
 import casadi  # noqa: F401
-from nimble.moco_segment import plan_moco_segments, segment_frame_counts, stitch_segment_mask
+from nimble.moco_segment import SIM_GRF_COLS, plan_moco_segments, segment_frame_counts, stitch_segment_mask
 from nimble.muscle_activation import MuscleActivationConfig, MuscleActivationResult, muscle_names, opensim_quiet
 from nimble.opensimad.mint_settings import MINT_PARALLEL_SEGMENTS
 from nimble.opensimad.track_segment import solve_opensimad_segment
@@ -46,10 +46,12 @@ def run_opensimad_segmented(q: np.ndarray, *, cfg: MuscleActivationConfig, work_
     cfg_dict = muscle_activation_config_to_dict(cfg)
 
     jobs = []
+    seg_idx_pos: Dict[int, int] = {}
     for spec in segments:
         seg_dir = work_dir / f'segment_{spec.index:04d}'
         seg_dir.mkdir(parents=True, exist_ok=True)
         q_seg = arr[spec.solve_start:spec.solve_end]
+        seg_idx_pos[int(spec.index)] = len(jobs)
         jobs.append((spec.index, q_seg, cfg_dict, str(seg_dir), mesh_interval))
 
     results_by_index: Dict[int, tuple] = {}
@@ -70,12 +72,16 @@ def run_opensimad_segmented(q: np.ndarray, *, cfg: MuscleActivationConfig, work_
                 pending: set = set()
                 job_iter = iter(jobs)
 
+                pending_index: Dict[Any, int] = {}
+
                 def _submit_next() -> bool:
                     try:
                         job = next(job_iter)
                     except StopIteration:
                         return False
-                    pending.add(ex.submit(_solve_one_segment_job, job))
+                    fut = ex.submit(_solve_one_segment_job, job)
+                    pending.add(fut)
+                    pending_index[fut] = int(job[0])
                     return True
 
                 for _ in range(workers):
@@ -84,8 +90,20 @@ def run_opensimad_segmented(q: np.ndarray, *, cfg: MuscleActivationConfig, work_
                 while pending:
                     fut = next(as_completed(pending))
                     pending.remove(fut)
-                    idx, act, ok, meta, grf = fut.result()
-                    results_by_index[idx] = (act, ok, meta, grf)
+                    seg_idx = pending_index.pop(fut)
+                    try:
+                        idx, act, ok, meta, grf = fut.result()
+                        results_by_index[idx] = (act, ok, meta, grf)
+                    except Exception as exc:
+                        # One child crash (e.g. OOM / BrokenProcessPool) must not discard
+                        # the other segments. Record this segment as a NaN gap instead.
+                        spec_len = int(jobs[seg_idx_pos[seg_idx]][1].shape[0])
+                        results_by_index[seg_idx] = (
+                            np.full((spec_len, n_muscles), np.nan, dtype=np.float32),
+                            False,
+                            {'solver_success': False, 'solver_status': 'error', 'error': f'{type(exc).__name__}: {exc}'},
+                            np.full((spec_len, SIM_GRF_COLS), np.nan, dtype=np.float32),
+                        )
                     _submit_next()
 
     solve_activations = []
